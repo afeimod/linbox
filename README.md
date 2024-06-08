@@ -12,4 +12,10 @@
 # 安装linbox步骤
 *下载安装文件:
 
-    
+# 安装完后输入下面代码修复debian的root用户
+
+    proot-distro login debian
+    apt reinstall sudo -y
+    exit
+
+
