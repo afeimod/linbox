@@ -11,6 +11,7 @@
 
 # 安装linbox步骤
 *1-直接国内网盘下载，分为*百度网盘，*阿里云盘，*123盘！
+
 *123盘
 
     https://www.123pan.com/s/K4clVv-0ghVH.html  提取码：y67N
