@@ -9,8 +9,9 @@
 
 下载 [**exa-x11**](https://github.com/afeimod/Debian-proot/releases/download/termux/Exa_x11_v0.012.apk) 
 
-# 安装linbox步骤
-*1-直接国内网盘下载，分为*百度网盘，*阿里云盘，*123盘！
+# 安装linbox
+
+*1-直接国内网盘下载，分为 *百度网盘，*阿里云盘，*123盘！
 
 *123盘
 
