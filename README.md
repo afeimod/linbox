@@ -31,8 +31,8 @@
 
 # 安装完后输入下面代码修复debian的root用户
 
-    dpkg --configure -a
     proot-distro login debian
+    dpkg --configure -a
     apt reinstall sudo -y
     exit
 
