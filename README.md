@@ -24,8 +24,9 @@
 
 *百度网盘
 
-    https://pan.baidu.com/s/1OwDm6at0ofOC7hARWIQreg?pwd=z52c 
-    提取码:z52c
+    https://pan.baidu.com/s/10q_Dj9r2gp9aRpmcrkU4oA?pwd=h6at 
+    提取码:h6at
+
 
 *2-github链接下载安装:
 
