@@ -7,7 +7,7 @@
 # 感谢*咔咔龙 *小白一枚 *Asia *Deemo *123 *等*以及mobox的所有开发人员！
 
 <p align="center">
-	<img src="linbox.jpg" width="376" height="128" alt="Linbox test" />  
+	<img src="linbox.jpg" width="376" height="200" alt="Linbox test" />  
 </p>
 
 # 安装termux和termux-x11或者exa-x11
