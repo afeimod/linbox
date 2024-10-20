@@ -1,5 +1,5 @@
 <p align="center">
-	<img src="logo.png" width="376" height="168" alt="Linbox Logo" />  
+	<img src="logo.png" width="376" height="200" alt="Linbox Logo" />  
 </p>
 
 # linbox
