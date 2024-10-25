@@ -25,11 +25,6 @@
 
     https://www.123pan.com/s/K4clVv-0ghVH.html  提取码：y67N
     
-*阿里云盘
-
-    https://www.alipan.com/s/eQ3wBRh8JXA
-    提取码: 5q49
-
 *百度网盘
 
     https://pan.baidu.com/s/10q_Dj9r2gp9aRpmcrkU4oA?pwd=h6at 
