@@ -33,7 +33,7 @@
     提取码:h6at
 
 
-*2-github链接下载安装:
+*2-github链接下载安装:更新较慢
 
 链接 .[**linbox**](https://github.com/afeimod/linbox/releases/tag/linbox0.8). 
 
