@@ -11,7 +11,7 @@
 </p>
 
 # 安装termux和termux-x11或者exa-x11
-下载 [**termuxmod不需要x11**](https://github.com/afeimod/Debian-proot/releases/download/termux/termux_0.118mod.apk) 
+下载 [**termuxmod不需要x11装完数据包后点重建依赖**](https://github.com/afeimod/Debian-proot/releases/download/termux/termux_0.118mod.apk) 
 
 下载 [**termux**](https://github.com/afeimod/Debian-proot/releases/download/termux/Termux_0.118.0+843d88c.apk) 
 
