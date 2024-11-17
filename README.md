@@ -37,7 +37,7 @@
 
 *2-github链接下载安装:更新较慢
 
-链接 .[**linbox**](https://github.com/afeimod/linbox/releases/tag/linbox0.8). 
+链接 .[**linbox**](https://github.com/afeimod/linbox/releases). 
 
 # 安装完后输入下面代码修复debian的root用户
 
