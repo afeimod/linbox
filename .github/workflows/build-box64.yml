@@ -1,0 +1,70 @@
+name: Build Box64 (aarch64)
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 检出源码
+      uses: actions/checkout@v4
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake build-essential \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu git tar
+
+    - name: 克隆 Box64
+      run: |
+        git clone https://github.com/ptitSeb/box64
+
+    - name: 构建 Box64 (交叉编译)
+      run: |
+        export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc
+
+        cd box64
+        sed -i 's|/usr|/data/data/com.termux/files/usr/glibc|g' CMakeLists.txt
+        sed -i 's|/etc|/data/data/com.termux/files/usr/glibc/etc|g' CMakeLists.txt
+
+        mkdir build && cd build
+        cmake .. \
+          -DCMAKE_INSTALL_PREFIX=$GLIBC_PREFIX \
+          -DARM_DYNAREC=ON \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DARM64=ON \
+          -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+
+        make
+
+        # 打包只包含可执行文件
+        tar -czvf ../../termux-glibc-box64.tar.gz box64
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: termux-glibc-box64
+        path: termux-glibc-box64.tar.gz
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Box64 (aarch64, Termux glibc)
+        files: termux-glibc-box64.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出完成信息
+      run: |
+        echo "✅ Box64 构建完成并发布 Release"

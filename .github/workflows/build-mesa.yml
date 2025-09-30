@@ -1,0 +1,95 @@
+name: Build Mesa (aarch64)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'refs/tags/**'
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+    - name: 检出源码
+      uses: actions/checkout@v4
+
+    - name: 安装依赖
+      run: |
+        sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        sudo apt-get build-dep mesa -y
+
+    - name: 克隆 Mesa
+      run: |
+        git clone https://gitlab.freedesktop.org/mesa/mesa.git
+        cd mesa
+        # 如果需要固定版本，可以取消下面注释
+        # git checkout mesa-24.2.5
+
+    - name: 构建 Mesa
+      run: |
+        cd mesa
+        sudo mkdir -p /data/data/com.termux/files/usr/glibc
+        sudo chmod 777 -R /data
+
+        mkdir -p builddir
+        meson setup builddir \
+          --libdir=lib \
+          -Dprefix=/data/data/com.termux/files/usr/glibc \
+          -Dbuildtype=release \
+          -Doptimization=3 \
+          -Db_lto=true \
+          -Dplatforms=x11 \
+          -Degl-native-platform=x11 \
+          -Dglx=dri \
+          -Dglx-direct=true \
+          -Dopengl=true \
+          -Dgles1=enabled \
+          -Dgles2=enabled \
+          -Dglvnd=disabled \
+          -Degl=enabled \
+          -Dllvm=disabled \
+          -Dshared-llvm=disabled \
+          -Dshader-cache=enabled \
+          -Dxlib-lease=enabled \
+          -Dvulkan-beta=true \
+          -Dgallium-drivers=zink,freedreno \
+          -Dvulkan-drivers=freedreno \
+          -Dfreedreno-kmds=msm,kgsl \
+          -Dvideo-codecs=all \
+          -Dgbm=enabled \
+          -Dtools=drm-shim,freedreno
+
+        ninja -C builddir
+        ninja -C builddir install
+
+        VERSION=$(cat VERSION)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+        tar -czf termux-glibc-mesa-${VERSION}-aarch64.tar.gz /data/data/com.termux/files/usr/glibc
+        mv termux-glibc-mesa-${VERSION}-aarch64.tar.gz ..
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: termux-glibc-mesa-${{ env.VERSION }}-aarch64
+        path: termux-glibc-mesa-${{ env.VERSION }}-aarch64.tar.gz
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Mesa ${{ env.VERSION }} (aarch64, Termux glibc)
+        files: termux-glibc-mesa-${{ env.VERSION }}-aarch64.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息
+      run: |
+        echo "✅ Mesa 构建完成"
+        echo "版本号: $VERSION"
