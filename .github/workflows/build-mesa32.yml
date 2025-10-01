@@ -28,7 +28,10 @@ jobs:
 
     - name: 安装 Mesa 构建依赖 (32位)
       run: |
-        # 安装32位开发库
+        # 首先更新包列表
+        sudo apt update
+        
+        # 安装32位开发库 - 使用可用的包名
         sudo apt-get install -y \
           libdrm-dev:armhf \
           libx11-dev:armhf \
@@ -37,22 +40,16 @@ jobs:
           libxxf86vm-dev:armhf \
           libxcb1-dev:armhf \
           libxcb-dri2-0-dev:armhf \
-          libxcb-dri3-0-dev:armhf \
+          libxcb-dri3-dev:armhf \
           libxcb-present-dev:armhf \
           libxcb-sync-dev:armhf \
           libxshmfence-dev:armhf \
           libxcb-xfixes0-dev:armhf \
           libxcb-randr0-dev:armhf \
-          libxcb-dri2-0-dev:armhf \
           libxcb-xinerama0-dev:armhf \
           libx11-xcb-dev:armhf \
           libxcb-glx0-dev:armhf \
           x11proto-dev:armhf \
-          x11proto-xext-dev:armhf \
-          x11proto-gl-dev:armhf \
-          x11proto-dri2-dev:armhf \
-          x11proto-dri3-dev:armhf \
-          x11proto-present-dev:armhf \
           libxrandr-dev:armhf \
           libxinerama-dev:armhf \
           libxcursor-dev:armhf \
@@ -62,6 +59,9 @@ jobs:
           libexpat1-dev:armhf \
           libwayland-dev:armhf \
           libwayland-egl-backend-dev:armhf \
+          libxau-dev:armhf \
+          libxdmcp-dev:armhf \
+          xtrans-dev:armhf \
           meson \
           ninja-build \
           python3-pip \
