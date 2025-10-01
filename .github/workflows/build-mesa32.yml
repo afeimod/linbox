@@ -95,7 +95,7 @@ jobs:
         echo "cpu = 'armv7hl'" >> cross-file.txt
         echo "endian = 'little'" >> cross-file.txt
 
-    - name: 构建 Mesa (32位) - 仅使用 softpipe
+    - name: 构建 Mesa (32位) - 极简配置
       run: |
         cd mesa
         
@@ -109,7 +109,7 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用简化的 Meson 配置 - 明确禁用所有 LLVM 相关功能
+        # 使用极简的 Meson 配置 - 只保留最基本的选项
         meson setup builddir32 \
           --cross-file cross-file.txt \
           -Dlibdir=lib \
@@ -127,14 +127,6 @@ jobs:
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
           -Dgallium-drivers=softpipe \
-          -Dgallium-extra-hud=false \
-          -Dgallium-nine=false \
-          -Dgallium-omx=disabled \
-          -Dgallium-opencl=disabled \
-          -Dgallium-va=disabled \
-          -Dgallium-vdpau=disabled \
-          -Dgallium-xa=disabled \
-          -Dgallium-xvmc=disabled \
           -Dvulkan-drivers= \
           -Dgbm=disabled \
           -Dosmesa=true
