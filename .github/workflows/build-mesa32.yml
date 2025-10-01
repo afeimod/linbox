@@ -73,7 +73,7 @@ jobs:
       run: |
         git clone https://gitlab.freedesktop.org/mesa/mesa.git
         cd mesa
-        git checkout mesa-24.2.5  # 使用稳定版本
+        git checkout mesa-24.1.0  # 使用稳定版本
 
     - name: 创建交叉编译文件
       run: |
