@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-24.04-arm
 
     steps:
     - name: 检出源码
@@ -18,16 +18,17 @@ jobs:
     - name: 安装依赖
       run: |
         sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
+        sudo dpkg --add-architecture armhf
         sudo apt update
         sudo apt-get build-dep mesa -y
-        # 安装32位构建依赖
-        sudo apt-get install gcc-multilib g++-multilib -y
-        sudo apt-get install libdrm-dev:i386 libx11-dev:i386 libxext-dev:i386 libxdamage-dev:i386 \
-                             libxfixes-dev:i386 libxxf86vm-dev:i386 libxcb-glx0-dev:i386 \
-                             libxcb-dri2-0-dev:i386 libxcb-dri3-dev:i386 libxcb-present-dev:i386 \
-                             libxshmfence-dev:i386 libelf-dev:i386 libexpat1-dev:i386 \
-                             libwayland-dev:i386 libxrandr-dev:i386 libvdpau-dev:i386 \
-                             libva-dev:i386 -y
+        # 安装32位ARM库和工具链
+        sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
+        sudo apt-get install libdrm-dev:armhf libx11-dev:armhf libxext-dev:armhf libxdamage-dev:armhf \
+                             libxfixes-dev:armhf libxxf86vm-dev:armhf libxcb-glx0-dev:armhf \
+                             libxcb-dri2-0-dev:armhf libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
+                             libxshmfence-dev:armhf libelf-dev:armhf libexpat1-dev:armhf \
+                             libwayland-dev:armhf libxrandr-dev:armhf libvdpau-dev:armhf \
+                             libva-dev:armhf meson ninja-build -y
 
     - name: 克隆 Mesa
       run: |
@@ -36,21 +37,47 @@ jobs:
         # 如果需要固定版本，可以取消下面注释
         # git checkout mesa-24.2.5
 
+    - name: 创建交叉编译配置
+      run: |
+        cd mesa
+        cat > cross-file.txt << EOF
+[binaries]
+c = 'arm-linux-gnueabihf-gcc'
+cpp = 'arm-linux-gnueabihf-g++'
+ar = 'arm-linux-gnueabihf-ar'
+strip = 'arm-linux-gnueabihf-strip'
+pkgconfig = 'pkg-config'
+
+[properties]
+c_args = ['-march=armv8-a']
+cpp_args = ['-march=armv8-a']
+c_link_args = []
+cpp_link_args = []
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'armv7hl'
+endian = 'little'
+EOF
+
     - name: 构建 Mesa (32位)
       run: |
         cd mesa
-        sudo mkdir -p /data/data/com.termux/files/usr/glibc/lib32
+        sudo mkdir -p /data/data/com.termux/files/usr/glibc/lib
         sudo chmod 777 -R /data
 
         mkdir -p builddir32
-        # 设置32位编译环境变量
-        export CC="gcc -m32"
-        export CXX="g++ -m32"
-        export PKG_CONFIG_PATH="/usr/lib/i386-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
-        export PKG_CONFIG_LIBDIR="/usr/lib/i386-linux-gnu/pkgconfig"
+        
+        # 设置环境变量
+        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
+        export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
+        export CC="arm-linux-gnueabihf-gcc"
+        export CXX="arm-linux-gnueabihf-g++"
         
         meson setup builddir32 \
-          --libdir=lib32 \
+          --cross-file cross-file.txt \
+          --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
           -Doptimization=3 \
@@ -74,11 +101,7 @@ jobs:
           -Dfreedreno-kmds=msm,kgsl \
           -Dvideo-codecs=all \
           -Dgbm=enabled \
-          -Dtools=drm-shim,freedreno \
-          -Dc_args="-m32" \
-          -Dcpp_args="-m32" \
-          -Dc_link_args="-m32" \
-          -Dcpp_link_args="-m32"
+          -Dtools=drm-shim,freedreno
 
         ninja -C builddir32
         ninja -C builddir32 install
@@ -87,21 +110,21 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
         # 打包32位库
-        tar -czf termux-glibc-mesa-${VERSION}-aarch64-lib32.tar.gz /data/data/com.termux/files/usr/glibc/lib32
-        mv termux-glibc-mesa-${VERSION}-aarch64-lib32.tar.gz ..
+        tar -czf termux-glibc-mesa-${VERSION}-armhf.tar.gz /data/data/com.termux/files/usr/glibc/lib
+        mv termux-glibc-mesa-${VERSION}-armhf.tar.gz ..
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: termux-glibc-mesa-${{ env.VERSION }}-aarch64-lib32
-        path: termux-glibc-mesa-${{ env.VERSION }}-aarch64-lib32.tar.gz
+        name: termux-glibc-mesa-${{ env.VERSION }}-armhf
+        path: termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Mesa ${{ env.VERSION }} (aarch64 lib32, Termux glibc)
-        files: termux-glibc-mesa-${{ env.VERSION }}-aarch64-lib32.tar.gz
+        name: Mesa ${{ env.VERSION }} (armhf, Termux glibc)
+        files: termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -109,4 +132,4 @@ jobs:
       run: |
         echo "✅ Mesa 32位构建完成"
         echo "版本号: $VERSION"
-        echo "架构: aarch64 lib32"
+        echo "架构: armhf (32位ARM)"
