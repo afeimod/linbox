@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Wine (x86_64 with WOW64)
+name: Build Wine (x86_64 with WOW64 for Termux)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -9,11 +9,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 使用 Ubuntu 22.04
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: 检出源码
+    - name: 检出源码和补丁
       uses: actions/checkout@v4
+      with:
+        path: scripts
 
     - name: 启用多架构支持
       run: |
@@ -23,7 +25,7 @@ jobs:
     - name: 修复包管理器
       run: |
         sudo apt-get update
-        sudo apt-get install -f -y  # 修复损坏的依赖
+        sudo apt-get install -f -y
         sudo apt-get autoremove -y
 
     - name: 安装基本依赖
@@ -36,7 +38,11 @@ jobs:
           gcc-multilib \
           g++-multilib \
           meson \
-          ninja-build
+          ninja-build \
+          autoconf \
+          wget \
+          xz-utils \
+          bubblewrap
 
     - name: 安装核心库依赖
       run: |
@@ -71,10 +77,7 @@ jobs:
 
     - name: 安装32位核心依赖
       run: |
-        # 先更新包列表
         sudo apt-get update
-        
-        # 安装32位库
         sudo apt-get install -y \
           libx11-dev:i386 \
           libxext-dev:i386 \
@@ -102,27 +105,33 @@ jobs:
           libtiff-dev:i386 \
           libxml2-dev:i386
 
-    - name: 克隆 Wine
+    - name: 克隆 Wine 源码
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        # 使用稳定版本避免构建问题
         git checkout wine-9.0
 
-    - name: 修改 Wine 源码中的临时路径
+    - name: 应用 Termux 补丁
       run: |
         cd wine
         
-        # 查找并替换所有硬编码的 /tmp 路径
-        find . -type f -name "*.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        find . -type f -name "*.h" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        find . -type f -name "*.in" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        # 应用路径修复补丁（基于你的 shell 脚本中的逻辑）
+        echo "应用 Termux 路径修复补丁..."
         
-        # 特别处理 server 目录中的相关文件
-        find server -type f -name "*.c" -exec sed -i 's|"/tmp/.wine|"/data/data/com.termux/files/usr/tmp/.wine|g' {} +
-        find server -type f -name "*.h" -exec sed -i 's|"/tmp/.wine|"/data/data/com.termux/files/usr/tmp/.wine|g' {} +
+        # 修改所有硬编码的 /tmp 路径
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
         
-        echo "已修改 Wine 源码中的临时路径"
+        # 特别处理 server 目录
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp/\.wine|"/data/data/com.termux/files/usr/tmp/\.wine|g' {} +
+        
+        # 应用其他必要的补丁（如果有的话）
+        if [ -f ../scripts/pathfix.patch ]; then
+          patch -p1 < ../scripts/pathfix.patch || echo "pathfix.patch 可能不适用，继续..."
+        fi
+        
+        if [ -f ../scripts/termux-wine-fix.patch ]; then
+          patch -p1 < ../scripts/termux-wine-fix.patch || echo "termux-wine-fix.patch 可能不适用，继续..."
+        fi
 
     - name: 配置和构建 Wine (64位)
       run: |
@@ -134,7 +143,7 @@ jobs:
         mkdir -p build64
         cd build64
 
-        # 配置64位 Wine，禁用有问题的功能
+        # 配置64位 Wine，使用与 shell 脚本相似的选项
         ../configure \
           --enable-win64 \
           --prefix=/tmp/wine-install \
@@ -149,7 +158,21 @@ jobs:
           --without-openal \
           --without-sane \
           --without-pcap \
-          --without-pcsclite
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland \
+          --without-xinerama
 
         # 构建64位 Wine
         make -j$(nproc)
@@ -176,7 +199,21 @@ jobs:
           --without-openal \
           --without-sane \
           --without-pcap \
-          --without-pcsclite
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland \
+          --without-xinerama
 
         # 构建32位 Wine
         make -j$(nproc)
@@ -188,124 +225,125 @@ jobs:
         cd build64 && make install
         cd ../build32 && make install
 
-        # 获取版本信息 - 修复这里的错误
+        # 获取版本信息
         VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION"
 
-    - name: 创建 Wine 启动脚本
+    - name: 创建 Termux 专用的启动脚本
       run: |
-        # 创建启动脚本，解决 Termux 环境问题
-        cat > /tmp/wine-install/bin/wine-termux << 'EOF'
+        # 创建安装目录结构
+        mkdir -p wine-package/opt/wine
+        
+        # 复制 Wine 安装文件
+        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        
+        # 创建 Termux 专用的启动脚本
+        cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
-        # 设置 Termux 特定的环境变量
+        # Termux Wine 启动脚本
+        
+        # 设置 Termux 环境变量
         export HOME=$HOME
         export TMPDIR=/data/data/com.termux/files/usr/tmp
         export TEMP=/data/data/com.termux/files/usr/tmp
         export TMP=/data/data/com.termux/files/usr/tmp
         
         # 确保必要的目录存在
-        mkdir -p $TMPDIR
-        mkdir -p $HOME/.wine
+        mkdir -p $TMPDIR 2>/dev/null
+        mkdir -p $HOME/.wine 2>/dev/null
         
         # 设置 WINEPREFIX
         if [ -z "$WINEPREFIX" ]; then
           export WINEPREFIX="$HOME/.wine"
         fi
         
+        # 设置库路径
+        export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/opt/wine/lib:$LD_LIBRARY_PATH"
+        
         # 运行 wine
-        /tmp/wine-install/bin/wine "$@"
+        exec /data/data/com.termux/files/usr/opt/wine/bin/wine "$@"
         EOF
         
-        chmod +x /tmp/wine-install/bin/wine-termux
-
+        chmod +x wine-package/bin/wine
+        
         # 创建 wineserver 启动脚本
-        cat > /tmp/wine-install/bin/wineserver-termux << 'EOF'
+        cat > wine-package/bin/wineserver << 'EOF'
         #!/bin/bash
-        # 设置 Termux 特定的环境变量
-        export HOME=$HOME
+        # Termux WineServer 启动脚本
+        
         export TMPDIR=/data/data/com.termux/files/usr/tmp
         export TEMP=/data/data/com.termux/files/usr/tmp
         export TMP=/data/data/com.termux/files/usr/tmp
         
-        # 确保必要的目录存在
-        mkdir -p $TMPDIR
+        mkdir -p $TMPDIR 2>/dev/null
+        export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/opt/wine/lib:$LD_LIBRARY_PATH"
         
-        # 运行 wineserver
-        /tmp/wine-install/bin/wineserver "$@"
+        exec /data/data/com.termux/files/usr/opt/wine/bin/wineserver "$@"
         EOF
         
-        chmod +x /tmp/wine-install/bin/wineserver-termux
+        chmod +x wine-package/bin/wineserver
 
-    - name: 创建打包文件
+    - name: 创建安装脚本
       run: |
-        # 创建打包目录
-        mkdir -p wine-package
-        cp -r /tmp/wine-install/* wine-package/
-        
-        # 创建安装脚本
         cat > wine-package/install-wine.sh << 'EOF'
         #!/bin/bash
-        echo "正在安装 Wine..."
+        echo "正在安装 Wine for Termux..."
         
-        # 确定安装目录
-        if [ -n "$PREFIX" ]; then
-          INSTALL_DIR="$PREFIX/opt/wine"
-        else
-          INSTALL_DIR="/data/data/com.termux/files/usr/opt/wine"
-        fi
+        # 安装目录
+        INSTALL_DIR="/data/data/com.termux/files/usr/opt/wine"
         
         # 创建安装目录
         mkdir -p $INSTALL_DIR
+        mkdir -p /data/data/com.termux/files/usr/tmp
+        mkdir -p $HOME/.wine
         
         # 复制文件
-        cp -r ./* $INSTALL_DIR/
-        
-        # 创建 Termux 临时目录
-        mkdir -p /data/data/com.termux/files/usr/tmp
+        echo "复制 Wine 文件..."
+        cp -r opt/wine/* $INSTALL_DIR/
+        cp -r bin/* /data/data/com.termux/files/usr/bin/
         
         # 设置环境变量
+        echo "设置环境变量..."
         cat >> $HOME/.bashrc << 'EOL'
-        # Wine configuration for Termux
-        export WINEPREFIX=\$HOME/.wine
-        export PATH=\$PATH:$INSTALL_DIR/bin
-        export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$INSTALL_DIR/lib
-        export TMPDIR=/data/data/com.termux/files/usr/tmp
-        export TEMP=/data/data/com.termux/files/usr/tmp
-        export TMP=/data/data/com.termux/files/usr/tmp
-        EOL
-        
-        # 创建必要的目录
-        mkdir -p $HOME/.wine
-        mkdir -p /data/data/com.termux/files/usr/tmp
-        
+
+# Wine configuration for Termux
+export WINEPREFIX=$HOME/.wine
+export PATH=$PATH:/data/data/com.termux/files/usr/opt/wine/bin
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/opt/wine/lib
+export TMPDIR=/data/data/com.termux/files/usr/tmp
+export TEMP=/data/data/com.termux/files/usr/tmp
+export TMP=/data/data/com.termux/files/usr/tmp
+EOL
+
         echo "Wine 安装完成！"
         echo "请运行: source ~/.bashrc"
-        echo "然后使用: wine-termux 来启动 Wine"
-        echo "使用: wineserver-termux 来启动 Wine 服务器"
+        echo "然后运行: wine wineboot 来初始化 Wine"
         EOF
         
         chmod +x wine-package/install-wine.sh
-        
+
+    - name: 创建打包文件
+      run: |
         # 打包
-        tar -czf wine-${{ env.VERSION }}-x86_64-wow64.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz wine-package/
         
         # 显示文件信息
-        ls -la wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        ls -la wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
         echo "打包文件创建完成"
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-x86_64-wow64
-        path: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        name: wine-${{ env.VERSION }}-x86_64-wow64-termux
+        path: wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Wine ${{ env.VERSION }} (x86_64 with WOW64)
-        files: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        name: Wine ${{ env.VERSION }} (x86_64 with WOW64 for Termux)
+        files: wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -314,14 +352,16 @@ jobs:
         echo "✅ Wine 构建完成"
         echo "版本号: $VERSION"
         echo "架构: x86_64 with WOW64"
+        echo "环境: Termux"
         echo ""
         echo "使用说明:"
-        echo "1. 下载并解压 wine-$VERSION-x86_64-wow64.tar.gz"
-        echo "2. 运行安装脚本: ./install-wine.sh"
-        echo "3. 重新加载环境: source ~/.bashrc"
-        echo "4. 使用 wine-termux 命令启动 Wine"
-        echo "5. 使用 wineserver-termux 命令启动 Wine 服务器"
+        echo "1. 下载并解压 wine-$VERSION-x86_64-wow64-termux.tar.gz"
+        echo "2. 进入解压后的目录"
+        echo "3. 运行安装脚本: ./install-wine.sh"
+        echo "4. 重新加载环境: source ~/.bashrc"
+        echo "5. 初始化 Wine: wine wineboot"
         echo ""
         echo "注意:"
         echo "- 已修改 Wine 源码中的临时路径为 Termux 路径"
-        echo "- 构建禁用了 DBus、GStreamer、Vulkan、MPG123、OpenAL、SANE、PCap 和 PC/SC 支持"
+        echo "- 包含专用的启动脚本解决路径问题"
+        echo "- 构建禁用了不必要的功能以减小体积"
