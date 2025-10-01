@@ -181,16 +181,17 @@ jobs:
         # 构建32位 Wine
         make -j$(nproc)
 
-    - name: 安装 Wine
+    - name: 安装 Wine 并获取版本信息
       run: |
         cd wine
         # 安装64位和32位
         cd build64 && make install
         cd ../build32 && make install
 
-        # 获取版本信息
-        VERSION=$(git describe --tags --abbrev-0)
+        # 获取版本信息 - 修复这里的错误
+        VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Wine 版本: $VERSION"
 
     - name: 创建 Wine 启动脚本
       run: |
