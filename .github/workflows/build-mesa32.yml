@@ -86,7 +86,7 @@ jobs:
           -Dopengl=true \
           -Dgles1=enabled \
           -Dgles2=enabled \
-          -Dglvnd=false \
+          -Dglvnd=disabled \
           -Degl=enabled \
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
@@ -94,7 +94,6 @@ jobs:
           -Dgallium-drivers=swrast \
           -Dvulkan-drivers= \
           -Dgbm=disabled \
-          -Dtools=none \
           -Dc_args="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard" \
           -Dcpp_args="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard"
 
