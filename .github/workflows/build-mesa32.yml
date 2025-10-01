@@ -47,11 +47,14 @@ jobs:
                              meson \
                              ninja-build \
                              python3-pip \
-                             pkg-config
+                             pkg-config \
+                             python3-mako  # 添加 Mako 模块
 
-    - name: 升级 Meson
+    - name: 升级 Meson 并安装 Python 依赖
       run: |
         pip3 install --upgrade meson
+        # 确保 Mako 模块已安装且版本足够新
+        pip3 install mako
 
     - name: 克隆 Mesa
       run: |
