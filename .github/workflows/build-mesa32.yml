@@ -96,10 +96,10 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用 Meson 配置 - 移除 llvmpipe 驱动，因为它需要 LLVM
+        # 使用 Meson 配置 - 修正语法错误
         meson setup builddir32 \
           --cross-file cross-file.txt \
-          --libdir=lib \
+          -Dlibdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
           -Db_lto=false \
@@ -113,7 +113,7 @@ jobs:
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=softpipe \  # 只使用 softpipe，不使用 llvmpipe
+          -Dgallium-drivers=softpipe \
           -Dvulkan-drivers= \
           -Dgbm=disabled
 
