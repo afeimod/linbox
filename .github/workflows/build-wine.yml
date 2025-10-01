@@ -102,25 +102,6 @@ jobs:
           libtiff-dev:i386 \
           libxml2-dev:i386
 
-    - name: 安装其他32位依赖
-      run: |
-        # 尝试安装其他32位库，但不强制要求
-        sudo apt-get install -y \
-          libpcap-dev:i386 \
-          libssl-dev:i386 \
-          libvulkan-dev:i386 \
-          libgcrypt20-dev:i386 \
-          libmpg123-dev:i386 \
-          libopenal-dev:i386 \
-          libv4l-dev:i386 \
-          libgphoto2-dev:i386 \
-          liblcms2-dev:i386 \
-          libldap2-dev:i386 \
-          libxslt1-dev:i386 \
-          libgnutls28-dev:i386 \
-          libsane-dev:i386 \
-          libpcsclite-dev:i386 || echo "某些32位包安装失败，继续构建..."
-
     - name: 克隆 Wine
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
@@ -131,8 +112,8 @@ jobs:
     - name: 配置和构建 Wine (64位)
       run: |
         cd wine
-        sudo mkdir -p /opt/wine
-        sudo chmod 777 -R /opt
+        mkdir -p /tmp/wine-install
+        sudo chmod 777 -R /tmp/wine-install
 
         # 创建64位构建目录
         mkdir -p build64
@@ -141,17 +122,19 @@ jobs:
         # 配置64位 Wine，禁用有问题的功能
         ../configure \
           --enable-win64 \
-          --prefix=/opt/wine \
+          --prefix=/tmp/wine-install \
           --with-x \
           --with-alsa \
           --with-pulse \
-          --with-dbus \
           --with-cups \
+          --without-dbus \
           --without-gstreamer \
           --without-vulkan \
           --without-mpg123 \
           --without-openal \
-          --without-sane
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite
 
         # 构建64位 Wine
         make -j$(nproc)
@@ -164,10 +147,9 @@ jobs:
         cd build32
 
         # 配置32位 Wine，链接到64位构建
-        # 禁用更多可能有问题的功能
         ../configure \
           --with-wine64=../build64 \
-          --prefix=/opt/wine \
+          --prefix=/tmp/wine-install \
           --with-x \
           --with-alsa \
           --with-pulse \
@@ -195,22 +177,31 @@ jobs:
         VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+    - name: 创建打包文件
+      run: |
+        # 创建打包目录
+        mkdir -p wine-package
+        cp -r /tmp/wine-install/* wine-package/
+        
         # 打包
-        cd ../..
-        tar -czf wine-$VERSION-x86_64-wow64.tar.gz /opt/wine
+        tar -czf wine-${{ env.VERSION }}-x86_64-wow64.tar.gz wine-package/
+        
+        # 显示文件信息
+        ls -la wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        echo "打包文件创建完成"
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
         name: wine-${{ env.VERSION }}-x86_64-wow64
-        path: wine-$VERSION-x86_64-wow64.tar.gz
+        path: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (x86_64 with WOW64)
-        files: wine-$VERSION-x86_64-wow64.tar.gz
+        files: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -219,6 +210,6 @@ jobs:
         echo "✅ Wine 构建完成"
         echo "版本号: $VERSION"
         echo "架构: x86_64 with WOW64"
-        echo "安装路径: /opt/wine"
+        echo "安装路径: /tmp/wine-install"
         echo "支持运行: 32位和64位Windows应用程序"
-        echo "注意: 32位构建禁用了 DBus、GStreamer、Vulkan、MPG123、OpenAL、SANE、PCap 和 PC/SC 支持"
+        echo "注意: 构建禁用了 DBus、GStreamer、Vulkan、MPG123、OpenAL、SANE、PCap 和 PC/SC 支持"
