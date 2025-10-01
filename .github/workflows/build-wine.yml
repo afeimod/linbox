@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Wine (x86_64 with WOW64 for Termux)
+name: Build Wine (True WOW64 for Termux)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -41,8 +41,7 @@ jobs:
           ninja-build \
           autoconf \
           wget \
-          xz-utils \
-          bubblewrap
+          xz-utils
 
     - name: 安装核心库依赖
       run: |
@@ -75,7 +74,7 @@ jobs:
           libtiff-dev \
           libxml2-dev
 
-    - name: 安装32位核心依赖
+    - name: 安装32位开发库（用于交叉编译）
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -117,65 +116,34 @@ jobs:
         
         echo "彻底修复 Termux 路径问题..."
         
-        # 基于你的 shell 脚本，更彻底地修改所有硬编码的路径
         # 修改所有硬编码的 /tmp 路径
         find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
         
         # 修改 server 目录中的特定路径
         find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
         
-        # 修改 file.c 中的临时目录路径
+        # 修改其他关键文件
         find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        
-        # 修改 loader 中的路径
         find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        
-        # 修改 wineserver 中的路径
         find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        
-        # 修改 registry 路径（基于你的 shell 脚本）
-        find . -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|/usr/share/wine|/data/data/com.termux/files/usr/share/wine|g' {} +
-        
-        # 修改其他可能的硬编码路径
-        find . -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|/usr/lib|/data/data/com.termux/files/usr/lib|g' {} +
-        find . -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|/usr/bin|/data/data/com.termux/files/usr/bin|g' {} +
-        find . -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|/etc|/data/data/com.termux/files/usr/etc|g' {} +
         
         echo "路径修复完成"
 
-    - name: 应用必要的补丁
-      run: |
-        cd wine
-        
-        # 如果有补丁文件，应用它们
-        if [ -f ../scripts/pathfix.patch ]; then
-          echo "应用 pathfix.patch..."
-          patch -p1 < ../scripts/pathfix.patch || echo "pathfix.patch 可能不适用，继续..."
-        fi
-        
-        if [ -f ../scripts/termux-wine-fix.patch ]; then
-          echo "应用 termux-wine-fix.patch..."
-          patch -p1 < ../scripts/termux-wine-fix.patch || echo "termux-wine-fix.patch 可能不适用，继续..."
-        fi
-        
-        if [ -f ../scripts/esync.patch ]; then
-          echo "应用 esync.patch..."
-          patch -p1 < ../scripts/esync.patch || echo "esync.patch 可能不适用，继续..."
-        fi
-
-    - name: 配置和构建 Wine (64位)
+    - name: 配置和构建真正的 WOW64 Wine
       run: |
         cd wine
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
 
-        # 创建64位构建目录
-        mkdir -p build64
-        cd build64
+        # 创建构建目录 - 真正的 WOW64 只需要一个构建目录
+        mkdir -p build-wow64
+        cd build-wow64
 
-        # 配置64位 Wine，使用与你的 shell 脚本完全相同的选项
+        # 配置真正的 WOW64 Wine
+        # 使用 --enable-win64 和 --enable-archs 来构建真正的 WOW64
         ../configure \
           --enable-win64 \
+          --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install \
           --with-x \
           --with-alsa \
@@ -204,68 +172,45 @@ jobs:
           --without-wayland \
           --without-xinerama
 
-        # 构建64位 Wine
-        make -j$(nproc)
-
-    - name: 配置和构建 Wine (32位 WOW64)
-      run: |
-        cd wine
-        # 创建32位构建目录
-        mkdir -p build32
-        cd build32
-
-        # 配置32位 Wine，链接到64位构建
-        ../configure \
-          --with-wine64=../build64 \
-          --prefix=/tmp/wine-install \
-          --with-x \
-          --with-alsa \
-          --with-pulse \
-          --with-cups \
-          --without-dbus \
-          --without-gstreamer \
-          --without-vulkan \
-          --without-mpg123 \
-          --without-openal \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
-          --disable-winemenubuilder \
-          --disable-win16 \
-          --disable-tests \
-          --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
-          --without-wayland \
-          --without-xinerama
-
-        # 构建32位 Wine
+        # 构建真正的 WOW64 Wine
+        echo "开始构建真正的 WOW64 Wine..."
         make -j$(nproc)
 
     - name: 安装 Wine 并获取版本信息
       run: |
-        cd wine
-        # 安装64位和32位
-        cd build64 && make install
-        cd ../build32 && make install
+        cd wine/build-wow64
+        # 安装 WOW64 Wine
+        make install
 
         # 获取版本信息
+        cd ..
         VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Wine 版本: $VERSION"
+        echo "Wine 版本: $VERSION - 真正的 WOW64 构建"
 
-    - name: 创建完整的 Termux 包结构
+    - name: 验证构建结果
       run: |
-        # 创建完整的目录结构
+        echo "检查安装的文件..."
+        find /tmp/wine-install -name "*.so" | head -20
+        echo ""
+        echo "检查架构..."
+        file /tmp/wine-install/bin/wine
+        file /tmp/wine-install/bin/wine64
+        echo ""
+        echo "检查是否存在 i386-unix（不应该存在）..."
+        if [ -d "/tmp/wine-install/lib/wine/i386-unix" ]; then
+          echo "错误: 发现了 i386-unix 目录，这不是真正的 WOW64 构建"
+          ls -la /tmp/wine-install/lib/wine/
+          exit 1
+        else
+          echo "正确: 没有 i386-unix 目录，这是真正的 WOW64 构建"
+        fi
+
+    - name: 创建 Termux 包结构
+      run: |
+        # 创建目录结构
         mkdir -p wine-package/opt/wine
         mkdir -p wine-package/bin
-        mkdir -p wine-package/share/wine
         
         # 复制 Wine 安装文件
         echo "复制 Wine 文件..."
@@ -274,9 +219,8 @@ jobs:
         # 创建 wine 包装脚本
         cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
-        # Wine for Termux 启动脚本
+        # True WOW64 Wine for Termux 启动脚本
         
-        # 设置 Termux 环境
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export HOME="$HOME"
         
@@ -298,12 +242,13 @@ jobs:
         
         # 设置库路径
         export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$LD_LIBRARY_PATH"
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib64:$LD_LIBRARY_PATH"
         
         # 设置其他 Wine 相关环境变量
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine"
-        export WINEARCH="win64"
+        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
+        export WINEARCH="win64"  # WOW64 模式
         
-        # 运行真正的 wine 程序
+        # 运行真正的 wine 程序（会自动处理 32/64 位）
         exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
         EOF
         
@@ -312,181 +257,148 @@ jobs:
         # 创建 wineserver 包装脚本
         cat > wine-package/bin/wineserver << 'EOF'
         #!/bin/bash
-        # WineServer for Termux 启动脚本
-        
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export TMPDIR="$TERMUX_PREFIX/tmp"
         export TEMP="$TMPDIR"
         export TMP="$TMPDIR"
         
         mkdir -p "$TMPDIR" 2>/dev/null
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$LD_LIBRARY_PATH"
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine"
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$LD_LIBRARY_PATH"
+        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         
         exec "$TERMUX_PREFIX/opt/wine/bin/wineserver" "$@"
         EOF
         
         chmod +x wine-package/bin/wineserver
-        
-        # 创建 winedbg 包装脚本
-        cat > wine-package/bin/winedbg << 'EOF'
-        #!/bin/bash
-        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$LD_LIBRARY_PATH"
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine"
-        exec "$TERMUX_PREFIX/opt/wine/bin/winedbg" "$@"
-        EOF
-        
-        chmod +x wine-package/bin/winedbg
 
-    - name: 创建完整的安装脚本
+    - name: 创建安装脚本
       run: |
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
         set -e
         
         echo "=========================================="
-        echo "   Wine for Termux 安装脚本"
+        echo "   True WOW64 Wine for Termux 安装脚本"
         echo "=========================================="
         
-        # 定义路径
         TERMUX_PREFIX="/data/data/com.termux/files/usr"
         INSTALL_DIR="$TERMUX_PREFIX/opt/wine"
         BIN_DIR="$TERMUX_PREFIX/bin"
         
-        # 检查是否在 Termux 环境中
+        # 检查环境
         if [ ! -d "$TERMUX_PREFIX" ]; then
             echo "错误: 这似乎不是 Termux 环境!"
             exit 1
         fi
         
-        # 创建必要的目录
+        # 创建目录
         echo "创建目录..."
         mkdir -p "$INSTALL_DIR"
         mkdir -p "$BIN_DIR"
         mkdir -p "$TERMUX_PREFIX/tmp"
         mkdir -p "$HOME/.wine"
         
-        # 复制文件
+        # 安装文件
         echo "安装 Wine 文件..."
         cp -r opt/wine/* "$INSTALL_DIR"/
         
         echo "安装启动脚本..."
         cp bin/wine "$BIN_DIR"/
         cp bin/wineserver "$BIN_DIR"/
-        cp bin/winedbg "$BIN_DIR"/
         
-        # 设置权限
         chmod +x "$BIN_DIR"/wine
         chmod +x "$BIN_DIR"/wineserver
-        chmod +x "$BIN_DIR"/winedbg
         
-        # 配置环境变量
+        # 配置环境
         echo "配置环境变量..."
         
-        # 检查是否已经在 bashrc 中配置过
-        if ! grep -q "WINE for Termux" "$HOME/.bashrc" 2>/dev/null; then
+        if ! grep -q "True WOW64 Wine" "$HOME/.bashrc" 2>/dev/null; then
             cat >> "$HOME/.bashrc" << 'EOL'
 
             export TERMUX_PREFIX="/data/data/com.termux/files/usr"
             export WINEPREFIX="$HOME/.wine"
-            export WINEARCH="win64"
+            export WINEARCH="win64"  # WOW64 模式
             export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib"
-            export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine"
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64"
+            export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
             export TMPDIR="$TERMUX_PREFIX/tmp"
             export TEMP="$TMPDIR"
             export TMP="$TMPDIR"
-
+            # ==========================================
             EOL
         fi
         
-        # 创建 wine 配置目录
-        mkdir -p "$HOME/.wine/drive_c"
-        
         echo ""
         echo "=========================================="
-        echo "   Wine 安装完成!"
+        echo "   True WOW64 Wine 安装完成!"
         echo "=========================================="
         echo ""
-        echo "下一步:"
-        echo "1. 重新启动 Termux 会话或运行: source ~/.bashrc"
-        echo "2. 初始化 Wine: wine wineboot"
-        echo "3. 如果需要 32 位支持，设置: export WINEARCH=win32"
+        echo "特性:"
+        echo "✓ 真正的 WOW64 架构"
+        echo "✓ 同时支持 32 位和 64 位 Windows 应用程序"
+        echo "✓ 无需单独的 32 位 Unix 库"
         echo ""
-        echo "注意: 首次运行 wine 时会创建 Wine 配置目录。"
+        echo "使用方法:"
+        echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
+        echo "2. 初始化: wine wineboot"
+        echo "3. 运行 32 位应用: wine app32.exe"
+        echo "4. 运行 64 位应用: wine app64.exe"
+        echo ""
+        echo "注意: 这是真正的 WOW64 构建，不是传统的交叉编译!"
         echo "=========================================="
         EOF
         
         chmod +x wine-package/install.sh
-        
-        # 创建卸载脚本
-        cat > wine-package/uninstall.sh << 'EOF'
-        #!/bin/bash
-        echo "卸载 Wine for Termux..."
-        
-        TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        
-        # 删除安装的文件
-        rm -rf "$TERMUX_PREFIX/opt/wine"
-        rm -f "$TERMUX_PREFIX/bin/wine"
-        rm -f "$TERMUX_PREFIX/bin/wineserver"
-        rm -f "$TERMUX_PREFIX/bin/winedbg"
-        
-        # 从 bashrc 中移除环境变量
-        if [ -f "$HOME/.bashrc" ]; then
-            sed -i '/# ==========================================/,/# ==========================================/d' "$HOME/.bashrc"
-        fi
-        
-        echo "Wine 已卸载。你可能需要手动删除 ~/.wine 目录。"
-        EOF
-        
-        chmod +x wine-package/uninstall.sh
 
     - name: 创建打包文件
       run: |
-        # 显示打包前的文件结构
         echo "最终文件结构:"
         find wine-package -type f | sort
+        echo ""
+        echo "检查 Wine 二进制文件:"
+        file wine-package/opt/wine/bin/wine*
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-true-wow64-termux.tar.gz wine-package/
         
-        # 显示打包结果
         echo "打包完成:"
-        ls -lh wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
+        ls -lh wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-x86_64-wow64-termux
-        path: wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
+        name: wine-${{ env.VERSION }}-true-wow64-termux
+        path: wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Wine ${{ env.VERSION }} (x86_64 with WOW64 for Termux)
-        files: wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz
+        name: Wine ${{ env.VERSION }} (True WOW64 for Termux)
+        files: wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出版本信息和使用说明
       run: |
-        echo "✅ Wine 构建完成"
+        echo "✅ True WOW64 Wine 构建完成"
         echo "版本号: $VERSION"
-        echo "架构: x86_64 with WOW64"
+        echo "架构: x86_64 True WOW64"
         echo "环境: Termux"
         echo ""
+        echo "特性:"
+        echo "✓ 单一二进制文件支持 32/64 位应用"
+        echo "✓ 无需 i386-unix 目录"
+        echo "✓ 真正的 WOW64 架构"
+        echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-x86_64-wow64-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-x86_64-wow64-termux.tar.gz"
-        echo "3. 进入解压后的目录: cd wine-package"
-        echo "4. 运行安装脚本: ./install.sh"
-        echo "5. 重新启动 Termux 或运行: source ~/.bashrc"
+        echo "1. 下载 wine-$VERSION-true-wow64-termux.tar.gz"
+        echo "2. 解压: tar -xzf wine-$VERSION-true-wow64-termux.tar.gz"
+        echo "3. 进入目录: cd wine-package"
+        echo "4. 运行安装: ./install.sh"
+        echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
         echo ""
-        echo "注意:"
-        echo "- 已彻底修改 Wine 源码中的所有硬编码路径"
-        echo "- 包含完整的包装脚本和环境配置"
-        echo "- 支持 WOW64 (32位和64位Windows应用程序)"
+        echo "测试:"
+        echo "- wine notepad (32位应用)"
+        echo "- wine64 notepad (64位应用)"
