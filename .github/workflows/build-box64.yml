@@ -1,10 +1,8 @@
+# build-box64.yml
 name: Build Box64 (aarch64)
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:  # 只保留手动触发
 
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release

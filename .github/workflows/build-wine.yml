@@ -1,18 +1,15 @@
-name: Build Wine (aarch64)
+# build-wine.yml
+name: Build Wine (x86_64 with WOW64)
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - 'refs/tags/**'
+  workflow_dispatch:  # 只保留手动触发
 
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04  # 改为 x86_64 运行器
 
     steps:
     - name: 检出源码
@@ -68,6 +65,49 @@ jobs:
           libgnutls28-dev \
           libsane-dev \
           libpcsclite-dev \
+          gcc-multilib \
+          g++-multilib \
+          libx11-dev:i386 \
+          libxext-dev:i386 \
+          libxi-dev:i386 \
+          libxrandr-dev:i386 \
+          libxcursor-dev:i386 \
+          libxcomposite-dev:i386 \
+          libxdamage-dev:i386 \
+          libxfixes-dev:i386 \
+          libxxf86vm-dev:i386 \
+          libxrender-dev:i386 \
+          libxinerama-dev:i386 \
+          libgl-dev:i386 \
+          libglu-dev:i386 \
+          libosmesa6-dev:i386 \
+          libfreetype6-dev:i386 \
+          libfontconfig1-dev:i386 \
+          libpcap-dev:i386 \
+          libdbus-1-dev:i386 \
+          libssl-dev:i386 \
+          libasound2-dev:i386 \
+          libpulse-dev:i386 \
+          libudev-dev:i386 \
+          libvulkan-dev:i386 \
+          libgcrypt20-dev:i386 \
+          libgstreamer1.0-dev:i386 \
+          libgstreamer-plugins-base1.0-dev:i386 \
+          libcups2-dev:i386 \
+          libjpeg-dev:i386 \
+          libpng-dev:i386 \
+          libtiff-dev:i386 \
+          libmpg123-dev:i386 \
+          libopenal-dev:i386 \
+          libv4l-dev:i386 \
+          libgphoto2-dev:i386 \
+          liblcms2-dev:i386 \
+          libldap2-dev:i386 \
+          libxml2-dev:i386 \
+          libxslt1-dev:i386 \
+          libgnutls28-dev:i386 \
+          libsane-dev:i386 \
+          libpcsclite-dev:i386 \
           meson \
           ninja-build
 
@@ -78,20 +118,20 @@ jobs:
         # 如果需要固定版本，可以取消下面注释
         # git checkout wine-9.0
 
-    - name: 配置和构建 Wine
+    - name: 配置和构建 Wine (64位)
       run: |
         cd wine
-        sudo mkdir -p /data/data/com.termux/files/usr/glibc
-        sudo chmod 777 -R /data
+        sudo mkdir -p /opt/wine
+        sudo chmod 777 -R /opt
 
-        # 创建构建目录
-        mkdir -p build
-        cd build
+        # 创建64位构建目录
+        mkdir -p build64
+        cd build64
 
-        # 配置 Wine
+        # 配置64位 Wine
         ../configure \
-          --prefix=/data/data/com.termux/files/usr/glibc \
-          --enable-archs=aarch64 \
+          --enable-win64 \
+          --prefix=/opt/wine \
           --with-x \
           --with-vulkan \
           --with-opengl \
@@ -104,9 +144,41 @@ jobs:
           --with-mpg123 \
           --with-openal
 
-        # 构建 Wine
+        # 构建64位 Wine
         make -j$(nproc)
-        make install
+
+    - name: 配置和构建 Wine (32位 WOW64)
+      run: |
+        cd wine
+        # 创建32位构建目录
+        mkdir -p build32
+        cd build32
+
+        # 配置32位 Wine，链接到64位构建
+        ../configure \
+          --with-wine64=../build64 \
+          --prefix=/opt/wine \
+          --with-x \
+          --with-vulkan \
+          --with-opengl \
+          --with-alsa \
+          --with-pulse \
+          --with-dbus \
+          --with-cups \
+          --with-sane \
+          --with-gstreamer \
+          --with-mpg123 \
+          --with-openal
+
+        # 构建32位 Wine
+        make -j$(nproc)
+
+    - name: 安装 Wine
+      run: |
+        cd wine
+        # 安装64位和32位
+        cd build64 && make install
+        cd ../build32 && make install
 
         # 获取版本信息
         VERSION=$(git describe --tags --abbrev=0)
@@ -114,20 +186,20 @@ jobs:
 
         # 打包
         cd ../..
-        tar -czf termux-glibc-wine-${VERSION}-aarch64.tar.gz /data/data/com.termux/files/usr/glibc
+        tar -czf wine-$VERSION-x86_64-wow64.tar.gz /opt/wine
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: termux-glibc-wine-${{ env.VERSION }}-aarch64
-        path: termux-glibc-wine-${{ env.VERSION }}-aarch64.tar.gz
+        name: wine-${{ env.VERSION }}-x86_64-wow64
+        path: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Wine ${{ env.VERSION }} (aarch64, Termux glibc)
-        files: termux-glibc-wine-${{ env.VERSION }}-aarch64.tar.gz
+        name: Wine ${{ env.VERSION }} (x86_64 with WOW64)
+        files: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -135,4 +207,6 @@ jobs:
       run: |
         echo "✅ Wine 构建完成"
         echo "版本号: $VERSION"
-        echo "安装路径: /data/data/com.termux/files/usr/glibc"
+        echo "架构: x86_64 with WOW64"
+        echo "安装路径: /opt/wine"
+        echo "支持运行: 32位和64位Windows应用程序"

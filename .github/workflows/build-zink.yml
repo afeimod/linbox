@@ -1,11 +1,8 @@
+# build-zink.yml
 name: Build Mesa zink (aarch64)
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - 'refs/tags/**'
+  workflow_dispatch:  # 只保留手动触发
 
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
