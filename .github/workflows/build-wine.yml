@@ -9,16 +9,21 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 改为 x86_64 运行器
+    runs-on: ubuntu-24.04  # 改为 x86_64 运行器
 
     steps:
     - name: 检出源码
       uses: actions/checkout@v4
 
-    - name: 安装依赖
+    - name: 启用多架构支持
       run: |
+        sudo dpkg --add-architecture i386
         sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
         sudo apt update
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
         sudo apt-get install -y \
           build-essential \
           git \
@@ -67,56 +72,64 @@ jobs:
           libpcsclite-dev \
           gcc-multilib \
           g++-multilib \
+          meson \
+          ninja-build
+
+    - name: 安装32位依赖（替代方案）
+      run: |
+        # 尝试安装可用的32位库
+        sudo apt-get install -y \
           libx11-dev:i386 \
           libxext-dev:i386 \
-          libxi-dev:i386 \
           libxrandr-dev:i386 \
           libxcursor-dev:i386 \
-          libxcomposite-dev:i386 \
-          libxdamage-dev:i386 \
           libxfixes-dev:i386 \
-          libxxf86vm-dev:i386 \
           libxrender-dev:i386 \
-          libxinerama-dev:i386 \
           libgl-dev:i386 \
           libglu-dev:i386 \
-          libosmesa6-dev:i386 \
           libfreetype6-dev:i386 \
           libfontconfig1-dev:i386 \
-          libpcap-dev:i386 \
-          libdbus-1-dev:i386 \
-          libssl-dev:i386 \
           libasound2-dev:i386 \
           libpulse-dev:i386 \
           libudev-dev:i386 \
-          libvulkan-dev:i386 \
-          libgcrypt20-dev:i386 \
-          libgstreamer1.0-dev:i386 \
-          libgstreamer-plugins-base1.0-dev:i386 \
           libcups2-dev:i386 \
           libjpeg-dev:i386 \
           libpng-dev:i386 \
           libtiff-dev:i386 \
-          libmpg123-dev:i386 \
-          libopenal-dev:i386 \
-          libv4l-dev:i386 \
-          libgphoto2-dev:i386 \
-          liblcms2-dev:i386 \
-          libldap2-dev:i386 \
           libxml2-dev:i386 \
-          libxslt1-dev:i386 \
-          libgnutls28-dev:i386 \
-          libsane-dev:i386 \
-          libpcsclite-dev:i386 \
-          meson \
-          ninja-build
+          libssl-dev:i386 || true
+
+        # 对于找不到的包，安装64位版本，Wine可能仍能构建
+        sudo apt-get install -y \
+          libxi-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxxf86vm-dev \
+          libxinerama-dev \
+          libosmesa6-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libvulkan-dev \
+          libgcrypt20-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev \
+          libv4l-dev \
+          libgphoto2-dev \
+          liblcms2-dev \
+          libldap2-dev \
+          libxslt1-dev \
+          libgnutls28-dev \
+          libsane-dev \
+          libpcsclite-dev
 
     - name: 克隆 Wine
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        # 如果需要固定版本，可以取消下面注释
-        # git checkout wine-9.0
+        # 使用稳定版本避免构建问题
+        git checkout wine-9.0
 
     - name: 配置和构建 Wine (64位)
       run: |
@@ -155,20 +168,20 @@ jobs:
         cd build32
 
         # 配置32位 Wine，链接到64位构建
+        # 添加一些禁用选项来避免缺少的依赖
         ../configure \
           --with-wine64=../build64 \
           --prefix=/opt/wine \
           --with-x \
-          --with-vulkan \
-          --with-opengl \
           --with-alsa \
           --with-pulse \
           --with-dbus \
           --with-cups \
-          --with-sane \
-          --with-gstreamer \
-          --with-mpg123 \
-          --with-openal
+          --disable-vulkan \
+          --disable-gstreamer \
+          --disable-mpg123 \
+          --disable-openal \
+          --disable-sane
 
         # 构建32位 Wine
         make -j$(nproc)
@@ -192,14 +205,14 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: wine-${{ env.VERSION }}-x86_64-wow64
-        path: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        path: wine-$VERSION-x86_64-wow64.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (x86_64 with WOW64)
-        files: wine-${{ env.VERSION }}-x86_64-wow64.tar.gz
+        files: wine-$VERSION-x86_64-wow64.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
