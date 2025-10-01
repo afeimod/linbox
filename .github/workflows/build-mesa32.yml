@@ -93,7 +93,7 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用 Meson 配置 - 使用交叉编译
+        # 使用 Meson 配置 - 修正选项以解决冲突
         meson setup builddir32 \
           --cross-file cross-file.txt \
           --libdir=lib \
@@ -101,16 +101,16 @@ jobs:
           -Dbuildtype=release \
           -Db_lto=false \
           -Dplatforms=x11 \
-          -Dglx=xlib \
+          -Dglx=dri \
           -Dopengl=true \
           -Dgles1=enabled \
           -Dgles2=enabled \
           -Dglvnd=disabled \
-          -Degl=enabled \
+          -Degl=disabled \
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=swrast \
+          -Dgallium-drivers=softpipe,llvmpipe \
           -Dvulkan-drivers= \
           -Dgbm=disabled
 
