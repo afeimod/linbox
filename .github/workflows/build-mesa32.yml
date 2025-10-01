@@ -29,26 +29,46 @@ jobs:
     - name: 安装 Mesa 构建依赖 (32位)
       run: |
         # 安装32位开发库
-        sudo apt-get install -y libdrm-dev:armhf \
-                             libx11-dev:armhf \
-                             libxext-dev:armhf \
-                             libxfixes-dev:armhf \
-                             libxxf86vm-dev:armhf \
-                             libxcb1-dev:armhf \
-                             libxcb-dri2-0-dev:armhf \
-                             libxcb-dri3-dev:armhf \
-                             libxcb-present-dev:armhf \
-                             libxcb-sync-dev:armhf \
-                             libxshmfence-dev:armhf \
-                             libelf-dev:armhf \
-                             libexpat1-dev:armhf \
-                             libwayland-dev:armhf \
-                             libwayland-egl-backend-dev:armhf \
-                             meson \
-                             ninja-build \
-                             python3-pip \
-                             pkg-config \
-                             python3-mako
+        sudo apt-get install -y \
+          libdrm-dev:armhf \
+          libx11-dev:armhf \
+          libxext-dev:armhf \
+          libxfixes-dev:armhf \
+          libxxf86vm-dev:armhf \
+          libxcb1-dev:armhf \
+          libxcb-dri2-0-dev:armhf \
+          libxcb-dri3-0-dev:armhf \
+          libxcb-present-dev:armhf \
+          libxcb-sync-dev:armhf \
+          libxshmfence-dev:armhf \
+          libxcb-xfixes0-dev:armhf \
+          libxcb-randr0-dev:armhf \
+          libxcb-dri2-0-dev:armhf \
+          libxcb-xinerama0-dev:armhf \
+          libx11-xcb-dev:armhf \
+          libxcb-glx0-dev:armhf \
+          x11proto-dev:armhf \
+          x11proto-xext-dev:armhf \
+          x11proto-gl-dev:armhf \
+          x11proto-dri2-dev:armhf \
+          x11proto-dri3-dev:armhf \
+          x11proto-present-dev:armhf \
+          libxrandr-dev:armhf \
+          libxinerama-dev:armhf \
+          libxcursor-dev:armhf \
+          libxdamage-dev:armhf \
+          libxvmc-dev:armhf \
+          libelf-dev:armhf \
+          libexpat1-dev:armhf \
+          libwayland-dev:armhf \
+          libwayland-egl-backend-dev:armhf \
+          meson \
+          ninja-build \
+          python3-pip \
+          pkg-config \
+          python3-mako \
+          flex \
+          bison
 
     - name: 升级 Meson 并安装 Python 依赖
       run: |
@@ -96,7 +116,7 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用 Meson 配置 - 修正语法错误
+        # 使用 Meson 配置
         meson setup builddir32 \
           --cross-file cross-file.txt \
           -Dlibdir=lib \
