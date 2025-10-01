@@ -177,11 +177,70 @@ jobs:
         VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+    - name: 创建 Wine 启动脚本
+      run: |
+        # 创建启动脚本，解决 Termux 环境问题
+        cat > /tmp/wine-install/bin/wine-termux << 'EOF'
+        #!/bin/bash
+        # 设置 Termux 特定的环境变量
+        export HOME=$HOME
+        export TMPDIR=$TMPDIR
+        export TEMP=$TMPDIR
+        
+        # 确保必要的目录存在
+        mkdir -p $TMPDIR
+        mkdir -p $HOME/.wine
+        
+        # 设置 WINEPREFIX
+        if [ -z "$WINEPREFIX" ]; then
+          export WINEPREFIX="$HOME/.wine"
+        fi
+        
+        # 运行 wine
+        /tmp/wine-install/bin/wine "$@"
+        EOF
+        
+        chmod +x /tmp/wine-install/bin/wine-termux
+
     - name: 创建打包文件
       run: |
         # 创建打包目录
         mkdir -p wine-package
         cp -r /tmp/wine-install/* wine-package/
+        
+        # 创建安装脚本
+        cat > wine-package/install-wine.sh << 'EOF'
+        #!/bin/bash
+        echo "正在安装 Wine..."
+        
+        # 确定安装目录
+        if [ -n "$PREFIX" ]; then
+          INSTALL_DIR="$PREFIX/opt/wine"
+        else
+          INSTALL_DIR="/data/data/com.termux/files/usr/opt/wine"
+        fi
+        
+        # 创建安装目录
+        mkdir -p $INSTALL_DIR
+        
+        # 复制文件
+        cp -r ./* $INSTALL_DIR/
+        
+        # 设置环境变量
+        echo "export WINEPREFIX=\$HOME/.wine" >> $HOME/.bashrc
+        echo "export PATH=\$PATH:$INSTALL_DIR/bin" >> $HOME/.bashrc
+        echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:$INSTALL_DIR/lib" >> $HOME/.bashrc
+        
+        # 创建必要的目录
+        mkdir -p $HOME/.wine
+        mkdir -p $TMPDIR
+        
+        echo "Wine 安装完成！"
+        echo "请运行: source ~/.bashrc"
+        echo "然后使用: wine-termux 来启动 Wine"
+        EOF
+        
+        chmod +x wine-package/install-wine.sh
         
         # 打包
         tar -czf wine-${{ env.VERSION }}-x86_64-wow64.tar.gz wine-package/
@@ -205,11 +264,16 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 输出版本信息
+    - name: 输出版本信息和使用说明
       run: |
         echo "✅ Wine 构建完成"
         echo "版本号: $VERSION"
         echo "架构: x86_64 with WOW64"
-        echo "安装路径: /tmp/wine-install"
-        echo "支持运行: 32位和64位Windows应用程序"
+        echo ""
+        echo "使用说明:"
+        echo "1. 下载并解压 wine-$VERSION-x86_64-wow64.tar.gz"
+        echo "2. 运行安装脚本: ./install-wine.sh"
+        echo "3. 重新加载环境: source ~/.bashrc"
+        echo "4. 使用 wine-termux 命令启动 Wine"
+        echo ""
         echo "注意: 构建禁用了 DBus、GStreamer、Vulkan、MPG123、OpenAL、SANE、PCap 和 PC/SC 支持"
