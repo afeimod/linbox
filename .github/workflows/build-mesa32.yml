@@ -15,90 +15,73 @@ jobs:
     - name: 检出源码
       uses: actions/checkout@v4
 
-    - name: 安装依赖和更新 Meson
+    - name: 设置多架构支持
       run: |
-        sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
         sudo dpkg --add-architecture armhf
         sudo apt update
-        sudo apt-get build-dep mesa -y
-        # 安装完整的交叉编译工具链
-        sudo apt-get install -y build-essential
-        sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-        sudo apt-get install -y binutils-arm-linux-gnueabihf
-        # 安装32位ARM基础库
-        sudo apt-get install -y libc6-dev-armhf-cross libstdc++-10-dev-armhf-cross
-        # 安装32位ARM开发库
-        sudo apt-get install -y libdrm-dev:armhf libx11-dev:armhf libxext-dev:armhf \
-                             libxdamage-dev:armhf libxfixes-dev:armhf libxxf86vm-dev:armhf \
-                             libxcb-glx0-dev:armhf libxcb-dri2-0-dev:armhf \
-                             libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
-                             libxshmfence-dev:armhf libelf-dev:armhf libexpat1-dev:armhf \
-                             libwayland-dev:armhf libxrandr-dev:armhf \
-                             ninja-build python3-pip pkg-config
-        # 升级 Meson 到最新版本
-        pip3 install --upgrade meson
+        # 安装基本的32位支持
+        sudo apt-get install -y libc6:armhf libstdc++6:armhf
 
-    - name: 测试交叉编译器
+    - name: 安装 Mesa 构建依赖 (32位)
       run: |
-        # 测试交叉编译器是否正常工作
-        echo 'int main() { return 0; }' > test.c
-        arm-linux-gnueabihf-gcc test.c -o test
-        file test
-        rm test.c test
+        sudo apt-get install -y build-essential
+        # 安装32位开发库
+        sudo apt-get install -y libdrm-dev:armhf \
+                             libx11-dev:armhf \
+                             libxext-dev:armhf \
+                             libxfixes-dev:armhf \
+                             libxxf86vm-dev:armhf \
+                             libxcb1-dev:armhf \
+                             libxcb-dri2-0-dev:armhf \
+                             libxcb-dri3-dev:armhf \
+                             libxcb-present-dev:armhf \
+                             libxcb-sync-dev:armhf \
+                             libxshmfence-dev:armhf \
+                             libelf-dev:armhf \
+                             libexpat1-dev:armhf \
+                             libwayland-dev:armhf \
+                             libwayland-egl-backend-dev:armhf \
+                             meson \
+                             ninja-build \
+                             python3-pip \
+                             pkg-config
+
+    - name: 升级 Meson
+      run: |
+        pip3 install --upgrade meson
 
     - name: 克隆 Mesa
       run: |
         git clone https://gitlab.freedesktop.org/mesa/mesa.git
         cd mesa
-        # 使用稳定版本而不是开发版
-        git checkout mesa-24.2.5
-
-    - name: 创建交叉编译配置
-      run: |
-        cd mesa
-        cat > cross-file.txt << EOF
-            [binaries]
-            c = 'arm-linux-gnueabihf-gcc'
-            cpp = 'arm-linux-gnueabihf-g++'
-            ar = 'arm-linux-gnueabihf-ar'
-            strip = 'arm-linux-gnueabihf-strip'
-            pkg-config = 'pkg-config'
-
-            [built-in options]
-            c_args = ['-march=armv8-a']
-            cpp_args = ['-march=armv8-a']
-
-            [host_machine]
-            system = 'linux'
-            cpu_family = 'arm'
-            cpu = 'cortex-a72'  # 使用更通用的ARM CPU
-            endian = 'little'
-        EOF
+        git checkout mesa-24.2.5  # 使用稳定版本
 
     - name: 构建 Mesa (32位)
       run: |
         cd mesa
+        
+        # 创建目标目录
         sudo mkdir -p /data/data/com.termux/files/usr/glibc/lib
-        sudo chmod 777 -R /data
-
+        sudo chown -R $USER:$USER /data/data/com.termux/files/usr/glibc
+        
         mkdir -p builddir32
         
-        # 设置环境变量
-        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
+        # 设置32位构建环境
+        export CC="gcc"
+        export CXX="g++"
+        export CFLAGS="-march=armv8-a -mfpu=neon -mfloat-abi=hard -marm"
+        export CXXFLAGS="-march=armv8-a -mfpu=neon -mfloat-abi=hard -marm"
+        export LDFLAGS="-Wl,-rpath-link,/usr/lib/arm-linux-gnueabihf"
+        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
-        export CC="arm-linux-gnueabihf-gcc"
-        export CXX="arm-linux-gnueabihf-g++"
-        export AR="arm-linux-gnueabihf-ar"
-        export STRIP="arm-linux-gnueabihf-strip"
         
-        # 首先尝试配置
+        # 使用 Meson 配置
         meson setup builddir32 \
-          --cross-file cross-file.txt \
           --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
           -Db_lto=false \
-          -Dplatforms=x11,wayland \
+          -Dplatforms=x11 \
           -Dglx=dri \
           -Dglx-direct=true \
           -Dopengl=true \
@@ -109,10 +92,13 @@ jobs:
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=zink \
+          -Dgallium-drivers=swrast \
           -Dvulkan-drivers= \
-          -Dgbm=enabled \
-          -Dtools=
+          -Dgbm=disabled \
+          -Dtools= \
+          -Ddri-drivers= \
+          -Dc_args="-march=armv8-a -mfpu=neon -mfloat-abi=hard -marm" \
+          -Dcpp_args="-march=armv8-a -mfpu=neon -mfloat-abi=hard -marm"
 
         ninja -C builddir32
         ninja -C builddir32 install
@@ -121,21 +107,22 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
         # 打包32位库
-        tar -czf termux-glibc-mesa-${VERSION}-armhf.tar.gz /data/data/com.termux/files/usr/glibc/lib
-        mv termux-glibc-mesa-${VERSION}-armhf.tar.gz ..
+        cd /data/data/com.termux/files/usr/glibc
+        tar -czf /home/runner/work/linbox/linbox/mesa/termux-glibc-mesa-${VERSION}-armhf.tar.gz lib/
+        cd /home/runner/work/linbox/linbox/mesa
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
         name: termux-glibc-mesa-${{ env.VERSION }}-armhf
-        path: termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
+        path: mesa/termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Mesa ${{ env.VERSION }} (armhf, Termux glibc)
-        files: termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
+        files: mesa/termux-glibc-mesa-${{ env.VERSION }}-armhf.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
