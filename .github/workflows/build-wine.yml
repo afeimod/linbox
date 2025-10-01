@@ -313,14 +313,14 @@ jobs:
         echo "设置环境变量..."
         cat >> $HOME/.bashrc << 'EOL'
 
-# Wine configuration for Termux
-export WINEPREFIX=$HOME/.wine
-export PATH=$PATH:/data/data/com.termux/files/usr/opt/wine/bin
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/opt/wine/lib
-export TMPDIR=/data/data/com.termux/files/usr/tmp
-export TEMP=/data/data/com.termux/files/usr/tmp
-export TMP=/data/data/com.termux/files/usr/tmp
-EOL
+        # Wine configuration for Termux
+        export WINEPREFIX=$HOME/.wine
+        export PATH=$PATH:/data/data/com.termux/files/usr/opt/wine/bin
+        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/opt/wine/lib
+        export TMPDIR=/data/data/com.termux/files/usr/tmp
+        export TEMP=/data/data/com.termux/files/usr/tmp
+        export TMP=/data/data/com.termux/files/usr/tmp
+        EOL
 
         echo "Wine 安装完成！"
         echo "请运行: source ~/.bashrc"
