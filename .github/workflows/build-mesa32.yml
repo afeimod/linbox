@@ -112,7 +112,7 @@ jobs:
         # 使用 Meson 配置 - 同时启用 softpipe Gallium 驱动和 freedreno Vulkan 驱动
         meson setup builddir32 \
           --cross-file cross-file.txt \
-          -Dlibdir=lib \
+          -Dlibdir=lib32 \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
           -Db_lto=false \
@@ -139,7 +139,7 @@ jobs:
 
         # 打包32位库
         cd /data/data/com.termux/files/usr/glibc
-        tar -czf /home/runner/work/linbox/linbox/mesa/termux-glibc-mesa-${VERSION}-armhf.tar.gz lib/
+        tar -czf /home/runner/work/linbox/linbox/mesa/termux-glibc-mesa-${VERSION}-armhf.tar.gz lib32/
         cd /home/runner/work/linbox/linbox/mesa
 
     - name: 上传构建产物
