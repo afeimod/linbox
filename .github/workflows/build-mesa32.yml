@@ -48,7 +48,7 @@ jobs:
                              ninja-build \
                              python3-pip \
                              pkg-config \
-                             python3-mako  # 添加 Mako 模块
+                             python3-mako
 
     - name: 升级 Meson 并安装 Python 依赖
       run: |
@@ -96,7 +96,7 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用 Meson 配置 - 修正选项以解决冲突
+        # 使用 Meson 配置 - 移除 llvmpipe 驱动，因为它需要 LLVM
         meson setup builddir32 \
           --cross-file cross-file.txt \
           --libdir=lib \
@@ -113,7 +113,7 @@ jobs:
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=softpipe,llvmpipe \
+          -Dgallium-drivers=softpipe \  # 只使用 softpipe，不使用 llvmpipe
           -Dvulkan-drivers= \
           -Dgbm=disabled
 
