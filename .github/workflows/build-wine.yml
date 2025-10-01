@@ -230,8 +230,111 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION"
 
+    - name: 创建 Termux 专用的启动脚本
+      run: |
+        # 创建安装目录结构 - 确保所有目录都存在
+        mkdir -p wine-package/opt/wine
+        mkdir -p wine-package/bin
+        
+        # 复制 Wine 安装文件
+        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        
+        # 创建 Termux 专用的启动脚本
+        cat > wine-package/bin/wine << 'EOF'
+        #!/bin/bash
+        # Termux Wine 启动脚本
+        
+        # 设置 Termux 环境变量
+        export HOME=$HOME
+        export TMPDIR=/data/data/com.termux/files/usr/tmp
+        export TEMP=/data/data/com.termux/files/usr/tmp
+        export TMP=/data/data/com.termux/files/usr/tmp
+        
+        # 确保必要的目录存在
+        mkdir -p $TMPDIR 2>/dev/null
+        mkdir -p $HOME/.wine 2>/dev/null
+        
+        # 设置 WINEPREFIX
+        if [ -z "$WINEPREFIX" ]; then
+          export WINEPREFIX="$HOME/.wine"
+        fi
+        
+        # 设置库路径
+        export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/opt/wine/lib:$LD_LIBRARY_PATH"
+        
+        # 运行 wine
+        exec /data/data/com.termux/files/usr/opt/wine/bin/wine "$@"
+        EOF
+        
+        chmod +x wine-package/bin/wine
+        
+        # 创建 wineserver 启动脚本
+        cat > wine-package/bin/wineserver << 'EOF'
+        #!/bin/bash
+        # Termux WineServer 启动脚本
+        
+        export TMPDIR=/data/data/com.termux/files/usr/tmp
+        export TEMP=/data/data/com.termux/files/usr/tmp
+        export TMP=/data/data/com.termux/files/usr/tmp
+        
+        mkdir -p $TMPDIR 2>/dev/null
+        export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/opt/wine/lib:$LD_LIBRARY_PATH"
+        
+        exec /data/data/com.termux/files/usr/opt/wine/bin/wineserver "$@"
+        EOF
+        
+        chmod +x wine-package/bin/wineserver
+
+    - name: 创建安装脚本
+      run: |
+        cat > wine-package/install-wine.sh << 'EOF'
+        #!/bin/bash
+        echo "正在安装 Wine for Termux..."
+        
+        # 安装目录
+        INSTALL_DIR="/data/data/com.termux/files/usr/opt/wine"
+        
+        # 创建安装目录
+        mkdir -p $INSTALL_DIR
+        mkdir -p /data/data/com.termux/files/usr/tmp
+        mkdir -p $HOME/.wine
+        mkdir -p /data/data/com.termux/files/usr/bin
+        
+        # 复制文件
+        echo "复制 Wine 文件..."
+        cp -r opt/wine/* $INSTALL_DIR/
+        
+        # 复制启动脚本
+        echo "安装启动脚本..."
+        cp bin/wine /data/data/com.termux/files/usr/bin/
+        cp bin/wineserver /data/data/com.termux/files/usr/bin/
+        
+        # 设置环境变量
+        echo "设置环境变量..."
+        cat >> $HOME/.bashrc << 'EOL'
+
+# Wine configuration for Termux
+export WINEPREFIX=$HOME/.wine
+export PATH=$PATH:/data/data/com.termux/files/usr/opt/wine/bin
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/opt/wine/lib
+export TMPDIR=/data/data/com.termux/files/usr/tmp
+export TEMP=/data/data/com.termux/files/usr/tmp
+export TMP=/data/data/com.termux/files/usr/tmp
+EOL
+
+        echo "Wine 安装完成！"
+        echo "请运行: source ~/.bashrc"
+        echo "然后运行: wine wineboot 来初始化 Wine"
+        EOF
+        
+        chmod +x wine-package/install-wine.sh
+
     - name: 创建打包文件
       run: |
+        # 显示打包前的文件结构
+        echo "打包前的文件结构:"
+        find wine-package -type f -name "*.sh" -o -name "wine" -o -name "wineserver" | sort
+        
         # 打包
         tar -czf wine-${{ env.VERSION }}-x86_64-wow64-termux.tar.gz wine-package/
         
