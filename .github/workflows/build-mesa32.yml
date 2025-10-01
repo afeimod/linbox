@@ -61,14 +61,8 @@ jobs:
           libelf-dev:armhf \
           libexpat1-dev:armhf
 
-    - name: 查找并设置 pkg-config 路径
+    - name: 设置 pkg-config 路径
       run: |
-        # 查找 xproto.pc 文件
-        find /usr -name "xproto.pc" 2>/dev/null || echo "xproto.pc not found"
-        # 查找所有 pkgconfig 目录
-        find /usr -name "*.pc" -type f | head -10 | xargs dirname | sort -u
-        
-        # 设置 PKG_CONFIG_PATH 包含所有可能的路径
         echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig" >> $GITHUB_ENV
 
     - name: 升级 Meson
@@ -101,7 +95,7 @@ jobs:
         echo "cpu = 'armv7hl'" >> cross-file.txt
         echo "endian = 'little'" >> cross-file.txt
 
-    - name: 构建 Mesa (32位) - 简化配置
+    - name: 构建 Mesa (32位) - 仅使用 softpipe
       run: |
         cd mesa
         
@@ -115,7 +109,7 @@ jobs:
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用简化的 Meson 配置 - 只构建最基本的功能
+        # 使用简化的 Meson 配置 - 明确禁用所有 LLVM 相关功能
         meson setup builddir32 \
           --cross-file cross-file.txt \
           -Dlibdir=lib \
@@ -132,7 +126,15 @@ jobs:
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=swrast \
+          -Dgallium-drivers=softpipe \
+          -Dgallium-extra-hud=false \
+          -Dgallium-nine=false \
+          -Dgallium-omx=disabled \
+          -Dgallium-opencl=disabled \
+          -Dgallium-va=disabled \
+          -Dgallium-vdpau=disabled \
+          -Dgallium-xa=disabled \
+          -Dgallium-xvmc=disabled \
           -Dvulkan-drivers= \
           -Dgbm=disabled \
           -Dosmesa=true
