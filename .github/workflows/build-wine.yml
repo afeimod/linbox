@@ -401,7 +401,7 @@ jobs:
             export TEMP="$TMPDIR"
             export TMP="$TMPDIR"
 # ==========================================
-        EOL
+            EOL
         fi
         
         # 创建 wine 配置目录
