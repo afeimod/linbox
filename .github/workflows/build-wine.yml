@@ -303,24 +303,6 @@ jobs:
         cp -r opt/wine/* $INSTALL_DIR/
         cp -r bin/* /data/data/com.termux/files/usr/bin/
         
-        # 设置环境变量
-        echo "设置环境变量..."
-        cat >> $HOME/.bashrc << 'EOL'
-
-# Wine configuration for Termux
-export WINEPREFIX=$HOME/.wine
-export PATH=$PATH:/data/data/com.termux/files/usr/opt/wine/bin
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/data/data/com.termux/files/usr/opt/wine/lib
-export TMPDIR=/data/data/com.termux/files/usr/tmp
-export TEMP=/data/data/com.termux/files/usr/tmp
-export TMP=/data/data/com.termux/files/usr/tmp
-EOL
-
-        echo "Wine 安装完成！"
-        echo "请运行: source ~/.bashrc"
-        echo "然后运行: wine wineboot 来初始化 Wine"
-        EOF
-        
         chmod +x wine-package/install-wine.sh
 
     - name: 创建打包文件
