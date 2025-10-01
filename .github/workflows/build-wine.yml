@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04  # 改为 x86_64 运行器
+    runs-on: ubuntu-22.04  # 改为 x86_64 运行器
 
     steps:
     - name: 检出源码
