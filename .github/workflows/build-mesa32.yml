@@ -100,7 +100,7 @@ jobs:
         cd mesa
         
         # 创建目标目录
-        sudo mkdir -p /data/data/com.termux/files/usr/glibc/lib
+        sudo mkdir -p /data/data/com.termux/files/usr/glibc/lib32
         sudo chown -R $USER:$USER /data/data/com.termux/files/usr/glibc
         
         mkdir -p builddir32
@@ -139,7 +139,7 @@ jobs:
 
         # 打包32位库
         cd /data/data/com.termux/files/usr/glibc
-        tar -czf /home/runner/work/linbox/linbox/mesa/termux-glibc-mesa-${VERSION}-armhf.tar.gz lib32/
+        tar -czf /home/runner/work/linbox/linbox/mesa/termux-glibc-mesa-${VERSION}-armhf.tar.gz /data/data/com.termux/files/usr/glibc/lib32/
         cd /home/runner/work/linbox/linbox/mesa
 
     - name: 上传构建产物
