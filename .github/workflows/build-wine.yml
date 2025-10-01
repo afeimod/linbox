@@ -388,9 +388,6 @@ jobs:
         if ! grep -q "WINE for Termux" "$HOME/.bashrc" 2>/dev/null; then
             cat >> "$HOME/.bashrc" << 'EOL'
 
-# ==========================================
-# WINE for Termux 配置
-# ==========================================
             export TERMUX_PREFIX="/data/data/com.termux/files/usr"
             export WINEPREFIX="$HOME/.wine"
             export WINEARCH="win64"
@@ -400,7 +397,7 @@ jobs:
             export TMPDIR="$TERMUX_PREFIX/tmp"
             export TEMP="$TMPDIR"
             export TMP="$TMPDIR"
-# ==========================================
+
             EOL
         fi
         
