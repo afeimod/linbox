@@ -15,16 +15,19 @@ jobs:
     - name: 检出源码
       uses: actions/checkout@v4
 
-    - name: 设置多架构支持
+    - name: 安装完整的 ARM 工具链
       run: |
         sudo dpkg --add-architecture armhf
         sudo apt update
-        # 安装基本的32位支持
-        sudo apt-get install -y libc6:armhf libstdc++6:armhf
+        # 安装完整的 ARM 工具链
+        sudo apt-get install -y build-essential
+        sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+        sudo apt-get install -y binutils-arm-linux-gnueabihf
+        # 安装32位ARM基础库
+        sudo apt-get install -y libc6-dev-armhf-cross
 
     - name: 安装 Mesa 构建依赖 (32位)
       run: |
-        sudo apt-get install -y build-essential
         # 安装32位开发库
         sudo apt-get install -y libdrm-dev:armhf \
                              libx11-dev:armhf \
@@ -56,6 +59,26 @@ jobs:
         cd mesa
         git checkout mesa-24.2.5  # 使用稳定版本
 
+    - name: 创建交叉编译文件
+      run: |
+        cd mesa
+        # 使用 echo 命令创建交叉编译文件
+        echo "[binaries]" > cross-file.txt
+        echo "c = 'arm-linux-gnueabihf-gcc'" >> cross-file.txt
+        echo "cpp = 'arm-linux-gnueabihf-g++'" >> cross-file.txt
+        echo "ar = 'arm-linux-gnueabihf-ar'" >> cross-file.txt
+        echo "strip = 'arm-linux-gnueabihf-strip'" >> cross-file.txt
+        echo "pkg-config = 'pkg-config'" >> cross-file.txt
+        echo "" >> cross-file.txt
+        echo "[properties]" >> cross-file.txt
+        echo "needs_exe_wrapper = true" >> cross-file.txt
+        echo "" >> cross-file.txt
+        echo "[host_machine]" >> cross-file.txt
+        echo "system = 'linux'" >> cross-file.txt
+        echo "cpu_family = 'arm'" >> cross-file.txt
+        echo "cpu = 'armv7hl'" >> cross-file.txt
+        echo "endian = 'little'" >> cross-file.txt
+
     - name: 构建 Mesa (32位)
       run: |
         cd mesa
@@ -66,17 +89,13 @@ jobs:
         
         mkdir -p builddir32
         
-        # 设置32位构建环境
-        export CC="gcc"
-        export CXX="g++"
-        export CFLAGS="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard"
-        export CXXFLAGS="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard"
-        export LDFLAGS="-m32 -Wl,-rpath-link,/usr/lib/arm-linux-gnueabihf"
+        # 设置环境变量
         export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         
-        # 使用 Meson 配置 - 修正选项
+        # 使用 Meson 配置 - 使用交叉编译
         meson setup builddir32 \
+          --cross-file cross-file.txt \
           --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
@@ -93,9 +112,7 @@ jobs:
           -Dshader-cache=enabled \
           -Dgallium-drivers=swrast \
           -Dvulkan-drivers= \
-          -Dgbm=disabled \
-          -Dc_args="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard" \
-          -Dcpp_args="-m32 -march=armv8-a -mfpu=neon -mfloat-abi=hard"
+          -Dgbm=disabled
 
         ninja -C builddir32
         ninja -C builddir32 install
