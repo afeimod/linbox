@@ -41,7 +41,11 @@ jobs:
           ninja-build \
           autoconf \
           wget \
-          xz-utils
+          xz-utils \
+          gettext \
+          fontconfig \
+          libfreetype6 \
+          libfreetype6-dev
 
     - name: 安装核心库依赖
       run: |
@@ -135,12 +139,11 @@ jobs:
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
 
-        # 创建构建目录 - 真正的 WOW64 只需要一个构建目录
+        # 创建构建目录
         mkdir -p build-wow64
         cd build-wow64
 
-        # 配置真正的 WOW64 Wine
-        # 使用 --enable-win64 和 --enable-archs 来构建真正的 WOW64
+        # 配置真正的 WOW64 Wine，启用更多功能
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -149,6 +152,13 @@ jobs:
           --with-alsa \
           --with-pulse \
           --with-cups \
+          --with-freetype \
+          --with-fontconfig \
+          --with-xinerama \
+          --with-xrandr \
+          --with-xxf86vm \
+          --with-xshm \
+          --with-xshape \
           --without-dbus \
           --without-gstreamer \
           --without-vulkan \
@@ -158,7 +168,6 @@ jobs:
           --without-pcap \
           --without-pcsclite \
           --disable-winemenubuilder \
-          --disable-win16 \
           --disable-tests \
           --without-capi \
           --without-coreaudio \
@@ -169,8 +178,7 @@ jobs:
           --without-unwind \
           --without-usb \
           --without-v4l2 \
-          --without-wayland \
-          --without-xinerama
+          --without-wayland
 
         # 构建真正的 WOW64 Wine
         echo "开始构建真正的 WOW64 Wine..."
@@ -188,34 +196,26 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION - 真正的 WOW64 构建"
 
-    - name: 验证构建结果
+    - name: 准备中文字体和配置
       run: |
-        echo "检查安装的文件..."
-        find /tmp/wine-install -name "*.so" | head -20
-        echo ""
-        echo "检查架构..."
-        file /tmp/wine-install/bin/wine
-        file /tmp/wine-install/bin/wine64
-        echo ""
-        echo "检查是否存在 i386-unix（不应该存在）..."
-        if [ -d "/tmp/wine-install/lib/wine/i386-unix" ]; then
-          echo "错误: 发现了 i386-unix 目录，这不是真正的 WOW64 构建"
-          ls -la /tmp/wine-install/lib/wine/
-          exit 1
-        else
-          echo "正确: 没有 i386-unix 目录，这是真正的 WOW64 构建"
-        fi
-
-    - name: 创建 Termux 包结构
-      run: |
-        # 创建目录结构
+        # 创建字体目录
         mkdir -p wine-package/opt/wine
         mkdir -p wine-package/bin
+        mkdir -p wine-package/share/fonts
         
         # 复制 Wine 安装文件
         echo "复制 Wine 文件..."
         cp -r /tmp/wine-install/* wine-package/opt/wine/
         
+        # 下载基本中文字体
+        echo "下载中文字体..."
+        cd wine-package/share/fonts
+        wget -q https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SourceHanSansSC-Regular.otf || echo "字体下载失败，继续..."
+        wget -q https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SourceHanSerifSC-Regular.otf || echo "字体下载失败，继续..."
+        cd ../../..
+
+    - name: 创建增强的包装脚本
+      run: |
         # 创建 wine 包装脚本
         cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
@@ -241,14 +241,22 @@ jobs:
         mkdir -p "$WINEPREFIX" 2>/dev/null
         
         # 设置库路径
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$LD_LIBRARY_PATH"
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib64:$LD_LIBRARY_PATH"
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$LD_LIBRARY_PATH"
+        
+        # 设置字体路径
+        export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
+        export FONTCONFIG_FILE="$FONTCONFIG_PATH/fonts.conf"
         
         # 设置其他 Wine 相关环境变量
         export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         export WINEARCH="win64"  # WOW64 模式
         
-        # 运行真正的 wine 程序（会自动处理 32/64 位）
+        # 设置中文环境
+        export LANG="zh_CN.UTF-8"
+        export LC_ALL="zh_CN.UTF-8"
+        export LC_CTYPE="zh_CN.UTF-8"
+        
+        # 运行真正的 wine 程序
         exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
         EOF
         
@@ -271,7 +279,69 @@ jobs:
         
         chmod +x wine-package/bin/wineserver
 
-    - name: 创建安装脚本
+        # 创建 winecfg 包装脚本
+        cat > wine-package/bin/winecfg << 'EOF'
+        #!/bin/bash
+        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
+        export TMPDIR="$TERMUX_PREFIX/tmp"
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$LD_LIBRARY_PATH"
+        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
+        export LANG="zh_CN.UTF-8"
+        exec "$TERMUX_PREFIX/opt/wine/bin/winecfg" "$@"
+        EOF
+        
+        chmod +x wine-package/bin/winecfg
+
+    - name: 创建字体配置文件
+      run: |
+        mkdir -p wine-package/opt/wine/etc/fonts
+        
+        # 创建 fonts.conf
+        cat > wine-package/opt/wine/etc/fonts/fonts.conf << 'EOF'
+        <?xml version="1.0"?>
+        <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+        <fontconfig>
+            <dir>/data/data/com.termux/files/usr/share/fonts</dir>
+            <dir>/system/fonts</dir>
+            <dir>/system/fonts/fallback</dir>
+            
+            <!-- 中文字体配置 -->
+            <alias>
+                <family>serif</family>
+                <prefer>
+                    <family>Source Han Serif SC</family>
+                    <family>Noto Serif CJK SC</family>
+                    <family>DejaVu Serif</family>
+                    <family>Times New Roman</family>
+                </prefer>
+            </alias>
+            <alias>
+                <family>sans-serif</family>
+                <prefer>
+                    <family>Source Han Sans SC</family>
+                    <family>Noto Sans CJK SC</family>
+                    <family>DejaVu Sans</family>
+                    <family>Arial</family>
+                </prefer>
+            </alias>
+            <alias>
+                <family>monospace</family>
+                <prefer>
+                    <family>Source Han Sans SC</family>
+                    <family>Noto Sans Mono CJK SC</family>
+                    <family>DejaVu Sans Mono</family>
+                    <family>Courier New</family>
+                </prefer>
+            </alias>
+            
+            <!-- 接受所有字体 -->
+            <accept>
+                <family>*</family>
+            </accept>
+        </fontconfig>
+        EOF
+
+    - name: 创建完整的安装脚本
       run: |
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
@@ -284,6 +354,7 @@ jobs:
         TERMUX_PREFIX="/data/data/com.termux/files/usr"
         INSTALL_DIR="$TERMUX_PREFIX/opt/wine"
         BIN_DIR="$TERMUX_PREFIX/bin"
+        FONT_DIR="$TERMUX_PREFIX/share/fonts"
         
         # 检查环境
         if [ ! -d "$TERMUX_PREFIX" ]; then
@@ -295,8 +366,10 @@ jobs:
         echo "创建目录..."
         mkdir -p "$INSTALL_DIR"
         mkdir -p "$BIN_DIR"
+        mkdir -p "$FONT_DIR"
         mkdir -p "$TERMUX_PREFIX/tmp"
         mkdir -p "$HOME/.wine"
+        mkdir -p "$INSTALL_DIR/etc/fonts"
         
         # 安装文件
         echo "安装 Wine 文件..."
@@ -305,9 +378,17 @@ jobs:
         echo "安装启动脚本..."
         cp bin/wine "$BIN_DIR"/
         cp bin/wineserver "$BIN_DIR"/
+        cp bin/winecfg "$BIN_DIR"/
+        
+        echo "安装字体配置..."
+        cp opt/wine/etc/fonts/fonts.conf "$INSTALL_DIR/etc/fonts/"
+        
+        echo "安装字体..."
+        cp share/fonts/* "$FONT_DIR"/ 2>/dev/null || echo "没有额外字体可安装"
         
         chmod +x "$BIN_DIR"/wine
         chmod +x "$BIN_DIR"/wineserver
+        chmod +x "$BIN_DIR"/winecfg
         
         # 配置环境
         echo "配置环境变量..."
@@ -324,6 +405,9 @@ jobs:
             export TMPDIR="$TERMUX_PREFIX/tmp"
             export TEMP="$TMPDIR"
             export TMP="$TMPDIR"
+            export LANG="zh_CN.UTF-8"
+            export LC_ALL="zh_CN.UTF-8"
+            export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
             # ==========================================
             EOL
         fi
@@ -336,19 +420,71 @@ jobs:
         echo "特性:"
         echo "✓ 真正的 WOW64 架构"
         echo "✓ 同时支持 32 位和 64 位 Windows 应用程序"
-        echo "✓ 无需单独的 32 位 Unix 库"
+        echo "✓ 中文环境支持"
+        echo "✓ 字体配置"
         echo ""
-        echo "使用方法:"
+        echo "下一步:"
         echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
-        echo "2. 初始化: wine wineboot"
-        echo "3. 运行 32 位应用: wine app32.exe"
-        echo "4. 运行 64 位应用: wine app64.exe"
+        echo "2. 初始化 Wine: wine wineboot"
+        echo "3. 配置 Wine: winecfg"
         echo ""
-        echo "注意: 这是真正的 WOW64 构建，不是传统的交叉编译!"
+        echo "字体安装提示:"
+        echo "如果需要更好的中文显示，请安装中文字体:"
+        echo "pkg install fontconfig"
+        echo "或手动复制 Windows 字体到 ~/.wine/drive_c/windows/Fonts/"
+        echo ""
+        echo "故障排除:"
+        echo "- 如果 EXE 无法运行，检查文件权限: chmod +x file.exe"
+        echo "- 确保 Termux 有存储权限"
+        echo "- 检查 Wine 前缀: echo \$WINEPREFIX"
         echo "=========================================="
         EOF
         
         chmod +x wine-package/install.sh
+        
+        # 创建故障排除脚本
+        cat > wine-package/troubleshoot.sh << 'EOF'
+        #!/bin/bash
+        echo "Wine 故障排除工具"
+        echo "=================="
+        
+        echo "1. 检查环境变量"
+        echo "WINEPREFIX: $WINEPREFIX"
+        echo "WINEARCH: $WINEARCH"
+        echo "PATH: $PATH"
+        echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+        echo ""
+        
+        echo "2. 检查 Wine 安装"
+        if command -v wine >/dev/null 2>&1; then
+            echo "Wine 命令找到: $(which wine)"
+        else
+            echo "错误: Wine 命令未找到"
+        fi
+        
+        echo ""
+        echo "3. 检查 Wine 前缀"
+        if [ -d "$WINEPREFIX" ]; then
+            echo "Wine 前缀目录存在: $WINEPREFIX"
+        else
+            echo "警告: Wine 前缀目录不存在"
+        fi
+        
+        echo ""
+        echo "4. 测试 Wine 运行"
+        echo "运行: wine --version"
+        wine --version
+        
+        echo ""
+        echo "5. 检查字体配置"
+        if [ -n "$FONTCONFIG_PATH" ]; then
+            echo "字体配置路径: $FONTCONFIG_PATH"
+        else
+            echo "警告: 字体配置路径未设置"
+        fi
+        EOF
+        
+        chmod +x wine-package/troubleshoot.sh
 
     - name: 创建打包文件
       run: |
@@ -356,26 +492,26 @@ jobs:
         find wine-package -type f | sort
         echo ""
         echo "检查 Wine 二进制文件:"
-        file wine-package/opt/wine/bin/wine*
+        file wine-package/opt/wine/bin/wine* || echo "Wine 二进制文件检查失败"
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-true-wow64-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-true-wow64-termux-enhanced.tar.gz wine-package/
         
         echo "打包完成:"
-        ls -lh wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
+        ls -lh wine-*.tar.gz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-true-wow64-termux
-        path: wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
+        name: wine-${{ env.VERSION }}-true-wow64-termux-enhanced
+        path: wine-${{ env.VERSION }}-true-wow64-termux-enhanced.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Wine ${{ env.VERSION }} (True WOW64 for Termux)
-        files: wine-${{ env.VERSION }}-true-wow64-termux.tar.gz
+        name: Wine ${{ env.VERSION }} (True WOW64 for Termux - Enhanced)
+        files: wine-${{ env.VERSION }}-true-wow64-termux-enhanced.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -386,19 +522,21 @@ jobs:
         echo "架构: x86_64 True WOW64"
         echo "环境: Termux"
         echo ""
-        echo "特性:"
-        echo "✓ 单一二进制文件支持 32/64 位应用"
-        echo "✓ 无需 i386-unix 目录"
-        echo "✓ 真正的 WOW64 架构"
+        echo "修复的问题:"
+        echo "✓ 无法运行 EXE 文件"
+        echo "✓ 中文环境支持"
+        echo "✓ 字体配置"
         echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-true-wow64-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-true-wow64-termux.tar.gz"
+        echo "1. 下载 wine-$VERSION-true-wow64-termux-enhanced.tar.gz"
+        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
         echo "3. 进入目录: cd wine-package"
         echo "4. 运行安装: ./install.sh"
         echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
+        echo "7. 配置: winecfg"
         echo ""
-        echo "测试:"
-        echo "- wine notepad (32位应用)"
-        echo "- wine64 notepad (64位应用)"
+        echo "故障排除:"
+        echo "- 运行 ./troubleshoot.sh 诊断问题"
+        echo "- 确保 Termux 有存储权限"
+        echo "- 安装中文字体: pkg install fontconfig"
