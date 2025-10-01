@@ -126,7 +126,7 @@ jobs:
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dgallium-drivers=softpipe \
+          -Dgallium-drivers=zink,freedreno \
           -Dvulkan-drivers=freedreno \
           -Dgbm=disabled \
           -Dosmesa=true
