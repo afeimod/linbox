@@ -15,7 +15,7 @@ jobs:
     - name: 检出源码
       uses: actions/checkout@v4
 
-    - name: 安装依赖
+    - name: 安装依赖和更新 Meson
       run: |
         sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
         sudo dpkg --add-architecture armhf
@@ -28,7 +28,9 @@ jobs:
                              libxcb-dri2-0-dev:armhf libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
                              libxshmfence-dev:armhf libelf-dev:armhf libexpat1-dev:armhf \
                              libwayland-dev:armhf libxrandr-dev:armhf libvdpau-dev:armhf \
-                             libva-dev:armhf meson ninja-build -y
+                             libva-dev:armhf ninja-build python3-pip -y
+        # 升级 Meson 到最新版本
+        pip3 install --upgrade meson
 
     - name: 克隆 Mesa
       run: |
@@ -46,9 +48,9 @@ jobs:
                 cpp = 'arm-linux-gnueabihf-g++'
                 ar = 'arm-linux-gnueabihf-ar'
                 strip = 'arm-linux-gnueabihf-strip'
-                pkgconfig = 'pkg-config'
+                pkg-config = 'pkg-config'
 
-                [properties]
+                [built-in options]
                 c_args = ['-march=armv8-a']
                 cpp_args = ['-march=armv8-a']
                 c_link_args = []
@@ -80,7 +82,6 @@ jobs:
           --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
-          -Doptimization=3 \
           -Db_lto=false \
           -Dplatforms=x11 \
           -Degl-native-platform=x11 \
