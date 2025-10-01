@@ -71,40 +71,55 @@ jobs:
 
     - name: 安装32位核心依赖
       run: |
+        # 先更新包列表
+        sudo apt-get update
+        
+        # 安装32位库
         sudo apt-get install -y \
           libx11-dev:i386 \
           libxext-dev:i386 \
+          libxi-dev:i386 \
           libxrandr-dev:i386 \
           libxcursor-dev:i386 \
+          libxcomposite-dev:i386 \
+          libxdamage-dev:i386 \
           libxfixes-dev:i386 \
+          libxxf86vm-dev:i386 \
           libxrender-dev:i386 \
+          libxinerama-dev:i386 \
           libgl-dev:i386 \
           libglu-dev:i386 \
+          libosmesa6-dev:i386 \
           libfreetype6-dev:i386 \
           libfontconfig1-dev:i386 \
+          libdbus-1-dev:i386 \
           libasound2-dev:i386 \
           libpulse-dev:i386 \
+          libudev-dev:i386 \
           libcups2-dev:i386 \
           libjpeg-dev:i386 \
           libpng-dev:i386 \
+          libtiff-dev:i386 \
           libxml2-dev:i386
 
-    - name: 安装可选依赖（跳过有问题的包）
+    - name: 安装其他32位依赖
       run: |
-        # 安装可用的可选依赖
+        # 尝试安装其他32位库，但不强制要求
         sudo apt-get install -y \
-          libvulkan-dev \
-          libgcrypt20-dev \
-          libmpg123-dev \
-          libopenal-dev \
-          libv4l-dev \
-          libgphoto2-dev \
-          liblcms2-dev \
-          libldap2-dev \
-          libxslt1-dev \
-          libgnutls28-dev \
-          libsane-dev \
-          libpcsclite-dev || echo "某些可选包安装失败，继续构建..."
+          libpcap-dev:i386 \
+          libssl-dev:i386 \
+          libvulkan-dev:i386 \
+          libgcrypt20-dev:i386 \
+          libmpg123-dev:i386 \
+          libopenal-dev:i386 \
+          libv4l-dev:i386 \
+          libgphoto2-dev:i386 \
+          liblcms2-dev:i386 \
+          libldap2-dev:i386 \
+          libxslt1-dev:i386 \
+          libgnutls28-dev:i386 \
+          libsane-dev:i386 \
+          libpcsclite-dev:i386 || echo "某些32位包安装失败，继续构建..."
 
     - name: 克隆 Wine
       run: |
@@ -135,7 +150,8 @@ jobs:
           --without-gstreamer \
           --without-vulkan \
           --without-mpg123 \
-          --without-openal
+          --without-openal \
+          --without-sane
 
         # 构建64位 Wine
         make -j$(nproc)
@@ -148,18 +164,22 @@ jobs:
         cd build32
 
         # 配置32位 Wine，链接到64位构建
+        # 禁用更多可能有问题的功能
         ../configure \
           --with-wine64=../build64 \
           --prefix=/opt/wine \
           --with-x \
           --with-alsa \
           --with-pulse \
-          --with-dbus \
           --with-cups \
+          --without-dbus \
           --without-gstreamer \
           --without-vulkan \
           --without-mpg123 \
-          --without-openal
+          --without-openal \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite
 
         # 构建32位 Wine
         make -j$(nproc)
@@ -201,4 +221,4 @@ jobs:
         echo "架构: x86_64 with WOW64"
         echo "安装路径: /opt/wine"
         echo "支持运行: 32位和64位Windows应用程序"
-        echo "注意: 构建时禁用了 GStreamer、Vulkan、MPG123 和 OpenAL 支持"
+        echo "注意: 32位构建禁用了 DBus、GStreamer、Vulkan、MPG123、OpenAL、SANE、PCap 和 PC/SC 支持"
