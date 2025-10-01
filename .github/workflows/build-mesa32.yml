@@ -57,23 +57,23 @@ jobs:
       run: |
         cd mesa
         cat > cross-file.txt << EOF
-[binaries]
-c = 'arm-linux-gnueabihf-gcc'
-cpp = 'arm-linux-gnueabihf-g++'
-ar = 'arm-linux-gnueabihf-ar'
-strip = 'arm-linux-gnueabihf-strip'
-pkg-config = 'pkg-config'
+            [binaries]
+            c = 'arm-linux-gnueabihf-gcc'
+            cpp = 'arm-linux-gnueabihf-g++'
+            ar = 'arm-linux-gnueabihf-ar'
+            strip = 'arm-linux-gnueabihf-strip'
+            pkg-config = 'pkg-config'
 
-[built-in options]
-c_args = ['-march=armv8-a']
-cpp_args = ['-march=armv8-a']
+            [built-in options]
+            c_args = ['-march=armv8-a']
+            cpp_args = ['-march=armv8-a']
 
-[host_machine]
-system = 'linux'
-cpu_family = 'arm'
-cpu = 'cortex-a72'  # 使用更通用的ARM CPU
-endian = 'little'
-EOF
+            [host_machine]
+            system = 'linux'
+            cpu_family = 'arm'
+            cpu = 'cortex-a72'  # 使用更通用的ARM CPU
+            endian = 'little'
+        EOF
 
     - name: 构建 Mesa (32位)
       run: |
