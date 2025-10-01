@@ -21,47 +21,59 @@ jobs:
         sudo dpkg --add-architecture armhf
         sudo apt update
         sudo apt-get build-dep mesa -y
-        # 安装32位ARM库和工具链
-        sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
-        sudo apt-get install libdrm-dev:armhf libx11-dev:armhf libxext-dev:armhf libxdamage-dev:armhf \
-                             libxfixes-dev:armhf libxxf86vm-dev:armhf libxcb-glx0-dev:armhf \
-                             libxcb-dri2-0-dev:armhf libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
+        # 安装完整的交叉编译工具链
+        sudo apt-get install -y build-essential
+        sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+        sudo apt-get install -y binutils-arm-linux-gnueabihf
+        # 安装32位ARM基础库
+        sudo apt-get install -y libc6-dev-armhf-cross libstdc++-10-dev-armhf-cross
+        # 安装32位ARM开发库
+        sudo apt-get install -y libdrm-dev:armhf libx11-dev:armhf libxext-dev:armhf \
+                             libxdamage-dev:armhf libxfixes-dev:armhf libxxf86vm-dev:armhf \
+                             libxcb-glx0-dev:armhf libxcb-dri2-0-dev:armhf \
+                             libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
                              libxshmfence-dev:armhf libelf-dev:armhf libexpat1-dev:armhf \
-                             libwayland-dev:armhf libxrandr-dev:armhf libvdpau-dev:armhf \
-                             libva-dev:armhf ninja-build python3-pip -y
+                             libwayland-dev:armhf libxrandr-dev:armhf \
+                             ninja-build python3-pip pkg-config
         # 升级 Meson 到最新版本
         pip3 install --upgrade meson
+
+    - name: 测试交叉编译器
+      run: |
+        # 测试交叉编译器是否正常工作
+        echo 'int main() { return 0; }' > test.c
+        arm-linux-gnueabihf-gcc test.c -o test
+        file test
+        rm test.c test
 
     - name: 克隆 Mesa
       run: |
         git clone https://gitlab.freedesktop.org/mesa/mesa.git
         cd mesa
-        # 如果需要固定版本，可以取消下面注释
-        # git checkout mesa-24.2.5
+        # 使用稳定版本而不是开发版
+        git checkout mesa-24.2.5
 
     - name: 创建交叉编译配置
       run: |
         cd mesa
         cat > cross-file.txt << EOF
-                [binaries]
-                c = 'arm-linux-gnueabihf-gcc'
-                cpp = 'arm-linux-gnueabihf-g++'
-                ar = 'arm-linux-gnueabihf-ar'
-                strip = 'arm-linux-gnueabihf-strip'
-                pkg-config = 'pkg-config'
+[binaries]
+c = 'arm-linux-gnueabihf-gcc'
+cpp = 'arm-linux-gnueabihf-g++'
+ar = 'arm-linux-gnueabihf-ar'
+strip = 'arm-linux-gnueabihf-strip'
+pkg-config = 'pkg-config'
 
-                [built-in options]
-                c_args = ['-march=armv8-a']
-                cpp_args = ['-march=armv8-a']
-                c_link_args = []
-                cpp_link_args = []
+[built-in options]
+c_args = ['-march=armv8-a']
+cpp_args = ['-march=armv8-a']
 
-                [host_machine]
-                system = 'linux'
-                cpu_family = 'arm'
-                cpu = 'armv7hl'
-                endian = 'little'
-        EOF
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'cortex-a72'  # 使用更通用的ARM CPU
+endian = 'little'
+EOF
 
     - name: 构建 Mesa (32位)
       run: |
@@ -72,37 +84,35 @@ jobs:
         mkdir -p builddir32
         
         # 设置环境变量
-        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:$PKG_CONFIG_PATH"
+        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
         export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig"
         export CC="arm-linux-gnueabihf-gcc"
         export CXX="arm-linux-gnueabihf-g++"
+        export AR="arm-linux-gnueabihf-ar"
+        export STRIP="arm-linux-gnueabihf-strip"
         
+        # 首先尝试配置
         meson setup builddir32 \
           --cross-file cross-file.txt \
           --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
           -Db_lto=false \
-          -Dplatforms=x11 \
-          -Degl-native-platform=x11 \
+          -Dplatforms=x11,wayland \
           -Dglx=dri \
           -Dglx-direct=true \
           -Dopengl=true \
           -Dgles1=enabled \
           -Dgles2=enabled \
-          -Dglvnd=false \
+          -Dglvnd=disabled \
           -Degl=enabled \
           -Dllvm=disabled \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
-          -Dxlib-lease=enabled \
-          -Dvulkan-beta=true \
-          -Dgallium-drivers=zink,freedreno \
-          -Dvulkan-drivers=freedreno \
-          -Dfreedreno-kmds=msm,kgsl \
-          -Dvideo-codecs=all \
+          -Dgallium-drivers=zink \
+          -Dvulkan-drivers= \
           -Dgbm=enabled \
-          -Dtools=drm-shim,freedreno
+          -Dtools=
 
         ninja -C builddir32
         ninja -C builddir32 install
