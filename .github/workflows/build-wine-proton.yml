@@ -153,8 +153,6 @@ jobs:
           --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
-          --with-mpg123 \
-          --with-openal \
           --without-dbus \
           --without-sane \
           --without-pcap \
