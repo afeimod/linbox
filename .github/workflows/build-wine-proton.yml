@@ -76,6 +76,11 @@ jobs:
           libmpg123-dev \
           libopenal-dev
 
+    - name: 检查工作目录
+      run: |
+        echo "当前工作目录: $(pwd)"
+        ls -la
+
     - name: 构建 Proton WOW64 版本
       run: |
         set -e
@@ -148,15 +153,33 @@ jobs:
         COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
         echo "VERSION_PROTON=${VERSION_PROTON}-${COMMIT_HASH}" >> $GITHUB_ENV
         
-        # 打包
-        tar -czf wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz -C /tmp/wine-install-proton .
+        # 打包 - 确保在正确的工作目录
+        cd $GITHUB_WORKSPACE
+        mkdir -p build-output
+        tar -czf build-output/wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz -C /tmp/wine-install-proton .
         
         echo "Proton WOW64 构建完成: wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz"
 
+    - name: 检查构建输出
+      run: |
+        echo "检查构建输出目录:"
+        ls -la build-output/
+        echo "当前工作目录内容:"
+        ls -la
+
     - name: 为 Termux 准备安装包
       run: |
+        # 切换到构建输出目录
+        cd build-output
+        
         # 使用 Proton WOW64 作为 Termux 包的基础
         PROTON_FILE=$(ls wine-proton-wow64-*.tar.gz | head -1)
+        if [ -z "$PROTON_FILE" ]; then
+          echo "错误: 找不到 Proton 构建文件!"
+          ls -la
+          exit 1
+        fi
+        
         echo "使用构建文件: $PROTON_FILE"
         
         # 解压构建文件到临时目录
@@ -234,6 +257,9 @@ jobs:
 
     - name: 创建安装脚本和配置
       run: |
+        # 切换到构建输出目录
+        cd build-output
+        
         # 创建安装脚本
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
@@ -347,6 +373,9 @@ jobs:
 
     - name: 创建打包文件
       run: |
+        # 切换到构建输出目录
+        cd build-output
+        
         # 获取版本信息
         PROTON_FILE=$(ls wine-proton-wow64-*.tar.gz | head -1)
         PROTON_VERSION=$(echo "$PROTON_FILE" | sed 's/wine-proton-wow64-//' | sed 's/.tar.gz//')
@@ -364,7 +393,7 @@ jobs:
       with:
         name: wine-proton-wow64-builds
         path: |
-          wine-*.tar.gz
+          build-output/wine-*.tar.gz
         retention-days: 7
 
     - name: 发布到 GitHub Release
@@ -373,7 +402,7 @@ jobs:
         tag_name: proton-wow64-$(date +%Y%m%d)
         name: Wine Proton WOW64 Builds
         files: |
-          wine-*.tar.gz
+          build-output/wine-*.tar.gz
         draft: false
         prerelease: false
       env:
