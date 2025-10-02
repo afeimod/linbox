@@ -63,7 +63,11 @@ jobs:
           vulkan-tools \
           libvulkan1 \
           mesa-vulkan-drivers \
-          mingw-w64
+          mingw-w64 \
+          gettext \
+          libgettextpo-dev \
+          locales \
+          language-pack-zh-hans
 
     - name: 安装多媒体和音频依赖
       run: |
@@ -76,6 +80,13 @@ jobs:
           libmpg123-dev \
           libopenal-dev
 
+    - name: 设置中文语言环境
+      run: |
+        sudo locale-gen zh_CN.UTF-8
+        sudo update-locale LANG=zh_CN.UTF-8
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+
     - name: 检查工作目录
       run: |
         echo "当前工作目录: $(pwd)"
@@ -85,7 +96,12 @@ jobs:
       run: |
         set -e
         
-        echo "开始构建 Proton WOW64 版本（启用 GStreamer、MPG123、OpenAL）..."
+        echo "开始构建 Proton WOW64 版本（启用完整中文支持）..."
+        
+        # 设置中文构建环境
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+        export LANGUAGE=zh_CN:zh:en_US:en
         
         # 清理并创建构建目录
         rm -rf $BUILD_DIR/proton
@@ -108,7 +124,7 @@ jobs:
         echo "生成 configure 脚本..."
         ./autogen.sh
         
-        # 配置 Wine（启用 GStreamer、MPG123、OpenAL）
+        # 配置 Wine（启用完整本地化支持）
         mkdir -p build64
         cd build64
         
@@ -124,6 +140,9 @@ jobs:
           --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
+          --with-gettext \
+          --with-gettextpo \
+          --enable-nls \
           --without-dbus \
           --without-sane \
           --without-pcap \
@@ -146,26 +165,30 @@ jobs:
         make -j$(nproc)
         make install
         
+        # 额外步骤：确保中文资源文件被正确安装
+        echo "检查本地化文件..."
+        find /tmp/wine-install-proton -name "*zh_CN*" -o -name "*chinese*" | head -20
+        
         cd ../..
         
         # 获取版本信息
         VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "10.0")
         COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
-        echo "VERSION_PROTON=${VERSION_PROTON}-${COMMIT_HASH}" >> $GITHUB_ENV
+        PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
+        echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
         
         # 打包 - 确保在正确的工作目录
         cd $GITHUB_WORKSPACE
         mkdir -p build-output
-        tar -czf build-output/wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz -C /tmp/wine-install-proton .
+        tar -czf build-output/wine-proton-wow64-$PROTON_VERSION.tar.gz -C /tmp/wine-install-proton .
         
-        echo "Proton WOW64 构建完成: wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz"
+        echo "Proton WOW64 构建完成: wine-proton-wow64-$PROTON_VERSION.tar.gz"
 
-    - name: 检查构建输出
+    - name: 检查构建输出中的本地化文件
       run: |
-        echo "检查构建输出目录:"
-        ls -la build-output/
-        echo "当前工作目录内容:"
-        ls -la
+        echo "检查构建的本地化文件..."
+        cd build-output
+        tar -tzf wine-proton-wow64-$PROTON_VERSION.tar.gz | grep -i "zh\|chinese\|locale" | head -20 || echo "未找到相关本地化文件"
 
     - name: 为 Termux 准备安装包
       run: |
@@ -193,10 +216,10 @@ jobs:
         # 复制 Wine 文件
         cp -r /tmp/wine-termux/* wine-package/opt/wine/
         
-        # 创建包装脚本
+        # 创建包装脚本 - 增强中文支持
         cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
-        # Wine Proton for Termux 启动脚本
+        # Wine Proton for Termux 启动脚本 - 增强中文支持
         
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export HOME="$HOME"
@@ -230,10 +253,14 @@ jobs:
         export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         export WINEARCH="win64"  # WOW64 模式
         
-        # 设置中文环境
+        # 强制设置中文环境 - 增强版本
         export LANG="zh_CN.UTF-8"
         export LC_ALL="zh_CN.UTF-8"
         export LC_CTYPE="zh_CN.UTF-8"
+        export LANGUAGE="zh_CN:zh:en_US:en"
+        
+        # 设置 Wine 的 UI 语言为中文
+        export WINELANG="zh_CN"
         
         # 运行真正的 wine 程序
         exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
@@ -249,7 +276,10 @@ jobs:
         export TMPDIR="\$TERMUX_PREFIX/tmp"
         export LD_LIBRARY_PATH="\$TERMUX_PREFIX/opt/wine/lib:\$TERMUX_PREFIX/opt/wine/lib64:\$TERMUX_PREFIX/lib:\$LD_LIBRARY_PATH"
         export WINEDLLPATH="\$TERMUX_PREFIX/opt/wine/lib/wine:\$TERMUX_PREFIX/opt/wine/lib64/wine"
+        # 强制中文环境
         export LANG="zh_CN.UTF-8"
+        export LC_ALL="zh_CN.UTF-8"
+        export WINELANG="zh_CN"
         exec "\$TERMUX_PREFIX/opt/wine/bin/$bin" "\$@"
         EOF
           chmod +x wine-package/bin/$bin
@@ -311,7 +341,7 @@ jobs:
         }
         EOL
         
-        # 配置环境
+        # 配置环境 - 增强中文支持
         echo "配置环境变量..."
         
         if ! grep -q "Wine Proton WOW64 for Termux" "$HOME/.bashrc" 2>/dev/null; then
@@ -326,8 +356,13 @@ jobs:
             export TMPDIR="$TERMUX_PREFIX/tmp"
             export TEMP="$TMPDIR"
             export TMP="$TMPDIR"
+            
+            # 强制中文环境设置
             export LANG="zh_CN.UTF-8"
             export LC_ALL="zh_CN.UTF-8"
+            export LC_CTYPE="zh_CN.UTF-8"
+            export LANGUAGE="zh_CN:zh:en_US:en"
+            export WINELANG="zh_CN"
 
             # Vulkan 配置
             export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
@@ -347,13 +382,18 @@ jobs:
         echo "✓ GStreamer 多媒体支持"
         echo "✓ MPG123 音频支持"
         echo "✓ OpenAL 3D 音频支持"
-        echo "✓ 中文环境支持"
+        echo "✓ 完整中文语言支持"
         echo "✓ 游戏优化和兼容性改进"
         echo ""
         echo "下一步:"
         echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
         echo "2. 初始化 Wine: wine wineboot"
         echo "3. 配置 Wine: winecfg"
+        echo ""
+        echo "中文支持说明:"
+        echo "- 已启用完整 NLS (本地化支持)"
+        echo "- 构建时包含中文语言文件"
+        echo "- 环境变量强制设置为中文"
         echo ""
         echo "Vulkan 支持:"
         echo "- 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
@@ -421,14 +461,21 @@ jobs:
         echo "构建的版本:"
         echo "- Proton WOW64: $PROTON_VERSION"
         echo "- Termux 安装包: wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
+        echo "- Release 标签: $RELEASE_TAG"
         echo ""
         echo "启用的功能:"
         echo "✓ GStreamer 多媒体支持"
         echo "✓ MPG123 音频支持" 
         echo "✓ OpenAL 3D 音频支持"
         echo "✓ Vulkan 图形 API 支持"
-        echo "✓ 中文环境支持"
+        echo "✓ 完整中文语言支持 (NLS 已启用)"
         echo "✓ 游戏优化和兼容性改进"
+        echo ""
+        echo "中文支持增强:"
+        echo "✓ 构建时启用 NLS 和 gettext"
+        echo "✓ 包含中文语言环境"
+        echo "✓ 环境变量强制设置为中文"
+        echo "✓ 设置 WINELANG 环境变量"
         echo ""
         echo "文件说明:"
         echo "wine-proton-wow64-*.tar.gz - Proton WOW64 原始构建文件"
@@ -451,3 +498,4 @@ jobs:
         echo "- 包含完整的多媒体和音频支持"
         echo "- 已修复 Termux 路径问题"
         echo "- 专为游戏和兼容性优化"
+        echo "- 强制启用中文界面支持"
