@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build AllWine (WOW64 for Termux)
+name: Build Wine WOW64 (Exp and Proton)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -7,29 +7,16 @@ on:
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
+env:
+  WINE_VERSION: "latest"
+  EXPERIMENTAL_WOW64: "true"
+  BUILD_DIR: "/tmp/build_wine"
+
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: 检出源码和脚本
-      uses: actions/checkout@v4
-      with:
-        path: scripts
-
-    - name: 下载引导环境
-      id: download-artifact
-      uses: dawidd6/action-download-artifact@v3
-      with:
-        workflow: bootstraps.yml
-        workflow_conclusion: success
-        path: /opt
-
-    - name: 设置引导环境
-      run: |
-        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
-        echo "引导环境已设置"
-
     - name: 安装构建依赖
       run: |
         sudo apt update
@@ -75,7 +62,13 @@ jobs:
           libvulkan-dev \
           vulkan-tools \
           libvulkan1 \
-          mesa-vulkan-drivers
+          mesa-vulkan-drivers \
+          mingw-w64 \
+          wine \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev
 
     - name: 安装32位依赖
       run: |
@@ -107,58 +100,180 @@ jobs:
           libpng-dev:i386 \
           libtiff-dev:i386 \
           libxml2-dev:i386 \
-          libvulkan-dev:i386
+          libvulkan-dev:i386 \
+          libgstreamer1.0-dev:i386 \
+          libgstreamer-plugins-base1.0-dev:i386 \
+          libmpg123-dev:i386 \
+          libopenal-dev:i386
 
-    - name: 构建不同版本的 Wine
+    - name: 构建 Exp WOW64 版本
       run: |
-        # 复制构建脚本
-        cp scripts/build_wine.sh .
-        chmod +x build_wine.sh
+        set -e
         
-        # 设置环境变量
-        export WINE_VERSION="latest"
-        export EXPERIMENTAL_WOW64="true"
-        export USE_CCACHE="false"
-        export WINE_BUILD_OPTIONS="--without-ldap --without-oss --disable-winemenubuilder --disable-win16 --disable-tests --with-vulkan --with-x --with-alsa --with-pulse --with-cups --with-freetype --with-fontconfig"
+        echo "开始构建 Exp WOW64 版本（启用 GStreamer、MPG123、OpenAL）..."
         
-        # 构建 Vanilla 版本
-        echo "构建 Vanilla Wine..."
-        WINE_BRANCH=vanilla ./build_wine.sh
+        # 清理并创建构建目录
+        rm -rf $BUILD_DIR
+        mkdir -p $BUILD_DIR
+        cd $BUILD_DIR
         
-        # 构建 Staging 版本
-        echo "构建 Staging Wine..."
-        WINE_BRANCH=staging ./build_wine.sh
+        # 克隆 Wine 源码
+        git clone https://gitlab.winehq.org/wine/wine.git
+        cd wine
         
-        # 构建 Staging-TKG 版本
-        echo "构建 Staging-TKG Wine..."
-        WINE_BRANCH=staging-tkg ./build_wine.sh
+        # 使用稳定版本
+        git checkout wine-9.7
         
-        # 构建 Staging-TKG-NTSYNC 版本
-        echo "构建 Staging-TKG-NTSYNC Wine..."
-        WINE_BRANCH=staging-tkg-ntsync ./build_wine.sh
+        # 克隆并应用 Staging 补丁
+        git clone https://github.com/wine-staging/wine-staging
+        cd wine-staging
+        ./patches/patchinstall.sh DESTDIR=../wine --all
+        cd ../wine
         
-        # 显示构建结果
-        echo "构建完成，文件列表:"
-        ls -la *.tar.xz
-        sha256sum *.tar.xz
+        # 修复 Termux 路径问题
+        echo "修复 Termux 路径问题..."
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        # 配置 Wine（启用 GStreamer、MPG123、OpenAL）
+        mkdir -p build64
+        cd build64
+        
+        ../configure \
+          --enable-win64 \
+          --enable-archs=i386,x86_64 \
+          --prefix=/tmp/wine-install-exp \
+          --with-x \
+          --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
+          --with-gstreamer \
+          --with-mpg123 \
+          --with-openal \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
+        
+        # 构建并安装
+        make -j$(nproc)
+        make install
+        
+        cd ../..
+        
+        # 获取版本信息
+        VERSION_EXP=$(cd wine && git describe --tags --abbrev=0)
+        echo "VERSION_EXP=$VERSION_EXP" >> $GITHUB_ENV
+        
+        # 打包
+        tar -czf wine-exp-wow64-$VERSION_EXP.tar.gz -C /tmp/wine-install-exp .
+        
+        echo "Exp WOW64 构建完成: wine-exp-wow64-$VERSION_EXP.tar.gz"
+
+    - name: 构建 Proton WOW64 版本
+      run: |
+        set -e
+        
+        echo "开始构建 Proton WOW64 版本（启用 GStreamer、MPG123、OpenAL）..."
+        
+        # 清理并创建构建目录
+        rm -rf $BUILD_DIR/proton
+        mkdir -p $BUILD_DIR/proton
+        cd $BUILD_DIR/proton
+        
+        # 克隆 Proton 源码
+        git clone https://github.com/ValveSoftware/wine -b proton_10.0
+        
+        # 修复 Termux 路径问题
+        echo "修复 Termux 路径问题..."
+        cd wine
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        # 配置 Wine（启用 GStreamer、MPG123、OpenAL）
+        mkdir -p build64
+        cd build64
+        
+        ../configure \
+          --enable-win64 \
+          --enable-archs=i386,x86_64 \
+          --prefix=/tmp/wine-install-proton \
+          --with-x \
+          --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
+          --with-gstreamer \
+          --with-mpg123 \
+          --with-openal \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
+        
+        # 构建并安装
+        make -j$(nproc)
+        make install
+        
+        cd ../..
+        
+        # 获取版本信息
+        VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0)
+        COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
+        echo "VERSION_PROTON=${VERSION_PROTON}-${COMMIT_HASH}" >> $GITHUB_ENV
+        
+        # 打包
+        tar -czf wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz -C /tmp/wine-install-proton .
+        
+        echo "Proton WOW64 构建完成: wine-proton-wow64-${VERSION_PROTON}-${COMMIT_HASH}.tar.gz"
 
     - name: 为 Termux 准备安装包
       run: |
-        # 获取最新构建的文件
-        LATEST_BUILD=$(ls -t wine-*-amd64-wow64.tar.xz | head -1)
-        echo "最新构建文件: $LATEST_BUILD"
+        # 使用 Exp WOW64 作为 Termux 包的基础
+        EXP_FILE=$(ls wine-exp-wow64-*.tar.gz | head -1)
+        echo "使用构建文件: $EXP_FILE"
         
-        # 解压构建文件
-        tar -xf "$LATEST_BUILD" -C /tmp/
-        BUILD_DIR=$(tar -tf "$LATEST_BUILD" | head -1 | cut -f1 -d"/")
-        echo "构建目录: $BUILD_DIR"
+        # 解压构建文件到临时目录
+        mkdir -p /tmp/wine-termux
+        tar -xzf "$EXP_FILE" -C /tmp/wine-termux
         
         # 创建 Termux 包结构
         mkdir -p wine-package/opt/wine
         mkdir -p wine-package/bin
         
         # 复制 Wine 文件
-        cp -r /tmp/"$BUILD_DIR"/* wine-package/opt/wine/
+        cp -r /tmp/wine-termux/* wine-package/opt/wine/
         
         # 创建包装脚本
         cat > wine-package/bin/wine << 'EOF'
@@ -307,6 +422,9 @@ jobs:
         echo "特性:"
         echo "✓ WOW64 架构 (同时支持 32/64 位应用)"
         echo "✓ Vulkan 图形 API 支持"
+        echo "✓ GStreamer 多媒体支持"
+        echo "✓ MPG123 音频支持"
+        echo "✓ OpenAL 3D 音频支持"
         echo "✓ 中文环境支持"
         echo ""
         echo "下一步:"
@@ -317,6 +435,9 @@ jobs:
         echo "Vulkan 支持:"
         echo "- 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
         echo "- 检查设备 Vulkan 支持"
+        echo ""
+        echo "音频支持:"
+        echo "- 确保安装了音频相关包: pkg install pulseaudio openal mpg123"
         echo ""
         echo "故障排除:"
         echo "- 确保 Termux 有存储权限"
@@ -330,32 +451,36 @@ jobs:
     - name: 创建打包文件
       run: |
         # 获取版本信息
-        VERSION=$(ls wine-*-amd64-wow64.tar.xz | head -1 | sed 's/wine-//' | sed 's/-amd64-wow64.tar.xz//')
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        EXP_FILE=$(ls wine-exp-wow64-*.tar.gz | head -1)
+        EXP_VERSION=$(echo "$EXP_FILE" | sed 's/wine-exp-wow64-//' | sed 's/.tar.gz//')
+        
+        PROTON_FILE=$(ls wine-proton-wow64-*.tar.gz | head -1)
+        PROTON_VERSION=$(echo "$PROTON_FILE" | sed 's/wine-proton-wow64-//' | sed 's/.tar.gz//')
+        
+        echo "EXP_VERSION=$EXP_VERSION" >> $GITHUB_ENV
+        echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
         
         # 打包 Termux 版本
-        tar -czf wine-$VERSION-wow64-termux.tar.gz wine-package/
+        tar -czf wine-wow64-termux-$EXP_VERSION.tar.gz wine-package/
         
         echo "打包完成:"
-        ls -lh *.tar.*
+        ls -lh *.tar.gz
 
     - name: 上传所有构建产物
       uses: actions/upload-artifact@v4
       with:
         name: wine-wow64-builds
         path: |
-          *.tar.xz
-          *.tar.gz
+          wine-*.tar.gz
         retention-days: 7
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: wow64-${{ github.ref_name }}
+        tag_name: wow64-$(date +%Y%m%d)
         name: Wine WOW64 Builds
         files: |
-          wine-*-amd64-wow64.tar.xz
-          wine-*-wow64-termux.tar.gz
+          wine-*.tar.gz
         draft: false
         prerelease: false
       env:
@@ -364,27 +489,36 @@ jobs:
     - name: 输出版本信息和使用说明
       run: |
         echo "✅ Wine WOW64 构建完成"
-        echo "版本: $VERSION"
         echo ""
         echo "构建的版本:"
-        echo "- Vanilla WOW64"
-        echo "- Staging WOW64" 
-        echo "- Staging-TKG WOW64"
-        echo "- Staging-TKG-NTSYNC WOW64"
+        echo "- Exp WOW64: $EXP_VERSION"
+        echo "- Proton WOW64: $PROTON_VERSION"
+        echo "- Termux 安装包: wine-wow64-termux-$EXP_VERSION.tar.gz"
+        echo ""
+        echo "启用的功能:"
+        echo "✓ GStreamer 多媒体支持"
+        echo "✓ MPG123 音频支持" 
+        echo "✓ OpenAL 3D 音频支持"
+        echo "✓ Vulkan 图形 API 支持"
+        echo "✓ 中文环境支持"
         echo ""
         echo "文件说明:"
-        echo "*.tar.xz - 原始构建文件"
-        echo "*.tar.gz - Termux 专用安装包"
+        echo "wine-exp-wow64-*.tar.gz - Exp WOW64 原始构建文件"
+        echo "wine-proton-wow64-*.tar.gz - Proton WOW64 原始构建文件" 
+        echo "wine-wow64-termux-*.tar.gz - Termux 专用安装包"
         echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-wow64-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-wow64-termux.tar.gz"
+        echo "1. 下载 wine-wow64-termux-$EXP_VERSION.tar.gz"
+        echo "2. 解压: tar -xzf wine-wow64-termux-$EXP_VERSION.tar.gz"
         echo "3. 进入目录: cd wine-package"
         echo "4. 运行安装: ./install.sh"
         echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
         echo ""
+        echo "音频支持安装:"
+        echo "pkg install pulseaudio openal mpg123"
+        echo ""
         echo "注意:"
         echo "- 这是真正的 WOW64 构建，单一二进制支持 32/64 位应用"
-        echo "- 包含 Vulkan 支持"
-        echo "- 已配置中文环境"
+        echo "- 包含完整的多媒体和音频支持"
+        echo "- 已修复 Termux 路径问题"

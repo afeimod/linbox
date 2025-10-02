@@ -79,7 +79,13 @@ jobs:
           libxml2-dev \
           libvulkan-dev \
           libvulkan1 \
-          mesa-vulkan-drivers
+          mesa-vulkan-drivers \
+          mingw-w64 \
+          wine \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev
 
     - name: 安装32位开发库（用于交叉编译）
       run: |
@@ -110,13 +116,17 @@ jobs:
           libpng-dev:i386 \
           libtiff-dev:i386 \
           libxml2-dev:i386 \
-          libvulkan-dev:i386
+          libvulkan-dev:i386 \
+          libgstreamer1.0-dev:i386 \
+          libgstreamer-plugins-base1.0-dev:i386 \
+          libmpg123-dev:i386 \
+          libopenal-dev:i386
 
     - name: 克隆 Wine 源码
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.2
+        git checkout wine-9.3
 
     - name: 彻底修复 Termux 路径问题
       run: |
@@ -167,7 +177,7 @@ jobs:
           --without-dbus \
           --with-gstreamer \
           --with-mpg123 \
-          --without-openal \
+          --with-openal \
           --without-sane \
           --without-pcap \
           --without-pcsclite \
@@ -176,7 +186,7 @@ jobs:
           --without-capi \
           --without-coreaudio \
           --without-gphoto \
-          --without-osmesa \
+          --without-ldap \
           --without-oss \
           --without-udev \
           --without-unwind \
