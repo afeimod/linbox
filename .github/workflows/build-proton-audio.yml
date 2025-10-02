@@ -68,7 +68,7 @@ jobs:
           locales \
           language-pack-zh-hans \
           # 增强音频支持
-          libfaad-dev \
+          libfaad2-dev \
           libflac-dev \
           libvorbis-dev \
           libopus-dev \
