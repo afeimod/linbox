@@ -141,7 +141,6 @@ jobs:
           --with-fontconfig \
           --with-gstreamer \
           --with-gettext \
-          --with-gettextpo \
           --enable-nls \
           --without-dbus \
           --without-sane \
