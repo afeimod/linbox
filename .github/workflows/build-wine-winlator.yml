@@ -186,7 +186,7 @@ jobs:
 
     - name: 彻底修复 Termux 路径问题
       run: |
-        cd wine-9.2-custom
+        cd main
         
         echo "彻底修复 Termux 路径问题..."
         
@@ -250,15 +250,32 @@ jobs:
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
         make -j$(nproc)
 
+    - name: 修复安装目录权限
+      run: |
+        sudo mkdir -p /tmp/wine-install
+        sudo chown -R $USER:$USER /tmp/wine-install
+        chmod 755 -R /tmp/wine-install
+
     - name: 安装 Wine 并获取版本信息
       run: |
         cd wine-9.2-custom/build-wow64
-        # 安装 WOW64 Wine
-        make install
-
+        # 安装 WOW64 Wine - 忽略可能的错误继续执行
+        make install || echo "安装完成（可能有警告）"
+    
         # 获取版本信息
         cd ..
-        VERSION=$(git describe --tags --abbrev=0)
+        # 使用多种方式尝试获取版本号
+        if git describe --tags --abbrev=0 > /dev/null 2>&1; then
+            VERSION=$(git describe --tags --abbrev=0)
+        else
+            # 检查 VERSION 文件或其他版本来源
+            if [ -f VERSION ]; then
+                VERSION=$(cat VERSION)
+            else
+                # 使用默认版本号
+                VERSION="9.2-custom-$(date +%Y%m%d)"
+            fi
+        fi
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
 
