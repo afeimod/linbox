@@ -219,30 +219,26 @@ jobs:
           --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install \
           --with-x \
+          --with-vulkan \
           --with-alsa \
           --with-pulse \
           --with-cups \
           --with-freetype \
           --with-fontconfig \
-          --with-xinerama \
-          --with-xrandr \
-          --with-xxf86vm \
-          --with-xshm \
-          --with-xshape \
-          --with-vulkan \
           --with-gstreamer \
-          --with-mpg123 \
-          --with-openal \
+          --with-gettext \
+          --enable-nls \
           --without-dbus \
           --without-sane \
           --without-pcap \
           --without-pcsclite \
           --disable-winemenubuilder \
+          --disable-win16 \
           --disable-tests \
           --without-capi \
           --without-coreaudio \
           --without-gphoto \
-          --without-ldap \
+          --without-osmesa \
           --without-oss \
           --without-udev \
           --without-unwind \
