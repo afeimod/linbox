@@ -165,8 +165,8 @@ jobs:
           --with-xshape \
           --with-vulkan \
           --without-dbus \
-          --without-gstreamer \
-          --without-mpg123 \
+          --with-gstreamer \
+          --with-mpg123 \
           --without-openal \
           --without-sane \
           --without-pcap \
