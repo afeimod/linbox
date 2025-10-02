@@ -92,11 +92,11 @@ jobs:
         echo "当前工作目录: $(pwd)"
         ls -la
 
-    - name: 构建 Proton WOW64 版本
+    - name: 构建 Proton WOW64 版本（精简）
       run: |
         set -e
         
-        echo "开始构建 Proton WOW64 版本（启用完整中文支持）..."
+        echo "开始构建 Proton WOW64 精简版本..."
         
         # 设置中文构建环境
         export LANG=zh_CN.UTF-8
@@ -124,7 +124,7 @@ jobs:
         echo "生成 configure 脚本..."
         ./autogen.sh
         
-        # 配置 Wine（启用完整本地化支持）
+        # 配置 Wine（精简配置）
         mkdir -p build64
         cd build64
         
@@ -158,30 +158,52 @@ jobs:
           --without-unwind \
           --without-usb \
           --without-v4l2 \
-          --without-wayland
+          --without-wayland \
+          --disable-debug  # 禁用调试信息
         
         # 构建并安装
         make -j$(nproc)
         make install
         
-        # 额外步骤：确保中文资源文件被正确安装
-        echo "检查本地化文件..."
-        find /tmp/wine-install-proton -name "*zh_CN*" -o -name "*chinese*" | head -20
+        # 精简步骤：移除不必要的文件
+        echo "精简安装文件..."
+        cd /tmp/wine-install-proton
         
-        cd ../..
+        # 移除开发文件（头文件等）
+        rm -rf include
+        rm -rf share/aclocal
+        rm -rf share/applications
+        rm -rf share/man
+        
+        # 移除静态库
+        find . -name "*.a" -delete
+        find . -name "*.la" -delete
+        
+        # 移除调试符号（保留基本功能）
+        find bin -type f -exec strip --strip-unneeded {} \; 2>/dev/null || true
+        find lib -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+        find lib64 -name "*.so*" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+        
+        # 保留必要的本地化文件（主要保留中文和英文）
+        find share/locale -mindepth 1 -maxdepth 1 -type d ! -name "zh_CN" ! -name "zh_TW" ! -name "en*" -exec rm -rf {} + 2>/dev/null || true
+        
+        echo "精简完成，检查剩余文件大小:"
+        du -sh /tmp/wine-install-proton
         
         # 获取版本信息
-        VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "10.0")
-        COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
-        PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
+        cd $BUILD_DIR/proton/wine
+        VERSION_PROTON=$(git describe --tags --abbrev=0 2>/dev/null || echo "10.0")
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}-lite"
         echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
         
-        # 打包 - 确保在正确的工作目录
+        # 打包
         cd $GITHUB_WORKSPACE
         mkdir -p build-output
         tar -czf build-output/wine-proton-wow64-$PROTON_VERSION.tar.gz -C /tmp/wine-install-proton .
         
-        echo "Proton WOW64 构建完成: wine-proton-wow64-$PROTON_VERSION.tar.gz"
+        echo "Proton WOW64 精简构建完成: wine-proton-wow64-$PROTON_VERSION.tar.gz"
+
 
     - name: 检查构建输出中的本地化文件
       run: |
