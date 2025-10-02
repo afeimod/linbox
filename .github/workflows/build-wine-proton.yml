@@ -388,6 +388,12 @@ jobs:
         echo "打包完成:"
         ls -lh *.tar.gz
 
+    - name: 设置 Release 标签
+      run: |
+        CURRENT_DATE=$(date +%Y%m%d)
+        echo "RELEASE_TAG=proton-wow64-$CURRENT_DATE" >> $GITHUB_ENV
+        echo "Release 标签设置为: $RELEASE_TAG"
+
     - name: 上传所有构建产物
       uses: actions/upload-artifact@v4
       with:
@@ -399,8 +405,8 @@ jobs:
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: proton-wow64-$(date +%Y%m%d)
-        name: Wine Proton WOW64 Builds
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: Wine Proton WOW64 Build ${{ env.RELEASE_TAG }}
         files: |
           build-output/wine-*.tar.gz
         draft: false
