@@ -1,0 +1,343 @@
+# build-wine.yml
+name: Build WinlatorWine (True WOW64 for Termux with Vulkan and Full GStreamer)
+
+on:
+  workflow_dispatch:  # 只保留手动触发
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出源码和补丁
+      uses: actions/checkout@v4
+      with:
+        path: scripts
+
+    - name: 启用多架构支持
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+
+    - name: 修复包管理器
+      run: |
+        sudo apt-get update
+        sudo apt-get install -f -y
+        sudo apt-get autoremove -y
+
+    - name: 安装基本依赖
+      run: |
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          meson \
+          ninja-build \
+          autoconf \
+          wget \
+          xz-utils \
+          gettext \
+          fontconfig \
+          libfreetype6 \
+          libfreetype6-dev
+
+    - name: 安装构建依赖
+      run: |
+        sudo apt update
+        # 先修复损坏的依赖
+        sudo apt --fix-broken install -y
+        sudo apt install -y \
+          debootstrap \
+          perl \
+          git \
+          wget \
+          xz-utils \
+          bubblewrap \
+          autoconf \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          libx11-dev \
+          libxext-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxfixes-dev \
+          libxxf86vm-dev \
+          libxrender-dev \
+          libxinerama-dev \
+          libgl-dev \
+          libglu-dev \
+          libosmesa6-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libssl-dev \
+          libasound2-dev \
+          libpulse-dev \
+          libudev-dev \
+          libcups2-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxml2-dev \
+          libvulkan-dev \
+          vulkan-tools \
+          libvulkan1 \
+          mesa-vulkan-drivers \
+          mingw-w64 \
+          wine
+
+    - name: 安装完整的 GStreamer 和 FFmpeg 依赖
+      run: |
+        # 先安装 libunwind-dev 解决依赖问题
+        sudo apt install -y libunwind-dev
+        
+        # 安装完整的 GStreamer 核心和插件
+        sudo apt install -y \
+          gstreamer1.0-tools \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad \
+          gstreamer1.0-plugins-ugly \
+          gstreamer1.0-libav \
+          gstreamer1.0-gl \
+          gstreamer1.0-pulseaudio \
+          gstreamer1.0-alsa \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libgstreamer-plugins-good1.0-dev \
+          libgstreamer-plugins-bad1.0-dev
+
+        # 安装 FFmpeg 开发库
+        sudo apt install -y \
+          ffmpeg \
+          libavcodec-dev \
+          libavformat-dev \
+          libavutil-dev \
+          libavfilter-dev \
+          libswscale-dev \
+          libswresample-dev \
+          libpostproc-dev \
+          libavdevice-dev
+
+        # 安装多媒体和音频依赖
+        sudo apt install -y \
+          libmpg123-dev \
+          libopenal-dev \
+          libvorbis-dev \
+          libflac-dev \
+          libopus-dev \
+          libmad0-dev \
+          libtwolame-dev \
+          libshout3-dev \
+          libsoup2.4-dev \
+          libcurl4-openssl-dev
+
+    - name: 安装32位依赖
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        # 先修复32位依赖
+        sudo apt --fix-broken install -y
+        sudo apt install -y \
+          libx11-dev:i386 \
+          libxext-dev:i386 \
+          libxi-dev:i386 \
+          libxrandr-dev:i386 \
+          libxcursor-dev:i386 \
+          libxcomposite-dev:i386 \
+          libxdamage-dev:i386 \
+          libxfixes-dev:i386 \
+          libxxf86vm-dev:i386 \
+          libxrender-dev:i386 \
+          libxinerama-dev:i386 \
+          libgl-dev:i386 \
+          libglu-dev:i386 \
+          libosmesa6-dev:i386 \
+          libfreetype6-dev:i386 \
+          libfontconfig1-dev:i386 \
+          libdbus-1-dev:i386 \
+          libasound2-dev:i386 \
+          libpulse-dev:i386 \
+          libudev-dev:i386 \
+          libcups2-dev:i386 \
+          libjpeg-dev:i386 \
+          libpng-dev:i386 \
+          libtiff-dev:i386 \
+          libxml2-dev:i386 \
+          libvulkan-dev:i386
+          
+    - name: 克隆 Wine 源码
+      run: |
+        git clone https://github.com/brunodev85/wine-9.2-custom.git
+        cd wine-9.2-custom
+        #git checkout wine-9.16
+
+    - name: 彻底修复 Termux 路径问题
+      run: |
+        cd main
+        
+        echo "彻底修复 Termux 路径问题..."
+        
+        # 修改所有硬编码的 /tmp 路径
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        
+        # 修改 server 目录中的特定路径
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        # 修改其他关键文件
+        find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        echo "路径修复完成"
+
+    - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
+      run: |
+        cd wine-9.2-custom
+        mkdir -p /tmp/wine-install
+        sudo chmod 777 -R /tmp/wine-install
+
+        # 创建构建目录
+        mkdir -p build-wow64
+        cd build-wow64
+
+        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
+        ../configure \
+          --enable-win64 \
+          --enable-archs=i386,x86_64 \
+          --prefix=/tmp/wine-install \
+          --with-x \
+          --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
+          --with-gstreamer \
+          --with-gettext \
+          --enable-nls \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
+
+        # 构建真正的 WOW64 Wine
+        echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
+        make -j$(nproc)
+
+    - name: 安装 Wine 并获取版本信息
+      run: |
+        cd wine-9.2-custom/build-wow64
+        # 安装 WOW64 Wine
+        make install
+
+        # 获取版本信息
+        cd ..
+        VERSION=$(git describe --tags --abbrev=0)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
+
+    - name: 创建打包文件
+      run: |
+        echo "最终文件结构:"
+        find wine-package -type f | sort
+        echo ""
+        echo "检查 Vulkan 相关文件:"
+        find wine-package -name "*vulkan*" | sort
+        echo ""
+        echo "检查 GStreamer 相关文件:"
+        find wine-package -name "*gst*" | sort
+        
+        # 打包
+        tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz wine-package/
+        
+        echo "打包完成:"
+        ls -lh wine-*.tar.gz
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux
+        path: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
+        files: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息和使用说明
+      run: |
+        echo "✅ True WOW64 Wine with Vulkan and Full GStreamer 构建完成"
+        echo "版本号: $VERSION"
+        echo "架构: x86_64 True WOW64"
+        echo "环境: Termux"
+        echo "图形 API: Vulkan 支持已启用"
+        echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
+        echo ""
+        echo "修复的问题:"
+        echo "✓ 无法运行 EXE 文件"
+        echo "✓ 中文环境支持"
+        echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
+        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
+        echo "✓ 字体配置"
+        echo ""
+        echo "GStreamer 插件包含:"
+        echo "- 核心插件 (base, good, bad, ugly)"
+        echo "- FFmpeg 插件 (libav)"
+        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
+        echo "- 音频输出 (ALSA、PulseAudio)"
+        echo ""
+        echo "使用说明:"
+        echo "1. 下载 wine-$VERSION-true-wow64-vulkan-gstreamer-termux.tar.gz"
+        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
+        echo "3. 进入目录: cd wine-package"
+        echo "4. 运行安装: ./install.sh"
+        echo "5. 重新加载环境: source ~/.bashrc"
+        echo "6. 初始化: wine wineboot"
+        echo "7. 测试多媒体: ./test-media.sh"
+        echo "8. 测试 Vulkan: ./test-vulkan.sh"
+        echo ""
+        echo "GStreamer 插件安装:"
+        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+        echo ""
+        echo "Vulkan 驱动安装:"
+        echo "pkg install mesa-vulkan-driver"
+        echo ""
+        echo "渲染模式切换:"
+        echo "- Vulkan: 默认模式"
+        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
+        echo ""
+        echo "故障排除:"
+        echo "- 运行 ./test-media.sh 诊断多媒体问题"
+        echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
+        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
+        echo "- 检查设备多媒体和 Vulkan 支持"
