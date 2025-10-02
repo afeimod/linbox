@@ -18,12 +18,12 @@ jobs:
         path: scripts
 
     - name: 下载引导环境
-        id: download-artifact
-        uses: dawidd6/action-download-artifact@v3
-        with:
-          workflow: bootstraps.yml
-          workflow_conclusion: success
-          path: /opt
+      id: download-artifact
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        workflow: bootstraps.yml
+        workflow_conclusion: success
+        path: /opt
 
     - name: 设置引导环境
       run: |
