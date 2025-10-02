@@ -186,7 +186,7 @@ jobs:
 
     - name: 彻底修复 Termux 路径问题
       run: |
-        cd main
+        cd wine-9.2-custom
         
         echo "彻底修复 Termux 路径问题..."
         
