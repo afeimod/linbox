@@ -1,0 +1,390 @@
+# build-wine.yml
+name: Build AllWine (WOW64 for Termux)
+
+on:
+  workflow_dispatch:  # 只保留手动触发
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出源码和脚本
+      uses: actions/checkout@v4
+      with:
+        path: scripts
+
+    - name: 下载引导环境
+        id: download-artifact
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: bootstraps.yml
+          workflow_conclusion: success
+          path: /opt
+
+    - name: 设置引导环境
+      run: |
+        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
+        echo "引导环境已设置"
+
+    - name: 安装构建依赖
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          debootstrap \
+          perl \
+          git \
+          wget \
+          xz-utils \
+          bubblewrap \
+          autoconf \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          libx11-dev \
+          libxext-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxfixes-dev \
+          libxxf86vm-dev \
+          libxrender-dev \
+          libxinerama-dev \
+          libgl-dev \
+          libglu-dev \
+          libosmesa6-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libssl-dev \
+          libasound2-dev \
+          libpulse-dev \
+          libudev-dev \
+          libcups2-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxml2-dev \
+          libvulkan-dev \
+          vulkan-tools \
+          libvulkan1 \
+          mesa-vulkan-drivers
+
+    - name: 安装32位依赖
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        sudo apt install -y \
+          libx11-dev:i386 \
+          libxext-dev:i386 \
+          libxi-dev:i386 \
+          libxrandr-dev:i386 \
+          libxcursor-dev:i386 \
+          libxcomposite-dev:i386 \
+          libxdamage-dev:i386 \
+          libxfixes-dev:i386 \
+          libxxf86vm-dev:i386 \
+          libxrender-dev:i386 \
+          libxinerama-dev:i386 \
+          libgl-dev:i386 \
+          libglu-dev:i386 \
+          libosmesa6-dev:i386 \
+          libfreetype6-dev:i386 \
+          libfontconfig1-dev:i386 \
+          libdbus-1-dev:i386 \
+          libasound2-dev:i386 \
+          libpulse-dev:i386 \
+          libudev-dev:i386 \
+          libcups2-dev:i386 \
+          libjpeg-dev:i386 \
+          libpng-dev:i386 \
+          libtiff-dev:i386 \
+          libxml2-dev:i386 \
+          libvulkan-dev:i386
+
+    - name: 构建不同版本的 Wine
+      run: |
+        # 复制构建脚本
+        cp scripts/build_wine.sh .
+        chmod +x build_wine.sh
+        
+        # 设置环境变量
+        export WINE_VERSION="latest"
+        export EXPERIMENTAL_WOW64="true"
+        export USE_CCACHE="false"
+        export WINE_BUILD_OPTIONS="--without-ldap --without-oss --disable-winemenubuilder --disable-win16 --disable-tests --with-vulkan --with-x --with-alsa --with-pulse --with-cups --with-freetype --with-fontconfig"
+        
+        # 构建 Vanilla 版本
+        echo "构建 Vanilla Wine..."
+        WINE_BRANCH=vanilla ./build_wine.sh
+        
+        # 构建 Staging 版本
+        echo "构建 Staging Wine..."
+        WINE_BRANCH=staging ./build_wine.sh
+        
+        # 构建 Staging-TKG 版本
+        echo "构建 Staging-TKG Wine..."
+        WINE_BRANCH=staging-tkg ./build_wine.sh
+        
+        # 构建 Staging-TKG-NTSYNC 版本
+        echo "构建 Staging-TKG-NTSYNC Wine..."
+        WINE_BRANCH=staging-tkg-ntsync ./build_wine.sh
+        
+        # 显示构建结果
+        echo "构建完成，文件列表:"
+        ls -la *.tar.xz
+        sha256sum *.tar.xz
+
+    - name: 为 Termux 准备安装包
+      run: |
+        # 获取最新构建的文件
+        LATEST_BUILD=$(ls -t wine-*-amd64-wow64.tar.xz | head -1)
+        echo "最新构建文件: $LATEST_BUILD"
+        
+        # 解压构建文件
+        tar -xf "$LATEST_BUILD" -C /tmp/
+        BUILD_DIR=$(tar -tf "$LATEST_BUILD" | head -1 | cut -f1 -d"/")
+        echo "构建目录: $BUILD_DIR"
+        
+        # 创建 Termux 包结构
+        mkdir -p wine-package/opt/wine
+        mkdir -p wine-package/bin
+        
+        # 复制 Wine 文件
+        cp -r /tmp/"$BUILD_DIR"/* wine-package/opt/wine/
+        
+        # 创建包装脚本
+        cat > wine-package/bin/wine << 'EOF'
+        #!/bin/bash
+        # Wine for Termux 启动脚本
+        
+        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
+        export HOME="$HOME"
+        
+        # 设置临时目录
+        export TMPDIR="$TERMUX_PREFIX/tmp"
+        export TEMP="$TMPDIR"
+        export TMP="$TMPDIR"
+        
+        # 确保临时目录存在
+        mkdir -p "$TMPDIR" 2>/dev/null
+        
+        # 设置 Wine 前缀
+        if [ -z "$WINEPREFIX" ]; then
+            export WINEPREFIX="$HOME/.wine"
+        fi
+        
+        # 确保 Wine 前缀目录存在
+        mkdir -p "$WINEPREFIX" 2>/dev/null
+        
+        # 设置库路径
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$LD_LIBRARY_PATH"
+        
+        # 设置 Vulkan 驱动路径
+        export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+        
+        # 设置字体路径
+        export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
+        
+        # 设置其他 Wine 相关环境变量
+        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
+        export WINEARCH="win64"  # WOW64 模式
+        
+        # 设置中文环境
+        export LANG="zh_CN.UTF-8"
+        export LC_ALL="zh_CN.UTF-8"
+        export LC_CTYPE="zh_CN.UTF-8"
+        
+        # 运行真正的 wine 程序
+        exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
+        EOF
+        
+        chmod +x wine-package/bin/wine
+        
+        # 创建其他包装脚本
+        for bin in wineserver winecfg; do
+          cat > wine-package/bin/$bin << EOF
+        #!/bin/bash
+        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
+        export TMPDIR="\$TERMUX_PREFIX/tmp"
+        export LD_LIBRARY_PATH="\$TERMUX_PREFIX/opt/wine/lib:\$TERMUX_PREFIX/opt/wine/lib64:\$TERMUX_PREFIX/lib:\$LD_LIBRARY_PATH"
+        export WINEDLLPATH="\$TERMUX_PREFIX/opt/wine/lib/wine:\$TERMUX_PREFIX/opt/wine/lib64/wine"
+        export LANG="zh_CN.UTF-8"
+        exec "\$TERMUX_PREFIX/opt/wine/bin/$bin" "\$@"
+        EOF
+          chmod +x wine-package/bin/$bin
+        done
+
+    - name: 创建安装脚本和配置
+      run: |
+        # 创建安装脚本
+        cat > wine-package/install.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "=========================================="
+        echo "   Wine WOW64 for Termux 安装脚本"
+        echo "=========================================="
+        
+        TERMUX_PREFIX="/data/data/com.termux/files/usr"
+        INSTALL_DIR="$TERMUX_PREFIX/opt/wine"
+        BIN_DIR="$TERMUX_PREFIX/bin"
+        
+        # 检查环境
+        if [ ! -d "$TERMUX_PREFIX" ]; then
+            echo "错误: 这似乎不是 Termux 环境!"
+            exit 1
+        fi
+        
+        # 创建目录
+        echo "创建目录..."
+        mkdir -p "$INSTALL_DIR"
+        mkdir -p "$BIN_DIR"
+        mkdir -p "$TERMUX_PREFIX/tmp"
+        mkdir -p "$TERMUX_PREFIX/share/vulkan/icd.d"
+        mkdir -p "$HOME/.wine"
+        
+        # 安装文件
+        echo "安装 Wine 文件..."
+        cp -r opt/wine/* "$INSTALL_DIR"/
+        
+        echo "安装启动脚本..."
+        cp bin/wine "$BIN_DIR"/
+        cp bin/wineserver "$BIN_DIR"/
+        cp bin/winecfg "$BIN_DIR"/
+        
+        chmod +x "$BIN_DIR"/wine
+        chmod +x "$BIN_DIR"/wineserver
+        chmod +x "$BIN_DIR"/winecfg
+        
+        # 创建 Vulkan ICD 配置
+        cat > "$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" << 'EOL'
+        {
+            "file_format_version": "1.0.0",
+            "ICD": {
+                "library_path": "libvulkan_freedreno.so",
+                "api_version": "1.0.0"
+            }
+        }
+        EOL
+        
+        # 配置环境
+        echo "配置环境变量..."
+        
+        if ! grep -q "Wine WOW64 for Termux" "$HOME/.bashrc" 2>/dev/null; then
+            cat >> "$HOME/.bashrc" << 'EOL'
+
+            export TERMUX_PREFIX="/data/data/com.termux/files/usr"
+            export WINEPREFIX="$HOME/.wine"
+            export WINEARCH="win64"
+            export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib"
+            export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
+            export TMPDIR="$TERMUX_PREFIX/tmp"
+            export TEMP="$TMPDIR"
+            export TMP="$TMPDIR"
+            export LANG="zh_CN.UTF-8"
+            export LC_ALL="zh_CN.UTF-8"
+
+            # Vulkan 配置
+            export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+            # ==========================================
+            EOL
+        fi
+        
+        echo ""
+        echo "=========================================="
+        echo "   Wine WOW64 安装完成!"
+        echo "=========================================="
+        echo ""
+        echo "特性:"
+        echo "✓ WOW64 架构 (同时支持 32/64 位应用)"
+        echo "✓ Vulkan 图形 API 支持"
+        echo "✓ 中文环境支持"
+        echo ""
+        echo "下一步:"
+        echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
+        echo "2. 初始化 Wine: wine wineboot"
+        echo "3. 配置 Wine: winecfg"
+        echo ""
+        echo "Vulkan 支持:"
+        echo "- 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
+        echo "- 检查设备 Vulkan 支持"
+        echo ""
+        echo "故障排除:"
+        echo "- 确保 Termux 有存储权限"
+        echo "- 运行: termux-setup-storage"
+        echo "- 检查 Wine 前缀: echo \$WINEPREFIX"
+        echo "=========================================="
+        EOF
+        
+        chmod +x wine-package/install.sh
+
+    - name: 创建打包文件
+      run: |
+        # 获取版本信息
+        VERSION=$(ls wine-*-amd64-wow64.tar.xz | head -1 | sed 's/wine-//' | sed 's/-amd64-wow64.tar.xz//')
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        
+        # 打包 Termux 版本
+        tar -czf wine-$VERSION-wow64-termux.tar.gz wine-package/
+        
+        echo "打包完成:"
+        ls -lh *.tar.*
+
+    - name: 上传所有构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: wine-wow64-builds
+        path: |
+          *.tar.xz
+          *.tar.gz
+        retention-days: 7
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: wow64-${{ github.ref_name }}
+        name: Wine WOW64 Builds
+        files: |
+          wine-*-amd64-wow64.tar.xz
+          wine-*-wow64-termux.tar.gz
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息和使用说明
+      run: |
+        echo "✅ Wine WOW64 构建完成"
+        echo "版本: $VERSION"
+        echo ""
+        echo "构建的版本:"
+        echo "- Vanilla WOW64"
+        echo "- Staging WOW64" 
+        echo "- Staging-TKG WOW64"
+        echo "- Staging-TKG-NTSYNC WOW64"
+        echo ""
+        echo "文件说明:"
+        echo "*.tar.xz - 原始构建文件"
+        echo "*.tar.gz - Termux 专用安装包"
+        echo ""
+        echo "使用说明:"
+        echo "1. 下载 wine-$VERSION-wow64-termux.tar.gz"
+        echo "2. 解压: tar -xzf wine-$VERSION-wow64-termux.tar.gz"
+        echo "3. 进入目录: cd wine-package"
+        echo "4. 运行安装: ./install.sh"
+        echo "5. 重新加载环境: source ~/.bashrc"
+        echo "6. 初始化: wine wineboot"
+        echo ""
+        echo "注意:"
+        echo "- 这是真正的 WOW64 构建，单一二进制支持 32/64 位应用"
+        echo "- 包含 Vulkan 支持"
+        echo "- 已配置中文环境"
