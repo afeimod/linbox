@@ -114,7 +114,6 @@ jobs:
           gstreamer1.0-gl \
           gstreamer1.0-pulseaudio \
           gstreamer1.0-alsa \
-          gstreamer1.0-fluendo-mp3 \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
           libgstreamer-plugins-good1.0-dev \
@@ -178,39 +177,7 @@ jobs:
           libtiff-dev:i386 \
           libxml2-dev:i386 \
           libvulkan-dev:i386
-
-    - name: 安装32位完整的 GStreamer 和 FFmpeg 依赖
-      run: |
-        # 安装32位 GStreamer 核心和插件
-        sudo apt install -y \
-          gstreamer1.0-plugins-base:i386 \
-          gstreamer1.0-plugins-good:i386 \
-          gstreamer1.0-plugins-bad:i386 \
-          gstreamer1.0-plugins-ugly:i386 \
-          gstreamer1.0-libav:i386 \
-          libgstreamer1.0-dev:i386 \
-          libgstreamer-plugins-base1.0-dev:i386 \
-          libgstreamer-plugins-good1.0-dev:i386 \
-          libgstreamer-plugins-bad1.0-dev:i386
-
-        # 安装32位 FFmpeg 开发库
-        sudo apt install -y \
-          libavcodec-dev:i386 \
-          libavformat-dev:i386 \
-          libavutil-dev:i386 \
-          libavfilter-dev:i386 \
-          libswscale-dev:i386 \
-          libswresample-dev:i386
-
-        # 安装32位多媒体和音频依赖
-        sudo apt install -y \
-          libmpg123-dev:i386 \
-          libopenal-dev:i386 \
-          libvorbis-dev:i386 \
-          libflac-dev:i386 \
-          libopus-dev:i386 \
-          libmad0-dev:i386
-
+          
     - name: 克隆 Wine 源码
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
