@@ -8,7 +8,7 @@ permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
 env:
-  WINE_VERSION: "latest"
+  WINE_VERSION: "9.7"
   EXPERIMENTAL_WOW64: "true"
   BUILD_DIR: "/tmp/build_wine"
 
@@ -65,8 +65,7 @@ jobs:
           vulkan-tools \
           libvulkan1 \
           mesa-vulkan-drivers \
-          mingw-w64 \
-          wine
+          mingw-w64
 
     - name: 安装多媒体和音频依赖
       run: |
@@ -113,15 +112,6 @@ jobs:
           libxml2-dev:i386 \
           libvulkan-dev:i386
 
-    - name: 安装32位多媒体和音频依赖
-      run: |
-        # 安装32位多媒体相关包
-        sudo apt install -y \
-          libgstreamer1.0-dev:i386 \
-          libgstreamer-plugins-base1.0-dev:i386 \
-          libmpg123-dev:i386 \
-          libopenal-dev:i386
-
     - name: 构建 Exp WOW64 版本
       run: |
         set -e
@@ -133,18 +123,10 @@ jobs:
         mkdir -p $BUILD_DIR
         cd $BUILD_DIR
         
-        # 克隆 Wine 源码
+        # 克隆 Wine 源码并使用特定分支，避免 detached HEAD
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        
-        # 使用稳定版本
-        git checkout wine-9.7
-        
-        # 克隆并应用 Staging 补丁
-        git clone https://github.com/wine-staging/wine-staging
-        cd wine-staging
-        ./patches/patchinstall.sh DESTDIR=../wine --all
-        cd ../wine
+        git checkout wine-$WINE_VERSION
         
         # 修复 Termux 路径问题
         echo "修复 Termux 路径问题..."
@@ -194,7 +176,7 @@ jobs:
         cd ../..
         
         # 获取版本信息
-        VERSION_EXP=$(cd wine && git describe --tags --abbrev=0)
+        VERSION_EXP=$WINE_VERSION
         echo "VERSION_EXP=$VERSION_EXP" >> $GITHUB_ENV
         
         # 打包
@@ -214,11 +196,14 @@ jobs:
         cd $BUILD_DIR/proton
         
         # 克隆 Proton 源码
-        git clone https://github.com/ValveSoftware/wine -b proton_10.0
+        git clone https://github.com/ValveSoftware/wine
+        cd wine
+        
+        # 切换到 Proton 10.0 分支
+        git checkout proton_10.0
         
         # 修复 Termux 路径问题
         echo "修复 Termux 路径问题..."
-        cd wine
         find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
         find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
         
@@ -265,7 +250,7 @@ jobs:
         cd ../..
         
         # 获取版本信息
-        VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0)
+        VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "10.0")
         COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
         echo "VERSION_PROTON=${VERSION_PROTON}-${COMMIT_HASH}" >> $GITHUB_ENV
         
