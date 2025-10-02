@@ -78,7 +78,6 @@ jobs:
           libtiff-dev \
           libxml2-dev \
           libvulkan-dev \
-          vulkan-utils \
           libvulkan1 \
           mesa-vulkan-drivers
 
