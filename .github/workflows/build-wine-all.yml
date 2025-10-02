@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Wine WOW64 (Exp and Proton)
+name: Build AllWine WOW64 (Exp and Proton)
 
 on:
   workflow_dispatch:  # 只保留手动触发
