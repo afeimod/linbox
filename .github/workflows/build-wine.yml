@@ -9,44 +9,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
-    - name: 检出源码和补丁
-      uses: actions/checkout@v4
-      with:
-        path: scripts
-
-    - name: 启用多架构支持
-      run: |
-        sudo dpkg --add-architecture i386
-        sudo apt update
-
-    - name: 修复包管理器
-      run: |
-        sudo apt-get update
-        sudo apt-get install -f -y
-        sudo apt-get autoremove -y
-
-    - name: 安装基本依赖
-      run: |
-        sudo apt-get install -y \
-          build-essential \
-          git \
-          flex \
-          bison \
-          gcc-multilib \
-          g++-multilib \
-          meson \
-          ninja-build \
-          autoconf \
-          wget \
-          xz-utils \
-          gettext \
-          fontconfig \
-          libfreetype6 \
-          libfreetype6-dev
-
     - name: 安装构建依赖
       run: |
         sudo apt update
@@ -96,93 +61,39 @@ jobs:
           libvulkan1 \
           mesa-vulkan-drivers \
           mingw-w64 \
-          wine
+          gettext \
+          libgettextpo-dev \
+          locales \
+          language-pack-zh-hans
 
-    - name: 安装完整的 GStreamer 和 FFmpeg 依赖
+    - name: 安装多媒体和音频依赖
       run: |
         # 先安装 libunwind-dev 解决依赖问题
         sudo apt install -y libunwind-dev
-        
-        # 安装完整的 GStreamer 核心和插件
+        # 然后安装多媒体相关包
         sudo apt install -y \
-          gstreamer1.0-tools \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          gstreamer1.0-plugins-bad \
-          gstreamer1.0-plugins-ugly \
-          gstreamer1.0-libav \
-          gstreamer1.0-gl \
-          gstreamer1.0-pulseaudio \
-          gstreamer1.0-alsa \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
-          libgstreamer-plugins-good1.0-dev \
-          libgstreamer-plugins-bad1.0-dev
-
-        # 安装 FFmpeg 开发库
-        sudo apt install -y \
-          ffmpeg \
-          libavcodec-dev \
-          libavformat-dev \
-          libavutil-dev \
-          libavfilter-dev \
-          libswscale-dev \
-          libswresample-dev \
-          libpostproc-dev \
-          libavdevice-dev
-
-        # 安装多媒体和音频依赖
-        sudo apt install -y \
           libmpg123-dev \
-          libopenal-dev \
-          libvorbis-dev \
-          libflac-dev \
-          libopus-dev \
-          libmad0-dev \
-          libtwolame-dev \
-          libshout3-dev \
-          libsoup2.4-dev \
-          libcurl4-openssl-dev
+          libopenal-dev
 
-    - name: 安装32位依赖
+    - name: 设置中文语言环境
       run: |
-        sudo dpkg --add-architecture i386
-        sudo apt update
-        # 先修复32位依赖
-        sudo apt --fix-broken install -y
-        sudo apt install -y \
-          libx11-dev:i386 \
-          libxext-dev:i386 \
-          libxi-dev:i386 \
-          libxrandr-dev:i386 \
-          libxcursor-dev:i386 \
-          libxcomposite-dev:i386 \
-          libxdamage-dev:i386 \
-          libxfixes-dev:i386 \
-          libxxf86vm-dev:i386 \
-          libxrender-dev:i386 \
-          libxinerama-dev:i386 \
-          libgl-dev:i386 \
-          libglu-dev:i386 \
-          libosmesa6-dev:i386 \
-          libfreetype6-dev:i386 \
-          libfontconfig1-dev:i386 \
-          libdbus-1-dev:i386 \
-          libasound2-dev:i386 \
-          libpulse-dev:i386 \
-          libudev-dev:i386 \
-          libcups2-dev:i386 \
-          libjpeg-dev:i386 \
-          libpng-dev:i386 \
-          libtiff-dev:i386 \
-          libxml2-dev:i386 \
-          libvulkan-dev:i386
+        sudo locale-gen zh_CN.UTF-8
+        sudo update-locale LANG=zh_CN.UTF-8
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+
+    - name: 检查工作目录
+      run: |
+        echo "当前工作目录: $(pwd)"
+        ls -la
           
     - name: 克隆 Wine 源码
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.16
+        git checkout wine-9.9
 
     - name: 彻底修复 Termux 路径问题
       run: |
