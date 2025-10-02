@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build AllWine WOW64 (Exp and Proton)
+name: Build Wine WOW64 (Exp and Proton)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -20,6 +20,8 @@ jobs:
     - name: 安装构建依赖
       run: |
         sudo apt update
+        # 先修复损坏的依赖
+        sudo apt --fix-broken install -y
         sudo apt install -y \
           debootstrap \
           perl \
@@ -64,7 +66,14 @@ jobs:
           libvulkan1 \
           mesa-vulkan-drivers \
           mingw-w64 \
-          wine \
+          wine
+
+    - name: 安装多媒体和音频依赖
+      run: |
+        # 先安装 libunwind-dev 解决依赖问题
+        sudo apt install -y libunwind-dev
+        # 然后安装多媒体相关包
+        sudo apt install -y \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
           libmpg123-dev \
@@ -74,6 +83,8 @@ jobs:
       run: |
         sudo dpkg --add-architecture i386
         sudo apt update
+        # 先修复32位依赖
+        sudo apt --fix-broken install -y
         sudo apt install -y \
           libx11-dev:i386 \
           libxext-dev:i386 \
@@ -100,7 +111,12 @@ jobs:
           libpng-dev:i386 \
           libtiff-dev:i386 \
           libxml2-dev:i386 \
-          libvulkan-dev:i386 \
+          libvulkan-dev:i386
+
+    - name: 安装32位多媒体和音频依赖
+      run: |
+        # 安装32位多媒体相关包
+        sudo apt install -y \
           libgstreamer1.0-dev:i386 \
           libgstreamer-plugins-base1.0-dev:i386 \
           libmpg123-dev:i386 \
