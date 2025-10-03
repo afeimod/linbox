@@ -371,11 +371,11 @@ jobs:
         EOF
 
             # 设置脚本权限
-      chmod +x wine-package/install.sh
-      chmod +x wine-package/test-vulkan.sh
-            chmod +x wine-package/test-media.sh
+        chmod +x wine-package/install.sh
+        chmod +x wine-package/test-vulkan.sh
+        chmod +x wine-package/test-media.sh
 
-      echo "脚本创建完成"
+        echo "脚本创建完成"
 
     - name: 验证打包目录内容
       run: |
