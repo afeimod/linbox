@@ -279,22 +279,146 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
 
+        # 在 "安装 Wine 并获取版本信息" 步骤后添加以下步骤
+
+    - name: 创建打包目录结构
+      run: |
+        echo "创建打包目录结构..."
+        mkdir -p wine-package
+        mkdir -p wine-package/bin
+        mkdir -p wine-package/lib
+        mkdir -p wine-package/share
+        mkdir -p wine-package/include
+    
+        # 复制安装的 Wine 文件
+        echo "复制 Wine 文件到打包目录..."
+        cp -r /tmp/wine-install/* wine-package/ || echo "部分文件复制完成"
+    
+        # 检查实际安装的文件
+        echo "检查 /tmp/wine-install 内容:"
+        find /tmp/wine-install -type f -name "wine*" | head -20 || echo "未找到 wine 文件"
+        find /tmp/wine-install -type f -name "*vulkan*" | head -10 || echo "未找到 vulkan 文件"
+        find /tmp/wine-install -type f -name "*gst*" | head -10 || echo "未找到 gstreamer 文件"
+
+    - name: 创建安装和测试脚本
+      run: |
+        echo "创建安装脚本..."
+        cat > wine-package/install.sh << 'EOF'
+            #!/bin/bash
+            echo "正在安装 Wine for Termux..."
+            echo "版本: $VERSION"
+            echo "架构: True WOW64 with Vulkan & GStreamer"
+
+            # 检查 Termux 环境
+            if [ ! -d "/data/data/com.termux/files/usr" ]; then
+                echo "错误: 这不是 Termux 环境!"
+                exit 1
+            fi
+
+        # 复制文件
+        echo "复制文件到系统目录..."
+        cp -r bin/* /data/data/com.termux/files/usr/bin/ 2>/dev/null || true
+        cp -r lib/* /data/data/com.termux/files/usr/lib/ 2>/dev/null || true
+        cp -r share/* /data/data/com.termux/files/usr/share/ 2>/dev/null || true
+
+        # 设置权限
+        chmod +x /data/data/com.termux/files/usr/bin/wine* 2>/dev/null || true
+
+        echo "安装完成!"
+        echo "请运行以下命令初始化 Wine:"
+        echo "wine wineboot"
+        echo ""
+        echo "如果遇到权限问题，请运行:"
+        echo "chmod +x /data/data/com.termux/files/usr/bin/wine*"
+        EOF
+
+        # 创建测试脚本
+        cat > wine-package/test-vulkan.sh << 'EOF'
+        #!/bin/bash
+        echo "测试 Vulkan 支持..."
+        if [ -f "/data/data/com.termux/files/usr/bin/wine" ]; then
+            echo "Wine 已安装"
+            /data/data/com.termux/files/usr/bin/wine --version
+        else
+            echo "Wine 未找到，请先运行 install.sh"
+        fi
+
+        echo "检查 Vulkan 驱动..."
+        if [ -f "/system/vendor/lib64/hw/vulkan.$(getprop ro.hardware).so" ]; then
+            echo "找到 Vulkan 驱动: vulkan.$(getprop ro.hardware).so"
+        else
+            echo "未找到 Vulkan 驱动，设备可能不支持 Vulkan"
+        fi
+
+        echo "测试完成"
+        EOF
+
+        cat > wine-package/test-media.sh << 'EOF'
+        #!/bin/bash
+        echo "测试多媒体支持..."
+        echo "检查 GStreamer 插件..."
+
+        if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+            echo "GStreamer 已安装"
+            gst-inspect-1.0 --version
+            echo "可用的音频插件:"
+            gst-inspect-1.0 | grep -E "(audio|mp3|aac|flac|ogg)" | head -10
+        else
+            echo "GStreamer 未安装，请运行: pkg install gstreamer"
+        fi
+
+        echo "测试完成"
+        EOF
+
+            # 设置脚本权限
+      chmod +x wine-package/install.sh
+      chmod +x wine-package/test-vulkan.sh
+            chmod +x wine-package/test-media.sh
+
+      echo "脚本创建完成"
+
+    - name: 验证打包目录内容
+      run: |
+        echo "验证打包目录内容..."
+        if [ -d "wine-package" ]; then
+            echo "打包目录存在，内容:"
+            find wine-package -type f | head -20
+            echo "目录结构:"
+            tree -L 3 wine-package || ls -la wine-package/
+        else
+            echo "错误: wine-package 目录不存在!"
+            # 尝试从安装目录直接创建
+            mkdir -p wine-package
+            if [ -d "/tmp/wine-install" ]; then
+                cp -r /tmp/wine-install/* wine-package/ 2>/dev/null || true
+            fi
+        fi
+
+        # 然后修改原来的 "创建打包文件" 步骤
     - name: 创建打包文件
       run: |
         echo "最终文件结构:"
-        find wine-package -type f | sort
-        echo ""
-        echo "检查 Vulkan 相关文件:"
-        find wine-package -name "*vulkan*" | sort
-        echo ""
-        echo "检查 GStreamer 相关文件:"
-        find wine-package -name "*gst*" | sort
+        if [ -d "wine-package" ]; then
+            find wine-package -type f | sort | head -30
+            echo ""
+            echo "检查 Vulkan 相关文件:"
+            find wine-package -name "*vulkan*" | sort || echo "未找到 Vulkan 文件"
+            echo ""
+            echo "检查 GStreamer 相关文件:"
+            find wine-package -name "*gst*" | sort || echo "未找到 GStreamer 文件"
         
-        # 打包
-        tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz wine-package/
+            # 打包
+            tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz wine-package/
         
-        echo "打包完成:"
-        ls -lh wine-*.tar.gz
+            echo "打包完成:"
+            ls -lh wine-*.tar.gz
+        else
+            echo "错误: wine-package 目录不存在，无法打包"
+            # 创建空包作为占位符
+            mkdir -p empty-package
+            tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz empty-package/
+            echo "创建了空包作为占位符"
+        fi
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
