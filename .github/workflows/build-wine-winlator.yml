@@ -1,4 +1,4 @@
-# build-wine.yml
+# build-wine-winlator.yml
 name: Build WinlatorWine (True WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
@@ -95,8 +95,7 @@ jobs:
           vulkan-tools \
           libvulkan1 \
           mesa-vulkan-drivers \
-          mingw-w64 \
-          wine
+          mingw-w64
 
     - name: 安装完整的 GStreamer 和 FFmpeg 依赖
       run: |
@@ -151,6 +150,9 @@ jobs:
         # 先修复32位依赖
         sudo apt --fix-broken install -y
         sudo apt install -y \
+          libc6-dev-i386 \
+          libgcc-11-dev-i386 \
+          libstdc++-11-dev-i386 \
           libx11-dev:i386 \
           libxext-dev:i386 \
           libxi-dev:i386 \
@@ -176,34 +178,16 @@ jobs:
           libpng-dev:i386 \
           libtiff-dev:i386 \
           libxml2-dev:i386 \
-          libvulkan-dev:i386
-          
+          libvulkan-dev:i386 \
+          zlib1g-dev:i386
+
     - name: 克隆 Wine 源码
       run: |
         git clone https://github.com/brunodev85/wine-9.2-custom.git
         cd wine-9.2-custom
         #git checkout wine-9.16
 
-    - name: 彻底修复 Termux 路径问题
-      run: |
-        cd wine-9.2-custom
-        
-        echo "彻底修复 Termux 路径问题..."
-        
-        # 修改所有硬编码的 /tmp 路径
-        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/data/data/com.winlator/files/rootfs/tmp" {} \; | xargs sed -i 's|/data/data/com.winlator/files/rootfs/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-        
-        # 修改 server 目录中的特定路径
-        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        
-        # 修改其他关键文件
-        find . -name "file.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        find . -name "loader.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        find . -name "server.c" -exec sed -i 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        
-        echo "路径修复完成"
-
-    - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
+    - name: 配置和构建真正的 WOW64 Wine（优化配置）
       run: |
         cd wine-9.2-custom
         mkdir -p /tmp/wine-install
@@ -213,7 +197,7 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
 
-        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
+        # 优化配置 - 移除可能导致问题的选项
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -228,23 +212,11 @@ jobs:
           --with-gstreamer \
           --with-gettext \
           --enable-nls \
-          --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
-          --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
-          --without-wayland
+          CFLAGS="-O2 -g -fno-stack-protector" \
+          CXXFLAGS="-O2 -g -fno-stack-protector"
 
         # 构建真正的 WOW64 Wine
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
@@ -259,29 +231,93 @@ jobs:
     - name: 安装 Wine 并获取版本信息
       run: |
         cd wine-9.2-custom/build-wow64
-        # 安装 WOW64 Wine - 忽略可能的错误继续执行
-        make install || echo "安装完成（可能有警告）"
-    
-        # 获取版本信息 - 使用更可靠的方法
+        # 安装 WOW64 Wine
+        make install
+        
+        # 获取版本信息
         cd ..
-        # 使用多种方式尝试获取版本号
         if git describe --tags --abbrev=0 > /dev/null 2>&1; then
             VERSION=$(git describe --tags --abbrev=0)
         elif [ -f VERSION ]; then
             VERSION=$(cat VERSION)
         else
-            # 使用默认版本号
             VERSION="9.2-custom-$(date +%Y%m%d)"
         fi
         
-        # 清理版本号中的特殊字符
         VERSION=$(echo "$VERSION" | tr -d '\n' | sed 's/[^a-zA-Z0-9._-]//g')
         
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
-        echo "版本文件已设置: $VERSION"
+        echo "Wine 版本: $VERSION"
 
-    - name: 创建安装和测试脚本
+    - name: 创建修复运行问题的脚本
+      run: |
+        cd /tmp/wine-install
+        
+        # 创建环境修复脚本
+        cat > fix-runtime.sh << 'EOF'
+        #!/bin/bash
+        echo "修复 Wine 运行时问题..."
+        
+        # 设置正确的环境变量
+        export WINEARCH=win64
+        export WINEPREFIX="$HOME/.wine"
+        export WINEDEBUG="-all"
+        export LD_LIBRARY_PATH="/data/data/com.termux/files/usr/lib:${LD_LIBRARY_PATH}"
+        
+        # 创建必要的目录
+        mkdir -p "$HOME/.wine"
+        mkdir -p "/data/data/com.termux/files/usr/tmp"
+        
+        echo "环境修复完成"
+        echo "使用: source fix-runtime.sh 然后运行 wine your_app.exe"
+        EOF
+        
+        # 创建 EXE 运行测试脚本
+        cat > test-run-exe.sh << 'EOF'
+        #!/bin/bash
+        echo "测试 Wine 运行 EXE 文件的能力..."
+        
+        # 设置环境
+        source ./fix-runtime.sh 2>/dev/null || true
+        
+        # 创建一个简单的 C 程序并编译为 EXE（用于测试）
+        if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+            echo "编译测试程序..."
+            cat > test_hello.c << 'HELLO_EOF'
+            #include <stdio.h>
+            #include <windows.h>
+            int main() {
+                printf("Hello from Wine on Termux!\\n");
+                MessageBoxA(NULL, "Wine is working!", "Success", MB_OK);
+                return 0;
+            }
+            HELLO_EOF
+            x86_64-w64-mingw32-gcc test_hello.c -o test_hello.exe -mwindows
+            echo "运行测试程序..."
+            ./bin/wine test_hello.exe
+        else
+            echo "mingw-w64 未安装，无法编译测试程序"
+            echo "请手动测试: ./bin/wine your_app.exe"
+        fi
+        EOF
+        
+        # 创建调试脚本
+        cat > debug-wine.sh << 'EOF'
+        #!/bin/bash
+        echo "Wine 调试模式..."
+        
+        export WINEDEBUG="+loaddll,+module,+seh"
+        export WINEARCH=win64
+        export WINEPREFIX="$HOME/.wine"
+        
+        echo "调试环境已设置"
+        echo "现在运行: ./bin/wine your_app.exe"
+        echo "要查看详细日志，使用: WINEDEBUG=+all ./bin/wine your_app.exe"
+        EOF
+        
+        chmod +x fix-runtime.sh test-run-exe.sh debug-wine.sh
+
+    - name: 创建安装和配置脚本
       run: |
         cd /tmp/wine-install
         echo "创建安装脚本..."
@@ -297,6 +333,13 @@ jobs:
             exit 1
         fi
 
+        # 备份原有文件
+        echo "备份原有 Wine 文件..."
+        BACKUP_DIR="/data/data/com.termux/files/usr/wine-backup-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+        cp -r /data/data/com.termux/files/usr/bin/wine* "$BACKUP_DIR/" 2>/dev/null || true
+        cp -r /data/data/com.termux/files/usr/lib/wine "$BACKUP_DIR/" 2>/dev/null || true
+
         # 复制文件
         echo "复制文件到系统目录..."
         cp -r bin/* /data/data/com.termux/files/usr/bin/ 2>/dev/null || true
@@ -305,24 +348,34 @@ jobs:
 
         # 设置权限
         chmod +x /data/data/com.termux/files/usr/bin/wine* 2>/dev/null || true
+        
+        # 复制修复脚本
+        cp fix-runtime.sh test-run-exe.sh debug-wine.sh /data/data/com.termux/files/usr/bin/ 2>/dev/null || true
 
         echo "安装完成!"
-        echo "请运行以下命令初始化 Wine:"
+        echo ""
+        echo "重要: 运行以下命令初始化 Wine 环境:"
+        echo "source /data/data/com.termux/files/usr/bin/fix-runtime.sh"
         echo "wine wineboot"
         echo ""
-        echo "如果遇到权限问题，请运行:"
-        echo "chmod +x /data/data/com.termux/files/usr/bin/wine*"
+        echo "测试 EXE 运行:"
+        echo "/data/data/com.termux/files/usr/bin/test-run-exe.sh"
+        echo ""
+        echo "如果遇到问题，使用调试模式:"
+        echo "/data/data/com.termux/files/usr/bin/debug-wine.sh"
         EOF
 
         # 创建测试脚本
         cat > test-vulkan.sh << 'EOF'
         #!/bin/bash
         echo "测试 Vulkan 支持..."
-        if [ -f "/data/data/com.termux/files/usr/bin/wine" ]; then
+        source ./fix-runtime.sh 2>/dev/null || true
+        
+        if [ -f "./bin/wine" ]; then
             echo "Wine 已安装"
-            /data/data/com.termux/files/usr/bin/wine --version
+            ./bin/wine --version
         else
-            echo "Wine 未找到，请先运行 install.sh"
+            echo "Wine 未找到"
         fi
 
         echo "检查 Vulkan 驱动..."
@@ -346,7 +399,7 @@ jobs:
             echo "可用的音频插件:"
             gst-inspect-1.0 | grep -E "(audio|mp3|aac|flac|ogg)" | head -10
         else
-            echo "GStreamer 未安装，请运行: pkg install gstreamer"
+            echo "GStreamer 未安装"
         fi
 
         echo "测试完成"
@@ -370,8 +423,6 @@ jobs:
             
             echo "检查关键文件:"
             find /tmp/wine-install -name "wine*" -type f | head -10
-            find /tmp/wine-install -name "*vulkan*" -type f | head -10
-            find /tmp/wine-install -name "*gst*" -type f | head -10
         else
             echo "错误: /tmp/wine-install 目录不存在!"
         fi
@@ -381,14 +432,12 @@ jobs:
         echo "创建打包文件..."
         cd /tmp
         
-        # 获取版本号，如果环境变量不存在则使用默认值
         if [ -z "$VERSION" ]; then
             VERSION="9.2-custom-$(date +%Y%m%d)"
         fi
         
         echo "使用版本号: $VERSION"
         
-        # 检查安装目录是否存在
         if [ ! -d "wine-install" ]; then
             echo "错误: wine-install 目录不存在!"
             ls -la /tmp/
@@ -398,13 +447,10 @@ jobs:
         echo "打包目录内容:"
         ls -la wine-install/
         
-        # 直接打包安装目录，使用确定的版本号
         tar -czf "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" wine-install/
         
-        # 检查打包是否成功
         if [ $? -eq 0 ] && [ -f "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" ]; then
             echo "打包成功!"
-            # 移动回工作目录
             mv "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" $GITHUB_WORKSPACE/
             
             echo "打包文件信息:"
@@ -413,29 +459,6 @@ jobs:
         else
             echo "打包失败!"
             ls -la /tmp/
-            exit 1
-        fi
-
-    - name: 创建打包文件（备用方案）
-      if: failure()
-      run: |
-        echo "使用备用打包方案..."
-        cd /tmp
-        
-        # 使用固定版本号
-        FALLBACK_VERSION="9.2-custom-$(date +%Y%m%d)"
-        echo "使用备用版本号: $FALLBACK_VERSION"
-        
-        # 确保安装目录存在
-        if [ -d "wine-install" ]; then
-            tar -czf "wine-${FALLBACK_VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" wine-install/
-            mv "wine-${FALLBACK_VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" $GITHUB_WORKSPACE/
-            echo "备用打包完成"
-            
-            # 设置备用版本到环境变量
-            echo "VERSION=${FALLBACK_VERSION}" >> $GITHUB_ENV
-        else
-            echo "错误: wine-install 目录不存在，无法打包"
             exit 1
         fi
 
@@ -453,52 +476,33 @@ jobs:
         files: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      continue-on-error: true  # 如果发布失败也不停止工作流
+      continue-on-error: true
 
-    - name: 输出版本信息和使用说明
+    - name: 输出使用说明
       run: |
         echo "✅ True WOW64 Wine with Vulkan and Full GStreamer 构建完成"
         echo "版本号: $VERSION"
-        echo "架构: x86_64 True WOW64"
-        echo "环境: Termux"
-        echo "图形 API: Vulkan 支持已启用"
-        echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
         echo ""
-        echo "修复的问题:"
-        echo "✓ 无法运行 EXE 文件"
-        echo "✓ 中文环境支持"
-        echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
-        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ 字体配置"
+        echo "针对 EXE 运行问题的修复:"
+        echo "✓ 优化了构建配置参数"
+        echo "✓ 添加了运行时环境修复脚本"
+        echo "✓ 添加了 EXE 运行测试脚本"
+        echo "✓ 添加了调试模式脚本"
         echo ""
-        echo "GStreamer 插件包含:"
-        echo "- 核心插件 (base, good, bad, ugly)"
-        echo "- FFmpeg 插件 (libav)"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
-        echo "- 音频输出 (ALSA、PulseAudio)"
+        echo "使用步骤:"
+        echo "1. 解压: tar -xzf wine-$VERSION-*.tar.gz"
+        echo "2. 进入: cd wine-install"
+        echo "3. 安装: ./install.sh"
+        echo "4. 设置环境: source /data/data/com.termux/files/usr/bin/fix-runtime.sh"
+        echo "5. 初始化: wine wineboot"
+        echo "6. 测试运行: test-run-exe.sh"
         echo ""
-        echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-true-wow64-vulkan-gstreamer-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
-        echo "3. 进入目录: cd wine-install"
-        echo "4. 运行安装: ./install.sh"
-        echo "5. 重新加载环境: source ~/.bashrc"
-        echo "6. 初始化: wine wineboot"
-        echo "7. 测试多媒体: ./test-media.sh"
-        echo "8. 测试 Vulkan: ./test-vulkan.sh"
+        echo "如果仍有问题:"
+        echo "- 运行: debug-wine.sh 进入调试模式"
+        echo "- 检查: WINEDEBUG=+all wine your_app.exe 查看详细日志"
+        echo "- 确保: 设置了正确的 WINEPREFIX 和 WINEARCH"
         echo ""
-        echo "GStreamer 插件安装:"
-        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo ""
-        echo "Vulkan 驱动安装:"
-        echo "pkg install mesa-vulkan-driver"
-        echo ""
-        echo "渲染模式切换:"
-        echo "- Vulkan: 默认模式"
-        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
-        echo ""
-        echo "故障排除:"
-        echo "- 运行 ./test-media.sh 诊断多媒体问题"
-        echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
-        echo "- 检查设备多媒体和 Vulkan 支持"
+        echo "重要环境变量:"
+        echo "export WINEARCH=win64"
+        echo "export WINEPREFIX=\"\$HOME/.wine\""
+        echo "export WINEDEBUG=\"-all\"  # 禁用调试输出以获得更好性能"
