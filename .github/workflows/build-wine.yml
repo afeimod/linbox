@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.9
+        #git checkout wine-9.9
 
     - name: 彻底修复 Termux 路径问题
       run: |
