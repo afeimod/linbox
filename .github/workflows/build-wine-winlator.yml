@@ -143,44 +143,6 @@ jobs:
           libsoup2.4-dev \
           libcurl4-openssl-dev
 
-    - name: 安装32位依赖
-      run: |
-        sudo dpkg --add-architecture i386
-        sudo apt update
-        # 先修复32位依赖
-        sudo apt --fix-broken install -y
-        sudo apt install -y \
-          libc6-dev-i386 \
-          libgcc-11-dev-i386 \
-          libstdc++-11-dev-i386 \
-          libx11-dev:i386 \
-          libxext-dev:i386 \
-          libxi-dev:i386 \
-          libxrandr-dev:i386 \
-          libxcursor-dev:i386 \
-          libxcomposite-dev:i386 \
-          libxdamage-dev:i386 \
-          libxfixes-dev:i386 \
-          libxxf86vm-dev:i386 \
-          libxrender-dev:i386 \
-          libxinerama-dev:i386 \
-          libgl-dev:i386 \
-          libglu-dev:i386 \
-          libosmesa6-dev:i386 \
-          libfreetype6-dev:i386 \
-          libfontconfig1-dev:i386 \
-          libdbus-1-dev:i386 \
-          libasound2-dev:i386 \
-          libpulse-dev:i386 \
-          libudev-dev:i386 \
-          libcups2-dev:i386 \
-          libjpeg-dev:i386 \
-          libpng-dev:i386 \
-          libtiff-dev:i386 \
-          libxml2-dev:i386 \
-          libvulkan-dev:i386 \
-          zlib1g-dev:i386
-
     - name: 克隆 Wine 源码
       run: |
         git clone https://github.com/brunodev85/wine-9.2-custom.git
