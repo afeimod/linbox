@@ -154,15 +154,25 @@ jobs:
         cd wine-9.2-custom
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
-        # 修复 Termux 路径问题
+    
+        # 增强的 Termux 路径修复
         echo "修复 Termux 路径问题..."
-        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/data/data/com.winlator/files/rootfs/tmp" {} \; | xargs sed -i 's|/data/data/com.winlator/files/rootfs/tmp/|/data/data/com.termux/files/usr/tmp/|g'
-        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
-        # 创建构建目录
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec sed -i \
+          -e 's|/data/data/com.winlator/files/rootfs/tmp|/data/data/com.termux/files/usr/tmp|g' \
+          -e 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' \
+          -e 's|unix/data/data/com.termux/files/home/|/data/data/com.termux/files/home/|g' \
+          {} \;
+    
+        # 修复 server 目录中的路径
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i \
+          -e 's|L"unix\\\\data\\\\data\\\\com.termux\\\\files\\\\home"|L"/data/data/com.termux/files/home"|g' \
+          -e 's|unix/data/data/com.termux/files/home/|/data/data/com.termux/files/home/|g' \
+          {} \;
+    
         mkdir -p build-wow64
         cd build-wow64
-
-        # 优化配置 - 移除可能导致问题的选项
+    
+        # 优化配置，添加路径修复选项
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -180,10 +190,9 @@ jobs:
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
-          CFLAGS="-O2 -g -fno-stack-protector" \
-          CXXFLAGS="-O2 -g -fno-stack-protector"
-
-        # 构建真正的 WOW64 Wine
+          CFLAGS="-O2 -g -fno-stack-protector -DTERMUX_PREFIX='\"/data/data/com.termux/files/usr\"'" \
+          CXXFLAGS="-O2 -g -fno-stack-protector -DTERMUX_PREFIX='\"/data/data/com.termux/files/usr\"'"
+    
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
         make -j$(nproc)
 
