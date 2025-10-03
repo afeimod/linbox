@@ -160,6 +160,7 @@ jobs:
         find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec sed -i \
           -e 's|/data/data/com.winlator/files/rootfs/tmp|/data/data/com.termux/files/usr/tmp|g' \
           -e 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' \
+          -e 's|"/unix/"|"/"|g' \
           -e 's|unix/data/data/com.termux/files/home/|/data/data/com.termux/files/home/|g' \
           {} \;
     
