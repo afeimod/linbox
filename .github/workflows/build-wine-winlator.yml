@@ -262,22 +262,24 @@ jobs:
         # 安装 WOW64 Wine - 忽略可能的错误继续执行
         make install || echo "安装完成（可能有警告）"
     
-        # 获取版本信息
+        # 获取版本信息 - 使用更可靠的方法
         cd ..
         # 使用多种方式尝试获取版本号
         if git describe --tags --abbrev=0 > /dev/null 2>&1; then
             VERSION=$(git describe --tags --abbrev=0)
+        elif [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
         else
-            # 检查 VERSION 文件或其他版本来源
-            if [ -f VERSION ]; then
-                VERSION=$(cat VERSION)
-            else
-                # 使用默认版本号
-                VERSION="9.2-custom-$(date +%Y%m%d)"
-            fi
+            # 使用默认版本号
+            VERSION="9.2-custom-$(date +%Y%m%d)"
         fi
+        
+        # 清理版本号中的特殊字符
+        VERSION=$(echo "$VERSION" | tr -d '\n' | sed 's/[^a-zA-Z0-9._-]//g')
+        
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
+        echo "版本文件已设置: $VERSION"
 
     - name: 创建安装和测试脚本
       run: |
@@ -379,15 +381,63 @@ jobs:
         echo "创建打包文件..."
         cd /tmp
         
-        # 直接打包安装目录
-        tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz wine-install/
+        # 获取版本号，如果环境变量不存在则使用默认值
+        if [ -z "$VERSION" ]; then
+            VERSION="9.2-custom-$(date +%Y%m%d)"
+        fi
         
-        # 移动回工作目录
-        mv wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz $GITHUB_WORKSPACE/
+        echo "使用版本号: $VERSION"
         
-        echo "打包完成:"
-        cd $GITHUB_WORKSPACE
-        ls -lh wine-*.tar.gz
+        # 检查安装目录是否存在
+        if [ ! -d "wine-install" ]; then
+            echo "错误: wine-install 目录不存在!"
+            ls -la /tmp/
+            exit 1
+        fi
+        
+        echo "打包目录内容:"
+        ls -la wine-install/
+        
+        # 直接打包安装目录，使用确定的版本号
+        tar -czf "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" wine-install/
+        
+        # 检查打包是否成功
+        if [ $? -eq 0 ] && [ -f "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" ]; then
+            echo "打包成功!"
+            # 移动回工作目录
+            mv "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" $GITHUB_WORKSPACE/
+            
+            echo "打包文件信息:"
+            cd $GITHUB_WORKSPACE
+            ls -lh "wine-${VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz"
+        else
+            echo "打包失败!"
+            ls -la /tmp/
+            exit 1
+        fi
+
+    - name: 创建打包文件（备用方案）
+      if: failure()
+      run: |
+        echo "使用备用打包方案..."
+        cd /tmp
+        
+        # 使用固定版本号
+        FALLBACK_VERSION="9.2-custom-$(date +%Y%m%d)"
+        echo "使用备用版本号: $FALLBACK_VERSION"
+        
+        # 确保安装目录存在
+        if [ -d "wine-install" ]; then
+            tar -czf "wine-${FALLBACK_VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" wine-install/
+            mv "wine-${FALLBACK_VERSION}-true-wow64-vulkan-gstreamer-termux.tar.gz" $GITHUB_WORKSPACE/
+            echo "备用打包完成"
+            
+            # 设置备用版本到环境变量
+            echo "VERSION=${FALLBACK_VERSION}" >> $GITHUB_ENV
+        else
+            echo "错误: wine-install 目录不存在，无法打包"
+            exit 1
+        fi
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
@@ -403,6 +453,7 @@ jobs:
         files: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      continue-on-error: true  # 如果发布失败也不停止工作流
 
     - name: 输出版本信息和使用说明
       run: |
