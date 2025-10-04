@@ -78,7 +78,6 @@ jobs:
           libgstreamer-plugins-base1.0-dev \
           libgstreamer-plugins-good1.0-dev \
           libgstreamer-plugins-bad1.0-dev \
-          libgstreamer-plugins-ugly1.0-dev \
           gstreamer1.0-libav \
           libmpg123-dev \
           libopenal-dev \
