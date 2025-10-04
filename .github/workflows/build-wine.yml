@@ -132,12 +132,13 @@ jobs:
         mkdir -p dlls/wmvdecod
         mkdir -p dlls/wmadmod  
         mkdir -p dlls/wmilib
+        mkdir -p dlls/wmcodecdsp
         
         # 创建 wmvdecod.dll 的完整实现
         cat > dlls/wmvdecod/Makefile.in << 'EOF'
         MODULE    = wmvdecod.dll
         IMPORTS   = msvcrt kernel32 ole32 oleaut32
-        EXTRADEFS = -D_WIN32_WINNT=0x0600
+        EXTRADEFS = -D_WIN32_WINNT=0x0600 -DINITGUID
         PARENTSRC = ../wmcodecdsp
         
         SOURCES = \
@@ -145,6 +146,7 @@ jobs:
         EOF
         
         cat > dlls/wmvdecod/main.c << 'EOF'
+        #define INITGUID
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -154,9 +156,68 @@ jobs:
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmvdecod);
         
-        // COM 类工厂
+        // 定义必要的 GUID
+        DEFINE_GUID(CLSID_WMVDecoder, 0x82d353df, 0x90bd, 0x4382, 0x8b, 0xc2, 0x3f, 0x61, 0x92, 0xb7, 0x6e, 0x34);
+        
+        // 简单的 IUnknown 实现
+        typedef struct {
+            IUnknown IUnknown_iface;
+            LONG ref;
+        } UnknownImpl;
+        
+        static inline UnknownImpl *impl_from_IUnknown(IUnknown *iface)
+        {
+            return CONTAINING_RECORD(iface, UnknownImpl, IUnknown_iface);
+        }
+        
+        static HRESULT WINAPI UnknownImpl_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IUnknown)) {
+                *ppv = &This->IUnknown_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
+            }
+            
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
+        }
+        
+        static ULONG WINAPI UnknownImpl_AddRef(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
+        }
+        
+        static ULONG WINAPI UnknownImpl_Release(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
+        }
+        
+        static const IUnknownVtbl UnknownImpl_Vtbl = {
+            UnknownImpl_QueryInterface,
+            UnknownImpl_AddRef,
+            UnknownImpl_Release
+        };
+        
+        // COM 类工厂实现
         typedef struct {
             IClassFactory IClassFactory_iface;
+            LONG ref;
         } ClassFactory;
         
         static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
@@ -166,37 +227,71 @@ jobs:
         
         static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
         {
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
             if (IsEqualGUID(riid, &IID_IUnknown) ||
-                IsEqualGUID(riid, &IID_IClassFactory))
-            {
-                *ppv = iface;
-                IClassFactory_AddRef(iface);
-                return S_OK;
+                IsEqualGUID(riid, &IID_IClassFactory)) {
+                *ppv = &This->IClassFactory_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
             }
             
-            *ppv = NULL;
-            return E_NOINTERFACE;
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
         }
         
         static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
         {
-            return 2;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
         }
         
         static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
         {
-            return 1;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
         }
         
         static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
                                                          REFIID riid, void **ppv)
         {
-            FIXME("ClassFactory_CreateInstance stub\n");
-            return CLASS_E_CLASSNOTAVAILABLE;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            UnknownImpl *obj;
+            HRESULT hr;
+            
+            TRACE("(%p, %p, %s, %p)\n", This, pUnkOuter, debugstr_guid(riid), ppv);
+            
+            if (pUnkOuter)
+                return CLASS_E_NOAGGREGATION;
+            
+            obj = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*obj));
+            if (!obj)
+                return E_OUTOFMEMORY;
+            
+            obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
+            obj->ref = 1;
+            
+            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            IUnknown_Release(&obj->IUnknown_iface);
+            
+            return hr;
         }
         
         static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
         {
+            TRACE("(%p, %d)\n", iface, fLock);
             return S_OK;
         }
         
@@ -208,13 +303,14 @@ jobs:
             ClassFactory_LockServer
         };
         
-        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        static ClassFactory class_factory = { { &ClassFactoryVtbl }, 1 };
         
         // DLL 入口点
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
-            if (reason == DLL_PROCESS_ATTACH)
-            {
+            TRACE("(%p, %u, %p)\n", instance, reason, reserved);
+            
+            if (reason == DLL_PROCESS_ATTACH) {
                 DisableThreadLibraryCalls(instance);
             }
             return TRUE;
@@ -223,37 +319,39 @@ jobs:
         // COM 服务器函数
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
-            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
-            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
-            {
-                *ppv = &class_factory;
-                return S_OK;
+            if (IsEqualGUID(rclsid, &CLSID_WMVDecoder)) {
+                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
+            FIXME("class %s not implemented\n", debugstr_guid(rclsid));
             *ppv = NULL;
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         
         HRESULT WINAPI DllCanUnloadNow(void)
         {
+            TRACE("()\n");
             return S_FALSE;
         }
         
         HRESULT WINAPI DllRegisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         
         HRESULT WINAPI DllUnregisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         
         // 基本的 WMV 解码器存根函数
         HRESULT WINAPI WMVDecodeCreate( void **ppDecoder )
         {
-            FIXME("WMVDecodeCreate stub\n");
+            FIXME("(%p) stub\n", ppDecoder);
             if (ppDecoder) *ppDecoder = NULL;
             return E_NOTIMPL;
         }
@@ -263,13 +361,14 @@ jobs:
         cat > dlls/wmadmod/Makefile.in << 'EOF'
         MODULE    = wmadmod.dll
         IMPORTS   = msvcrt kernel32 ole32 oleaut32
-        EXTRADEFS = -D_WIN32_WINNT=0x0600
+        EXTRADEFS = -D_WIN32_WINNT=0x0600 -DINITGUID
         
         SOURCES = \
             main.c
         EOF
         
         cat > dlls/wmadmod/main.c << 'EOF'
+        #define INITGUID
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -279,9 +378,68 @@ jobs:
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmadmod);
         
-        // COM 类工厂
+        // 定义必要的 GUID
+        DEFINE_GUID(CLSID_WMADecoder, 0x2eeb4adf, 0x9148, 0x4d85, 0x9d, 0xf6, 0x58, 0x9c, 0xc7, 0xf2, 0xbb, 0x0f);
+        
+        // 简单的 IUnknown 实现
+        typedef struct {
+            IUnknown IUnknown_iface;
+            LONG ref;
+        } UnknownImpl;
+        
+        static inline UnknownImpl *impl_from_IUnknown(IUnknown *iface)
+        {
+            return CONTAINING_RECORD(iface, UnknownImpl, IUnknown_iface);
+        }
+        
+        static HRESULT WINAPI UnknownImpl_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IUnknown)) {
+                *ppv = &This->IUnknown_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
+            }
+            
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
+        }
+        
+        static ULONG WINAPI UnknownImpl_AddRef(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
+        }
+        
+        static ULONG WINAPI UnknownImpl_Release(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
+        }
+        
+        static const IUnknownVtbl UnknownImpl_Vtbl = {
+            UnknownImpl_QueryInterface,
+            UnknownImpl_AddRef,
+            UnknownImpl_Release
+        };
+        
+        // COM 类工厂实现
         typedef struct {
             IClassFactory IClassFactory_iface;
+            LONG ref;
         } ClassFactory;
         
         static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
@@ -291,37 +449,71 @@ jobs:
         
         static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
         {
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
             if (IsEqualGUID(riid, &IID_IUnknown) ||
-                IsEqualGUID(riid, &IID_IClassFactory))
-            {
-                *ppv = iface;
-                IClassFactory_AddRef(iface);
-                return S_OK;
+                IsEqualGUID(riid, &IID_IClassFactory)) {
+                *ppv = &This->IClassFactory_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
             }
             
-            *ppv = NULL;
-            return E_NOINTERFACE;
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
         }
         
         static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
         {
-            return 2;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
         }
         
         static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
         {
-            return 1;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
         }
         
         static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
                                                          REFIID riid, void **ppv)
         {
-            FIXME("ClassFactory_CreateInstance stub\n");
-            return CLASS_E_CLASSNOTAVAILABLE;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            UnknownImpl *obj;
+            HRESULT hr;
+            
+            TRACE("(%p, %p, %s, %p)\n", This, pUnkOuter, debugstr_guid(riid), ppv);
+            
+            if (pUnkOuter)
+                return CLASS_E_NOAGGREGATION;
+            
+            obj = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*obj));
+            if (!obj)
+                return E_OUTOFMEMORY;
+            
+            obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
+            obj->ref = 1;
+            
+            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            IUnknown_Release(&obj->IUnknown_iface);
+            
+            return hr;
         }
         
         static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
         {
+            TRACE("(%p, %d)\n", iface, fLock);
             return S_OK;
         }
         
@@ -333,13 +525,14 @@ jobs:
             ClassFactory_LockServer
         };
         
-        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        static ClassFactory class_factory = { { &ClassFactoryVtbl }, 1 };
         
         // DLL 入口点
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
-            if (reason == DLL_PROCESS_ATTACH)
-            {
+            TRACE("(%p, %u, %p)\n", instance, reason, reserved);
+            
+            if (reason == DLL_PROCESS_ATTACH) {
                 DisableThreadLibraryCalls(instance);
             }
             return TRUE;
@@ -348,37 +541,39 @@ jobs:
         // COM 服务器函数
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
-            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
-            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
-            {
-                *ppv = &class_factory;
-                return S_OK;
+            if (IsEqualGUID(rclsid, &CLSID_WMADecoder)) {
+                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
+            FIXME("class %s not implemented\n", debugstr_guid(rclsid));
             *ppv = NULL;
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         
         HRESULT WINAPI DllCanUnloadNow(void)
         {
+            TRACE("()\n");
             return S_FALSE;
         }
         
         HRESULT WINAPI DllRegisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         
         HRESULT WINAPI DllUnregisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         
         // 基本的 WMA 解码器存根函数
         HRESULT WINAPI WMADecodeCreate( void **ppDecoder )
         {
-            FIXME("WMADecodeCreate stub\n");
+            FIXME("(%p) stub\n", ppDecoder);
             if (ppDecoder) *ppDecoder = NULL;
             return E_NOTIMPL;
         }
@@ -432,19 +627,18 @@ jobs:
         }
         EOF
         
-        # 创建其他相关的 Windows Media 组件
-        mkdir -p dlls/wmcodecdsp
-        
+        # 创建 wmcodecdsp.dll 的完整实现
         cat > dlls/wmcodecdsp/Makefile.in << 'EOF'
         MODULE    = wmcodecdsp.dll
         IMPORTS   = msvcrt kernel32 ole32 oleaut32
-        EXTRADEFS = -D_WIN32_WINNT=0x0600
+        EXTRADEFS = -D_WIN32_WINNT=0x0600 -DINITGUID
         
         SOURCES = \
             main.c
         EOF
         
         cat > dlls/wmcodecdsp/main.c << 'EOF'
+        #define INITGUID
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -454,9 +648,68 @@ jobs:
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmcodecdsp);
         
-        // COM 类工厂
+        // 定义必要的 GUID
+        DEFINE_GUID(CLSID_WMCodec, 0xd3d9a0e2, 0x3a3a, 0x4a1a, 0x89, 0x67, 0x66, 0x89, 0x1a, 0x2b, 0x6c, 0x3d);
+        
+        // 简单的 IUnknown 实现
+        typedef struct {
+            IUnknown IUnknown_iface;
+            LONG ref;
+        } UnknownImpl;
+        
+        static inline UnknownImpl *impl_from_IUnknown(IUnknown *iface)
+        {
+            return CONTAINING_RECORD(iface, UnknownImpl, IUnknown_iface);
+        }
+        
+        static HRESULT WINAPI UnknownImpl_QueryInterface(IUnknown *iface, REFIID riid, void **ppv)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IUnknown)) {
+                *ppv = &This->IUnknown_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
+            }
+            
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
+        }
+        
+        static ULONG WINAPI UnknownImpl_AddRef(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
+        }
+        
+        static ULONG WINAPI UnknownImpl_Release(IUnknown *iface)
+        {
+            UnknownImpl *This = impl_from_IUnknown(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
+        }
+        
+        static const IUnknownVtbl UnknownImpl_Vtbl = {
+            UnknownImpl_QueryInterface,
+            UnknownImpl_AddRef,
+            UnknownImpl_Release
+        };
+        
+        // COM 类工厂实现
         typedef struct {
             IClassFactory IClassFactory_iface;
+            LONG ref;
         } ClassFactory;
         
         static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
@@ -466,37 +719,71 @@ jobs:
         
         static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
         {
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            TRACE("(%p, %s, %p)\n", This, debugstr_guid(riid), ppv);
+            
             if (IsEqualGUID(riid, &IID_IUnknown) ||
-                IsEqualGUID(riid, &IID_IClassFactory))
-            {
-                *ppv = iface;
-                IClassFactory_AddRef(iface);
-                return S_OK;
+                IsEqualGUID(riid, &IID_IClassFactory)) {
+                *ppv = &This->IClassFactory_iface;
+            } else {
+                FIXME("interface %s not implemented\n", debugstr_guid(riid));
+                *ppv = NULL;
+                return E_NOINTERFACE;
             }
             
-            *ppv = NULL;
-            return E_NOINTERFACE;
+            IUnknown_AddRef((IUnknown*)*ppv);
+            return S_OK;
         }
         
         static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
         {
-            return 2;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedIncrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            return ref;
         }
         
         static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
         {
-            return 1;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            ULONG ref = InterlockedDecrement(&This->ref);
+            TRACE("(%p) ref=%u\n", This, ref);
+            
+            if (ref == 0) {
+                HeapFree(GetProcessHeap(), 0, This);
+            }
+            
+            return ref;
         }
         
         static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
                                                          REFIID riid, void **ppv)
         {
-            FIXME("ClassFactory_CreateInstance stub\n");
-            return CLASS_E_CLASSNOTAVAILABLE;
+            ClassFactory *This = impl_from_IClassFactory(iface);
+            UnknownImpl *obj;
+            HRESULT hr;
+            
+            TRACE("(%p, %p, %s, %p)\n", This, pUnkOuter, debugstr_guid(riid), ppv);
+            
+            if (pUnkOuter)
+                return CLASS_E_NOAGGREGATION;
+            
+            obj = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*obj));
+            if (!obj)
+                return E_OUTOFMEMORY;
+            
+            obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
+            obj->ref = 1;
+            
+            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            IUnknown_Release(&obj->IUnknown_iface);
+            
+            return hr;
         }
         
         static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
         {
+            TRACE("(%p, %d)\n", iface, fLock);
             return S_OK;
         }
         
@@ -508,13 +795,14 @@ jobs:
             ClassFactory_LockServer
         };
         
-        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        static ClassFactory class_factory = { { &ClassFactoryVtbl }, 1 };
         
         // DLL 入口点
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
-            if (reason == DLL_PROCESS_ATTACH)
-            {
+            TRACE("(%p, %u, %p)\n", instance, reason, reserved);
+            
+            if (reason == DLL_PROCESS_ATTACH) {
                 DisableThreadLibraryCalls(instance);
             }
             return TRUE;
@@ -523,30 +811,32 @@ jobs:
         // COM 服务器函数
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
-            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
-            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
-            {
-                *ppv = &class_factory;
-                return S_OK;
+            if (IsEqualGUID(rclsid, &CLSID_WMCodec)) {
+                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
+            FIXME("class %s not implemented\n", debugstr_guid(rclsid));
             *ppv = NULL;
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         
         HRESULT WINAPI DllCanUnloadNow(void)
         {
+            TRACE("()\n");
             return S_FALSE;
         }
         
         HRESULT WINAPI DllRegisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         
         HRESULT WINAPI DllUnregisterServer(void)
         {
+            TRACE("()\n");
             return S_OK;
         }
         EOF
@@ -827,6 +1117,81 @@ jobs:
         
         chmod +x wine-package/test-windows-media.sh
 
+    - name: 创建多媒体测试脚本
+      run: |
+        cat > wine-package/test-media.sh << 'EOF'
+        #!/bin/bash
+        echo "多媒体环境测试工具"
+        echo "=================="
+        
+        echo "1. 检查 GStreamer 环境变量"
+        echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"
+        echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
+        echo "GST_REGISTRY: $GST_REGISTRY"
+        echo ""
+        
+        echo "2. 检查 GStreamer 插件"
+        echo "查找 GStreamer 插件目录..."
+        find /data/data/com.termux/files/usr -name "libgst*" 2>/dev/null | head -20
+        echo ""
+        
+        echo "3. 检查 FFmpeg 支持"
+        echo "查找 FFmpeg 相关库..."
+        find /data/data/com.termux/files/usr -name "*avcodec*" -o -name "*avformat*" -o -name "*avutil*" 2>/dev/null | head -10
+        echo ""
+        
+        echo "4. 检查 Wine GStreamer 支持"
+        echo "查找 Wine 中的 GStreamer 相关文件..."
+        find /data/data/com.termux/files/usr/opt/wine -name "*gst*" 2>/dev/null | head -10
+        
+        echo ""
+        echo "5. 测试 GStreamer 功能（需要安装 GStreamer 包）"
+        echo "安装 GStreamer: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+        echo ""
+        echo "6. 测试 FFmpeg 解码器"
+        echo "安装 FFmpeg: pkg install ffmpeg"
+        echo "测试命令: ffmpeg -decoders | grep -E 'h264|hevc|vp8|vp9|aac|mp3'"
+        EOF
+        
+        chmod +x wine-package/test-media.sh
+        
+        # 创建 Vulkan 测试脚本
+        cat > wine-package/test-vulkan.sh << 'EOF'
+        #!/bin/bash
+        echo "Vulkan 环境测试工具"
+        echo "=================="
+        
+        echo "1. 检查 Vulkan 环境变量"
+        echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
+        echo "VK_LAYER_PATH: $VK_LAYER_PATH"
+        echo ""
+        
+        echo "2. 检查 Vulkan ICD 文件"
+        if [ -f "$VK_ICD_FILENAMES" ]; then
+            echo "Vulkan ICD 文件存在: $VK_ICD_FILENAMES"
+            echo "内容:"
+            cat "$VK_ICD_FILENAMES"
+        else
+            echo "错误: Vulkan ICD 文件不存在: $VK_ICD_FILENAMES"
+        fi
+        
+        echo ""
+        echo "3. 检查 Vulkan 库"
+        echo "查找 libvulkan.so..."
+        find /data/data/com.termux/files/usr -name "libvulkan.so*" 2>/dev/null || echo "未找到 libvulkan.so"
+        
+        echo ""
+        echo "4. 检查 Wine Vulkan 支持"
+        echo "查找 winevulkan.dll..."
+        find /data/data/com.termux/files/usr/opt/wine -name "*vulkan*" 2>/dev/null | head -10
+        
+        echo ""
+        echo "5. 测试 Vulkan 应用（如果有）"
+        echo "注意: 需要安装 vulkan-tools 包来测试: pkg install vulkan-tools"
+        EOF
+        
+        chmod +x wine-package/test-vulkan.sh
+
     - name: 更新安装脚本以包含 Windows Media 支持
       run: |
         cat > wine-package/install.sh << 'EOF'
@@ -1036,6 +1401,7 @@ jobs:
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
         echo "✓ Windows Media 格式支持"
         echo "✓ COM 接口实现（解决 DllGetClassObject 链接错误）"
+        echo "✓ GUID 定义（解决 IID_IClassFactory 和 IID_IUnknown 链接错误）"
         echo "✓ 字体配置"
         echo ""
         echo "使用说明:"
