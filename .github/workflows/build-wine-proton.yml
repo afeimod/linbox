@@ -136,6 +136,7 @@ jobs:
           --with-vulkan \
           --with-alsa \
           --with-pulse \
+          --with-cups \
           --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
@@ -147,11 +148,7 @@ jobs:
           --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
-          --disable-debug \
           --disable-tests \
-          --without-piper \
-          --without-xinerama \
-          --without-cups \
           --without-capi \
           --without-coreaudio \
           --without-gphoto \
