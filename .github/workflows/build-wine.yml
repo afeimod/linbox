@@ -106,9 +106,6 @@ jobs:
         # 创建补丁目录
         mkdir -p patches
         
-        # 下载并应用 wmvdecod.dll 相关补丁
-        echo "下载 Windows Media 解码器补丁..."
-        
         # wmvdecod.dll (Windows Media Video Decoder) 补丁
         cat > patches/wmvdecod.patch << 'EOF'
         --- a/configure.ac
@@ -183,7 +180,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -239,7 +237,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -283,8 +282,10 @@ jobs:
             obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
             obj->ref = 1;
             
-            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
-            IUnknown_Release(&obj->IUnknown_iface);
+            // 通过 vtable 调用 QueryInterface
+            hr = obj->IUnknown_iface.lpVtbl->QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            // 通过 vtable 调用 Release
+            obj->IUnknown_iface.lpVtbl->Release(&obj->IUnknown_iface);
             
             return hr;
         }
@@ -322,7 +323,8 @@ jobs:
             TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
             if (IsEqualGUID(rclsid, &CLSID_WMVDecoder)) {
-                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
+                // 通过 vtable 调用 QueryInterface
+                return class_factory.IClassFactory_iface.lpVtbl->QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
             FIXME("class %s not implemented\n", debugstr_guid(rclsid));
@@ -405,7 +407,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -461,7 +464,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -505,8 +509,10 @@ jobs:
             obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
             obj->ref = 1;
             
-            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
-            IUnknown_Release(&obj->IUnknown_iface);
+            // 通过 vtable 调用 QueryInterface
+            hr = obj->IUnknown_iface.lpVtbl->QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            // 通过 vtable 调用 Release
+            obj->IUnknown_iface.lpVtbl->Release(&obj->IUnknown_iface);
             
             return hr;
         }
@@ -544,7 +550,8 @@ jobs:
             TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
             if (IsEqualGUID(rclsid, &CLSID_WMADecoder)) {
-                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
+                // 通过 vtable 调用 QueryInterface
+                return class_factory.IClassFactory_iface.lpVtbl->QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
             FIXME("class %s not implemented\n", debugstr_guid(rclsid));
@@ -675,7 +682,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -731,7 +739,8 @@ jobs:
                 return E_NOINTERFACE;
             }
             
-            IUnknown_AddRef((IUnknown*)*ppv);
+            // 通过 vtable 调用 AddRef
+            iface->lpVtbl->AddRef(iface);
             return S_OK;
         }
         
@@ -775,8 +784,10 @@ jobs:
             obj->IUnknown_iface.lpVtbl = &UnknownImpl_Vtbl;
             obj->ref = 1;
             
-            hr = IUnknown_QueryInterface(&obj->IUnknown_iface, riid, ppv);
-            IUnknown_Release(&obj->IUnknown_iface);
+            // 通过 vtable 调用 QueryInterface
+            hr = obj->IUnknown_iface.lpVtbl->QueryInterface(&obj->IUnknown_iface, riid, ppv);
+            // 通过 vtable 调用 Release
+            obj->IUnknown_iface.lpVtbl->Release(&obj->IUnknown_iface);
             
             return hr;
         }
@@ -814,7 +825,8 @@ jobs:
             TRACE("(%s, %s, %p)\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
             
             if (IsEqualGUID(rclsid, &CLSID_WMCodec)) {
-                return IClassFactory_QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
+                // 通过 vtable 调用 QueryInterface
+                return class_factory.IClassFactory_iface.lpVtbl->QueryInterface(&class_factory.IClassFactory_iface, riid, ppv);
             }
             
             FIXME("class %s not implemented\n", debugstr_guid(rclsid));
@@ -1402,6 +1414,7 @@ jobs:
         echo "✓ Windows Media 格式支持"
         echo "✓ COM 接口实现（解决 DllGetClassObject 链接错误）"
         echo "✓ GUID 定义（解决 IID_IClassFactory 和 IID_IUnknown 链接错误）"
+        echo "✓ COM 接口调用方式（解决 IUnknown_AddRef 和 IClassFactory_QueryInterface 链接错误）"
         echo "✓ 字体配置"
         echo ""
         echo "使用说明:"
