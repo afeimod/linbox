@@ -410,6 +410,11 @@ jobs:
           --with-fontconfig \
           --with-gstreamer \
           --with-gettext \
+          --with-mf \
+          --enable-wmvdecod \
+          --enable-wmadmod \
+          --enable-wmilib \
+          --enable-wmcodecdsp \
           --enable-nls \
           --without-dbus \
           --without-sane \
