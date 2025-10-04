@@ -161,16 +161,16 @@ jobs:
           -e 's|/data/data/com.winlator/files/rootfs/tmp|/data/data/com.termux/files/usr/tmp|g' \
           -e 's|"/data/data/com.winlator/files/rootfs/tmp"|"/data/data/com.termux/files/usr/tmp"|g' \
           -e 's|"/unix/"|"/"|g' \
-          -e 's|L"unix\\"|L"/"|g' \
+          -e 's|L"\\unix\\"|L"\\"|g' \
           -e 's|unix/data/data/com.termux/files/home/|/data/data/com.termux/files/home/|g' \
           {} \;
     
         # 修复 server 目录中的路径
         find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i \
           -e 's|L"unix\\\\data\\\\data\\\\com.termux\\\\files\\\\home"|L"/data/data/com.termux/files/home"|g' \
-          -e 's|L"unix\\data\\data\\com.termux\\files\\home\\"|L"/data/data/com.termux/files/home"|g' \
-          -e 's|L"unix\\"|L"/"|g' \
-          -e 's|L"unix"|L""|g' \
+          -e 's|L"unix\\data\\data\\com.termux\\files\\home\\"|L"data\\data\\com.termux\\files\\home\\"|g' \
+          -e 's|L"\\unix\\"|L"\\"|g' \
+          -e 's|L"unix/"|L"/"|g' \
           -e 's|unix/data/data/com.termux/files/home/|/data/data/com.termux/files/home/|g' \
           {} \;
     
