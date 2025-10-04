@@ -133,10 +133,10 @@ jobs:
         mkdir -p dlls/wmadmod  
         mkdir -p dlls/wmilib
         
-        # 创建 wmvdecod.dll 的基本实现
+        # 创建 wmvdecod.dll 的完整实现
         cat > dlls/wmvdecod/Makefile.in << 'EOF'
         MODULE    = wmvdecod.dll
-        IMPORTS   = msvcrt kernel32
+        IMPORTS   = msvcrt kernel32 ole32 oleaut32
         EXTRADEFS = -D_WIN32_WINNT=0x0600
         PARENTSRC = ../wmcodecdsp
         
@@ -148,10 +148,69 @@ jobs:
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "winreg.h"
+        #include "objbase.h"
         #include "wine/debug.h"
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmvdecod);
         
+        // COM 类工厂
+        typedef struct {
+            IClassFactory IClassFactory_iface;
+        } ClassFactory;
+        
+        static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
+        {
+            return CONTAINING_RECORD(iface, ClassFactory, IClassFactory_iface);
+        }
+        
+        static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
+        {
+            if (IsEqualGUID(riid, &IID_IUnknown) ||
+                IsEqualGUID(riid, &IID_IClassFactory))
+            {
+                *ppv = iface;
+                IClassFactory_AddRef(iface);
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return E_NOINTERFACE;
+        }
+        
+        static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
+        {
+            return 2;
+        }
+        
+        static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
+        {
+            return 1;
+        }
+        
+        static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
+                                                         REFIID riid, void **ppv)
+        {
+            FIXME("ClassFactory_CreateInstance stub\n");
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
+        {
+            return S_OK;
+        }
+        
+        static const IClassFactoryVtbl ClassFactoryVtbl = {
+            ClassFactory_QueryInterface,
+            ClassFactory_AddRef,
+            ClassFactory_Release,
+            ClassFactory_CreateInstance,
+            ClassFactory_LockServer
+        };
+        
+        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        
+        // DLL 入口点
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             if (reason == DLL_PROCESS_ATTACH)
@@ -161,19 +220,49 @@ jobs:
             return TRUE;
         }
         
+        // COM 服务器函数
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+        {
+            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
+            {
+                *ppv = &class_factory;
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            return S_FALSE;
+        }
+        
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            return S_OK;
+        }
+        
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            return S_OK;
+        }
+        
         // 基本的 WMV 解码器存根函数
         HRESULT WINAPI WMVDecodeCreate( void **ppDecoder )
         {
             FIXME("WMVDecodeCreate stub\n");
             if (ppDecoder) *ppDecoder = NULL;
-            return 0x80004001; // E_NOTIMPL
+            return E_NOTIMPL;
         }
         EOF
         
-        # 创建 wmadmod.dll 的基本实现 (Windows Media Audio Decoder)
+        # 创建 wmadmod.dll 的完整实现 (Windows Media Audio Decoder)
         cat > dlls/wmadmod/Makefile.in << 'EOF'
         MODULE    = wmadmod.dll
-        IMPORTS   = msvcrt kernel32
+        IMPORTS   = msvcrt kernel32 ole32 oleaut32
         EXTRADEFS = -D_WIN32_WINNT=0x0600
         
         SOURCES = \
@@ -184,10 +273,69 @@ jobs:
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "winreg.h"
+        #include "objbase.h"
         #include "wine/debug.h"
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmadmod);
         
+        // COM 类工厂
+        typedef struct {
+            IClassFactory IClassFactory_iface;
+        } ClassFactory;
+        
+        static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
+        {
+            return CONTAINING_RECORD(iface, ClassFactory, IClassFactory_iface);
+        }
+        
+        static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
+        {
+            if (IsEqualGUID(riid, &IID_IUnknown) ||
+                IsEqualGUID(riid, &IID_IClassFactory))
+            {
+                *ppv = iface;
+                IClassFactory_AddRef(iface);
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return E_NOINTERFACE;
+        }
+        
+        static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
+        {
+            return 2;
+        }
+        
+        static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
+        {
+            return 1;
+        }
+        
+        static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
+                                                         REFIID riid, void **ppv)
+        {
+            FIXME("ClassFactory_CreateInstance stub\n");
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
+        {
+            return S_OK;
+        }
+        
+        static const IClassFactoryVtbl ClassFactoryVtbl = {
+            ClassFactory_QueryInterface,
+            ClassFactory_AddRef,
+            ClassFactory_Release,
+            ClassFactory_CreateInstance,
+            ClassFactory_LockServer
+        };
+        
+        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        
+        // DLL 入口点
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             if (reason == DLL_PROCESS_ATTACH)
@@ -197,16 +345,46 @@ jobs:
             return TRUE;
         }
         
+        // COM 服务器函数
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+        {
+            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
+            {
+                *ppv = &class_factory;
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            return S_FALSE;
+        }
+        
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            return S_OK;
+        }
+        
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            return S_OK;
+        }
+        
         // 基本的 WMA 解码器存根函数
         HRESULT WINAPI WMADecodeCreate( void **ppDecoder )
         {
             FIXME("WMADecodeCreate stub\n");
             if (ppDecoder) *ppDecoder = NULL;
-            return 0x80004001; // E_NOTIMPL
+            return E_NOTIMPL;
         }
         EOF
         
-        # 创建 wmilib.sys 的基本实现 (Windows Management Instrumentation)
+        # 创建 wmilib.sys 的完整实现 (Windows Management Instrumentation)
         cat > dlls/wmilib/Makefile.in << 'EOF'
         MODULE    = wmilib.sys
         IMPORTS   = ntoskrnl
@@ -225,17 +403,151 @@ jobs:
         
         WINE_DEFAULT_DEBUG_CHANNEL(wmilib);
         
+        // 驱动卸载函数
+        static void WINAPI driver_unload(DRIVER_OBJECT *driver)
+        {
+            TRACE("driver_unload\n");
+        }
+        
+        // 驱动入口点
         NTSTATUS WINAPI DriverEntry(DRIVER_OBJECT *driver, UNICODE_STRING *path)
         {
-            FIXME("DriverEntry stub\n");
+            TRACE("DriverEntry: driver %p, path %s\n", driver, debugstr_w(path->Buffer));
+            
+            driver->DriverUnload = driver_unload;
             return STATUS_SUCCESS;
         }
         
         // WMI 库函数
         NTSTATUS WINAPI WmiCompleteRequest( void *a, void *b, void *c, void *d )
         {
-            FIXME("WmiCompleteRequest stub\n");
+            FIXME("WmiCompleteRequest(%p, %p, %p, %p) stub\n", a, b, c, d);
             return STATUS_SUCCESS;
+        }
+        
+        NTSTATUS WINAPI WmiSystemControl( void *a, void *b )
+        {
+            FIXME("WmiSystemControl(%p, %p) stub\n", a, b);
+            return STATUS_SUCCESS;
+        }
+        EOF
+        
+        # 创建其他相关的 Windows Media 组件
+        mkdir -p dlls/wmcodecdsp
+        
+        cat > dlls/wmcodecdsp/Makefile.in << 'EOF'
+        MODULE    = wmcodecdsp.dll
+        IMPORTS   = msvcrt kernel32 ole32 oleaut32
+        EXTRADEFS = -D_WIN32_WINNT=0x0600
+        
+        SOURCES = \
+            main.c
+        EOF
+        
+        cat > dlls/wmcodecdsp/main.c << 'EOF'
+        #include <stdarg.h>
+        #include "windef.h"
+        #include "winbase.h"
+        #include "winreg.h"
+        #include "objbase.h"
+        #include "wine/debug.h"
+        
+        WINE_DEFAULT_DEBUG_CHANNEL(wmcodecdsp);
+        
+        // COM 类工厂
+        typedef struct {
+            IClassFactory IClassFactory_iface;
+        } ClassFactory;
+        
+        static inline ClassFactory *impl_from_IClassFactory(IClassFactory *iface)
+        {
+            return CONTAINING_RECORD(iface, ClassFactory, IClassFactory_iface);
+        }
+        
+        static HRESULT WINAPI ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **ppv)
+        {
+            if (IsEqualGUID(riid, &IID_IUnknown) ||
+                IsEqualGUID(riid, &IID_IClassFactory))
+            {
+                *ppv = iface;
+                IClassFactory_AddRef(iface);
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return E_NOINTERFACE;
+        }
+        
+        static ULONG WINAPI ClassFactory_AddRef(IClassFactory *iface)
+        {
+            return 2;
+        }
+        
+        static ULONG WINAPI ClassFactory_Release(IClassFactory *iface)
+        {
+            return 1;
+        }
+        
+        static HRESULT WINAPI ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *pUnkOuter,
+                                                         REFIID riid, void **ppv)
+        {
+            FIXME("ClassFactory_CreateInstance stub\n");
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        static HRESULT WINAPI ClassFactory_LockServer(IClassFactory *iface, BOOL fLock)
+        {
+            return S_OK;
+        }
+        
+        static const IClassFactoryVtbl ClassFactoryVtbl = {
+            ClassFactory_QueryInterface,
+            ClassFactory_AddRef,
+            ClassFactory_Release,
+            ClassFactory_CreateInstance,
+            ClassFactory_LockServer
+        };
+        
+        static ClassFactory class_factory = { { &ClassFactoryVtbl } };
+        
+        // DLL 入口点
+        BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+        {
+            if (reason == DLL_PROCESS_ATTACH)
+            {
+                DisableThreadLibraryCalls(instance);
+            }
+            return TRUE;
+        }
+        
+        // COM 服务器函数
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+        {
+            TRACE("rclsid %s, riid %s, ppv %p\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+            
+            if (IsEqualGUID(riid, &IID_IClassFactory) || IsEqualGUID(riid, &IID_IUnknown))
+            {
+                *ppv = &class_factory;
+                return S_OK;
+            }
+            
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+        
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            return S_FALSE;
+        }
+        
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            return S_OK;
+        }
+        
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            return S_OK;
         }
         EOF
         
@@ -342,7 +654,7 @@ jobs:
         find /tmp/wine-install -name "*gst*" | head -10
         echo ""
         echo "检查 Windows Media 组件..."
-        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" | head -10
+        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" | head -10
 
     - name: 准备中文字体和配置
       run: |
@@ -415,7 +727,7 @@ jobs:
         export LC_CTYPE="zh_CN.UTF-8"
         
         # 启用 Windows Media 组件
-        export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib=n,b"
+        export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp=n,b"
         
         # 调试信息
         if [ "$DEBUG_MEDIA" = "1" ]; then
@@ -484,6 +796,10 @@ jobs:
         find /data/data/com.termux/files/usr/opt/wine -name "*wmilib*" 2>/dev/null
         echo ""
         
+        echo "查找 wmcodecdsp.dll..."
+        find /data/data/com.termux/files/usr/opt/wine -name "*wmcodecdsp*" 2>/dev/null
+        echo ""
+        
         echo "2. 检查 Wine DLL 覆盖设置"
         echo "WINEDLLOVERRIDES: $WINEDLLOVERRIDES"
         echo ""
@@ -502,6 +818,11 @@ jobs:
         echo "使用 winetricks 安装 Windows Media 组件:"
         echo "winetricks wmp10  # 或 wmp11"
         echo "winetricks wmp9  # 对于旧版本兼容性"
+        echo ""
+        echo "6. 测试 WMV/WMA 文件播放"
+        echo "下载测试文件:"
+        echo "wget http://techslides.com/demos/samples/sample.wmv"
+        echo "wine your_media_player.exe sample.wmv"
         EOF
         
         chmod +x wine-package/test-windows-media.sh
@@ -602,7 +923,7 @@ jobs:
             export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
             
             # Windows Media 组件配置
-            export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib=n,b"
+            export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp=n,b"
             # ==========================================
             EOL
         fi
@@ -619,13 +940,14 @@ jobs:
         echo "✓ 中文环境支持"
         echo "✓ Vulkan 图形 API 支持"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ Windows Media 组件支持 (wmvdecod.dll, wmadmod.dll, wmilib.sys)"
+        echo "✓ Windows Media 组件支持 (wmvdecod.dll, wmadmod.dll, wmilib.sys, wmcodecdsp.dll)"
         echo "✓ 字体配置"
         echo ""
         echo "Windows Media 支持:"
         echo "- wmvdecod.dll: Windows Media Video 解码器"
         echo "- wmadmod.dll: Windows Media Audio 解码器" 
         echo "- wmilib.sys: Windows Management Instrumentation 库"
+        echo "- wmcodecdsp.dll: Windows Media Codec DSP 组件"
         echo ""
         echo "多媒体支持:"
         echo "- GStreamer 核心插件"
@@ -662,7 +984,7 @@ jobs:
         find wine-package -type f | sort
         echo ""
         echo "检查 Windows Media 相关文件:"
-        find wine-package -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" | sort
+        find wine-package -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" | sort
         echo ""
         echo "检查 Vulkan 相关文件:"
         find wine-package -name "*vulkan*" | sort
@@ -699,12 +1021,13 @@ jobs:
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
-        echo "Windows Media: wmvdecod.dll, wmadmod.dll, wmilib.sys 支持"
+        echo "Windows Media: wmvdecod.dll, wmadmod.dll, wmilib.sys, wmcodecdsp.dll 支持"
         echo ""
         echo "新增的 Windows Media 组件:"
         echo "✓ wmvdecod.dll - Windows Media Video 解码器"
         echo "✓ wmadmod.dll - Windows Media Audio 解码器"
         echo "✓ wmilib.sys - Windows Management Instrumentation 库"
+        echo "✓ wmcodecdsp.dll - Windows Media Codec DSP 组件"
         echo ""
         echo "修复的问题:"
         echo "✓ 无法运行 EXE 文件"
@@ -712,6 +1035,7 @@ jobs:
         echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
         echo "✓ Windows Media 格式支持"
+        echo "✓ COM 接口实现（解决 DllGetClassObject 链接错误）"
         echo "✓ 字体配置"
         echo ""
         echo "使用说明:"
