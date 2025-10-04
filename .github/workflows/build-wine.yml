@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.2
+        git checkout wine-9.9
 
     - name: 应用 Unity 视频解码修复补丁
       run: |
