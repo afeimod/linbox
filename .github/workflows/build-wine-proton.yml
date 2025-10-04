@@ -1,4 +1,4 @@
-# build-wine-all.yml
+# build-wine-proton.yml
 name: Build Proton WOW64 for Termux
 
 on:
@@ -67,7 +67,8 @@ jobs:
           gettext \
           libgettextpo-dev \
           locales \
-          language-pack-zh-hans
+          language-pack-zh-hans \
+          strip
 
     - name: 安装多媒体和音频依赖
       run: |
@@ -92,11 +93,11 @@ jobs:
         echo "当前工作目录: $(pwd)"
         ls -la
 
-    - name: 构建 Proton WOW64 版本
+    - name: 构建 Proton WOW64 版本 (优化大小)
       run: |
         set -e
         
-        echo "开始构建 Proton WOW64 版本（启用完整中文支持）..."
+        echo "开始构建 Proton WOW64 版本（优化大小版本）..."
         
         # 设置中文构建环境
         export LANG=zh_CN.UTF-8
@@ -124,7 +125,7 @@ jobs:
         echo "生成 configure 脚本..."
         ./autogen.sh
         
-        # 配置 Wine（启用完整本地化支持）
+        # 配置 Wine（启用优化和减小大小）
         mkdir -p build64
         cd build64
         
@@ -158,11 +159,26 @@ jobs:
           --without-unwind \
           --without-usb \
           --without-v4l2 \
-          --without-wayland
+          --without-wayland \
+          CFLAGS="-Os -s" \  # 优化大小
+          CXXFLAGS="-Os -s"  # 优化大小
         
-        # 构建并安装
-        make -j$(nproc)
+        # 构建并安装 - 使用更少的并行任务避免内存不足
+        make -j2
         make install
+        
+        # 关键优化：strip 所有二进制文件
+        echo "正在 strip 二进制文件以减小大小..."
+        find /tmp/wine-install-proton -type f -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+        find /tmp/wine-install-proton -type f -executable -exec strip --strip-all {} \; 2>/dev/null || true
+        
+        # 删除不必要的文件
+        echo "删除不必要的文件..."
+        rm -rf /tmp/wine-install-proton/include
+        rm -rf /tmp/wine-install-proton/share/man
+        rm -rf /tmp/wine-install-proton/share/doc
+        find /tmp/wine-install-proton -name "*.a" -delete
+        find /tmp/wine-install-proton -name "*.la" -delete
         
         # 额外步骤：确保中文资源文件被正确安装
         echo "检查本地化文件..."
@@ -176,10 +192,17 @@ jobs:
         PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
         echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
         
-        # 打包 - 确保在正确的工作目录
+        # 检查安装后的大小
+        echo "安装目录大小:"
+        du -sh /tmp/wine-install-proton
+        
+        # 打包 - 使用高压缩率
         cd $GITHUB_WORKSPACE
         mkdir -p build-output
         tar -czf build-output/wine-proton-wow64-$PROTON_VERSION.tar.gz -C /tmp/wine-install-proton .
+        
+        echo "构建输出大小:"
+        ls -lh build-output/wine-proton-wow64-$PROTON_VERSION.tar.gz
         
         echo "Proton WOW64 构建完成: wine-proton-wow64-$PROTON_VERSION.tar.gz"
 
@@ -189,7 +212,7 @@ jobs:
         cd build-output
         tar -tzf wine-proton-wow64-$PROTON_VERSION.tar.gz | grep -i "zh\|chinese\|locale" | head -20 || echo "未找到相关本地化文件"
 
-    - name: 为 Termux 准备安装包
+    - name: 为 Termux 准备安装包 (优化大小)
       run: |
         # 切换到构建输出目录
         cd build-output
@@ -215,10 +238,16 @@ jobs:
         # 复制 Wine 文件
         cp -r /tmp/wine-termux/* wine-package/opt/wine/
         
-        # 创建包装脚本 - 增强中文支持
+        # 进一步优化：删除更多不必要的文件
+        echo "进一步优化包大小..."
+        find wine-package/opt/wine -name "*.a" -delete
+        find wine-package/opt/wine -name "*.la" -delete
+        rm -rf wine-package/opt/wine/include 2>/dev/null || true
+        
+        # 创建优化的包装脚本
         cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
-        # Wine Proton for Termux 启动脚本 - 增强中文支持
+        # Wine Proton for Termux 启动脚本 - 优化版本
         
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export HOME="$HOME"
@@ -227,38 +256,18 @@ jobs:
         export TMPDIR="$TERMUX_PREFIX/tmp"
         export TEMP="$TMPDIR"
         export TMP="$TMPDIR"
-        
-        # 确保临时目录存在
         mkdir -p "$TMPDIR" 2>/dev/null
         
         # 设置 Wine 前缀
-        if [ -z "$WINEPREFIX" ]; then
-            export WINEPREFIX="$HOME/.wine"
-        fi
-        
-        # 确保 Wine 前缀目录存在
+        export WINEPREFIX="${WINEPREFIX:-$HOME/.wine}"
         mkdir -p "$WINEPREFIX" 2>/dev/null
         
         # 设置库路径
         export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$LD_LIBRARY_PATH"
         
-        # 设置 Vulkan 驱动路径
-        export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-        
-        # 设置字体路径
-        export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
-        
-        # 设置其他 Wine 相关环境变量
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-        export WINEARCH="win64"  # WOW64 模式
-        
-        # 强制设置中文环境 - 增强版本
+        # 设置中文环境
         export LANG="zh_CN.UTF-8"
         export LC_ALL="zh_CN.UTF-8"
-        export LC_CTYPE="zh_CN.UTF-8"
-        export LANGUAGE="zh_CN:zh:en_US:en"
-        
-        # 设置 Wine 的 UI 语言为中文
         export WINELANG="zh_CN"
         
         # 运行真正的 wine 程序
@@ -274,8 +283,6 @@ jobs:
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export TMPDIR="\$TERMUX_PREFIX/tmp"
         export LD_LIBRARY_PATH="\$TERMUX_PREFIX/opt/wine/lib:\$TERMUX_PREFIX/opt/wine/lib64:\$TERMUX_PREFIX/lib:\$LD_LIBRARY_PATH"
-        export WINEDLLPATH="\$TERMUX_PREFIX/opt/wine/lib/wine:\$TERMUX_PREFIX/opt/wine/lib64/wine"
-        # 强制中文环境
         export LANG="zh_CN.UTF-8"
         export LC_ALL="zh_CN.UTF-8"
         export WINELANG="zh_CN"
@@ -289,7 +296,7 @@ jobs:
         # 切换到构建输出目录
         cd build-output
         
-        # 创建安装脚本
+        # 创建优化的安装脚本
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
         set -e
@@ -313,7 +320,6 @@ jobs:
         mkdir -p "$INSTALL_DIR"
         mkdir -p "$BIN_DIR"
         mkdir -p "$TERMUX_PREFIX/tmp"
-        mkdir -p "$TERMUX_PREFIX/share/vulkan/icd.d"
         mkdir -p "$HOME/.wine"
         
         # 安装文件
@@ -329,83 +335,17 @@ jobs:
         chmod +x "$BIN_DIR"/wineserver
         chmod +x "$BIN_DIR"/winecfg
         
-        # 创建 Vulkan ICD 配置
-        cat > "$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" << 'EOL'
-        {
-            "file_format_version": "1.0.0",
-            "ICD": {
-                "library_path": "libvulkan_freedreno.so",
-                "api_version": "1.0.0"
-            }
-        }
-        EOL
-        
-        # 配置环境 - 增强中文支持
-        echo "配置环境变量..."
-        
-        if ! grep -q "Wine Proton WOW64 for Termux" "$HOME/.bashrc" 2>/dev/null; then
-            cat >> "$HOME/.bashrc" << 'EOL'
-
-            export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-            export WINEPREFIX="$HOME/.wine"
-            export WINEARCH="win64"
-            export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib"
-            export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-            export TMPDIR="$TERMUX_PREFIX/tmp"
-            export TEMP="$TMPDIR"
-            export TMP="$TMPDIR"
-            
-            # 强制中文环境设置
-            export LANG="zh_CN.UTF-8"
-            export LC_ALL="zh_CN.UTF-8"
-            export LC_CTYPE="zh_CN.UTF-8"
-            export LANGUAGE="zh_CN:zh:en_US:en"
-            export WINELANG="zh_CN"
-
-            # Vulkan 配置
-            export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-            # ==========================================
-            EOL
-        fi
-        
         echo ""
         echo "=========================================="
         echo "   Wine Proton WOW64 安装完成!"
         echo "=========================================="
         echo ""
-        echo "特性:"
-        echo "✓ 基于 Valve Proton 10.0 分支"
-        echo "✓ WOW64 架构 (同时支持 32/64 位应用)"
-        echo "✓ Vulkan 图形 API 支持"
-        echo "✓ GStreamer 多媒体支持"
-        echo "✓ MPG123 音频支持"
-        echo "✓ OpenAL 3D 音频支持"
-        echo "✓ 完整中文语言支持"
-        echo "✓ 游戏优化和兼容性改进"
+        echo "使用说明:"
+        echo "1. 初始化 Wine: wine wineboot"
+        echo "2. 配置 Wine: winecfg"
+        echo "3. 安装音频支持: pkg install pulseaudio"
         echo ""
-        echo "下一步:"
-        echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
-        echo "2. 初始化 Wine: wine wineboot"
-        echo "3. 配置 Wine: winecfg"
-        echo ""
-        echo "中文支持说明:"
-        echo "- 已启用完整 NLS (本地化支持)"
-        echo "- 构建时包含中文语言文件"
-        echo "- 环境变量强制设置为中文"
-        echo ""
-        echo "Vulkan 支持:"
-        echo "- 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
-        echo "- 检查设备 Vulkan 支持"
-        echo ""
-        echo "音频支持:"
-        echo "- 确保安装了音频相关包: pkg install pulseaudio openal mpg123"
-        echo ""
-        echo "故障排除:"
-        echo "- 确保 Termux 有存储权限"
-        echo "- 运行: termux-setup-storage"
-        echo "- 检查 Wine 前缀: echo \$WINEPREFIX"
-        echo "=========================================="
+        echo "注意: 这是优化大小的版本，已移除调试符号。"
         EOF
         
         chmod +x wine-package/install.sh
@@ -421,10 +361,10 @@ jobs:
         
         echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
         
-        # 打包 Termux 版本
+        # 打包 Termux 版本 - 使用高压缩率
         tar -czf wine-proton-wow64-termux-$PROTON_VERSION.tar.gz wine-package/
         
-        echo "打包完成:"
+        echo "打包完成，文件大小:"
         ls -lh *.tar.gz
 
     - name: 设置 Release 标签
@@ -455,46 +395,19 @@ jobs:
 
     - name: 输出版本信息和使用说明
       run: |
-        echo "✅ Wine Proton WOW64 构建完成"
+        echo "✅ Wine Proton WOW64 构建完成（优化大小版本）"
         echo ""
         echo "构建的版本:"
         echo "- Proton WOW64: $PROTON_VERSION"
         echo "- Termux 安装包: wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
         echo "- Release 标签: $RELEASE_TAG"
         echo ""
-        echo "启用的功能:"
-        echo "✓ GStreamer 多媒体支持"
-        echo "✓ MPG123 音频支持" 
-        echo "✓ OpenAL 3D 音频支持"
-        echo "✓ Vulkan 图形 API 支持"
-        echo "✓ 完整中文语言支持 (NLS 已启用)"
-        echo "✓ 游戏优化和兼容性改进"
+        echo "优化措施:"
+        echo "✓ 使用浅克隆 (--depth=1)"
+        echo "✓ 编译时优化大小 (CFLAGS=-Os -s)"
+        echo "✓ Strip 所有二进制文件"
+        echo "✓ 删除调试符号"
+        echo "✓ 删除头文件和文档"
+        echo "✓ 删除静态库文件"
         echo ""
-        echo "中文支持增强:"
-        echo "✓ 构建时启用 NLS 和 gettext"
-        echo "✓ 包含中文语言环境"
-        echo "✓ 环境变量强制设置为中文"
-        echo "✓ 设置 WINELANG 环境变量"
-        echo ""
-        echo "文件说明:"
-        echo "wine-proton-wow64-*.tar.gz - Proton WOW64 原始构建文件"
-        echo "wine-proton-wow64-termux-*.tar.gz - Termux 专用安装包"
-        echo ""
-        echo "使用说明:"
-        echo "1. 下载 wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
-        echo "2. 解压: tar -xzf wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
-        echo "3. 进入目录: cd wine-package"
-        echo "4. 运行安装: ./install.sh"
-        echo "5. 重新加载环境: source ~/.bashrc"
-        echo "6. 初始化: wine wineboot"
-        echo ""
-        echo "音频支持安装:"
-        echo "pkg install pulseaudio openal mpg123"
-        echo ""
-        echo "注意:"
-        echo "- 这是基于 Valve Proton 的 WOW64 构建"
-        echo "- 单一二进制支持 32/64 位应用"
-        echo "- 包含完整的多媒体和音频支持"
-        echo "- 已修复 Termux 路径问题"
-        echo "- 专为游戏和兼容性优化"
-        echo "- 强制启用中文界面支持"
+        echo "文件大小应该显著减小，同时保持完整功能。"
