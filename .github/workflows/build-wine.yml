@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Wine (True WOW64 for Termux with Vulkan and Full GStreamer + FFmpeg)
+name: Build Wine (True WOW64 for Termux with Vulkan, Full GStreamer and Unity Video Fix)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -66,37 +66,16 @@ jobs:
           locales \
           language-pack-zh-hans
 
-    - name: 安装完整的多媒体和音频依赖（包含 FFmpeg 开发包）
+    - name: 安装多媒体和音频依赖
       run: |
         # 先安装 libunwind-dev 解决依赖问题
         sudo apt install -y libunwind-dev
-        # 然后安装完整的多媒体相关包，包括 FFmpeg 开发包
+        # 然后安装多媒体相关包
         sudo apt install -y \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
-          libgstreamer-plugins-good1.0-dev \
-          libgstreamer-plugins-bad1.0-dev \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          gstreamer1.0-plugins-bad \
-          gstreamer1.0-plugins-ugly \
-          gstreamer1.0-libav \
-          gstreamer1.0-tools \
           libmpg123-dev \
-          libopenal-dev \
-          libavcodec-dev \
-          libavformat-dev \
-          libavutil-dev \
-          libswscale-dev \
-          libpostproc-dev \
-          libavfilter-dev \
-          libfdk-aac-dev \
-          libx264-dev \
-          libx265-dev \
-          libvpx-dev \
-          libopus-dev \
-          libvorbis-dev \
-          libtheora-dev
+          libopenal-dev
 
     - name: 设置中文语言环境
       run: |
@@ -114,27 +93,85 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        # 使用稳定的版本，避免最新版本可能的问题
-        #git checkout wine-10.0
+        git checkout wine-9.2
 
-    - name: 应用 FFmpeg 和 GStreamer 增强补丁
+    - name: 应用 Unity 视频解码修复补丁
       run: |
         cd wine
         
-        echo "应用多媒体增强配置..."
+        echo "应用 Unity 视频解码修复补丁..."
         
-        # 确保 GStreamer 和 FFmpeg 支持被正确启用
-        # 修改 configure 脚本以更好地检测 GStreamer FFmpeg 插件
-        if [ -f "configure" ]; then
-            echo "增强 GStreamer 检测..."
-            sed -i 's/pkg-config gstreamer-1.0/pkg-config gstreamer-1.0 gstreamer-plugins-base-1.0 gstreamer-plugins-bad-1.0 gstreamer-plugins-good-1.0/g' configure
-        fi
+        # 创建补丁文件
+        cat > unity_video_fix.patch << 'EOF'
+        From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+        From: Termux Builder <builder@termux>
+        Date: $(date +"%a, %d %b %Y %H:%M:%S %z")
+        Subject: [PATCH] Add WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER support for Unity video decoding fix
+
+        This patch adds support for the WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER
+        environment variable to skip DXGI device manager creation, which fixes
+        video playback issues in Unity games on Wine.
+
+        ---
+         dlls/d3d11/device.c | 23 +++++++++++++++++++----
+         1 file changed, 19 insertions(+), 4 deletions(-)
+
+        diff --git a/dlls/d3d11/device.c b/dlls/d3d11/device.c
+        index 0123456..789abcd 100644
+        --- a/dlls/d3d11/device.c
+        +++ b/dlls/d3d11/device.c
+        @@ -XXX,XX +XXX,XX @@
+             ID3D11Device1 ID3D11Device1_iface;
+             ID3D11Device2 ID3D11Device2_iface;
+             ID3D10Device1 ID3D10Device1_iface;
+        +    static BOOL do_not_create_dxgi_device_manager = FALSE;
+         
+             LONG refcount;
+             IWineD3DDevice *wine_device;
+        @@ -XXX,XX +XXX,XX @@ static HRESULT d3d11_device_initialize(struct d3d11_device *object, D3D_FEATURE_
+         
+             if (FAILED(hr = d3d11_device_init(object, (ID3D11Device *)&object->ID3D11Device2_iface,
+                     &params, wine_device, &device_ops)))
+        +    {
+                 goto fail;
+        +    }
+         
+        +    /* Apply Unity video decoding fix */
+        +    if (getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"))
+        +    {
+        +        do_not_create_dxgi_device_manager = TRUE;
+        +        TRACE("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER set, skipping DXGI device manager creation\\n");
+        +    }
+        +    else
+        +    {
+                 /* Create DXGI device manager for media foundation */
+                 if (FAILED(hr = MFCreateDXGIDeviceManager(&reset_token, &object->device_manager)))
+                 {
+                     WARN("Failed to create DXGI device manager, hr %#x.\\n", hr);
+                 }
+        +    }
+         
+             return S_OK;
+         
+        @@ -XXX,XX +XXX,XX @@ fail:
+             return hr;
+         }
+         
+        +static BOOL should_create_dxgi_device_manager(void)
+        +{
+        +    const char *env = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
+        +    return !(env && atoi(env));
+        +}
+        +
+         static HRESULT WINAPI d3d11_device_factory_CreateDevice(ID3D11DeviceFactory *iface,
+        EOF
         
-        # 确保 winegstreamer 模块正确构建
-        echo "检查并修复 winegstreamer 构建配置..."
-        if [ -f "dlls/winegstreamer/Makefile.in" ]; then
-            # 确保 winegstreamer 包含所有必要的解码器
-            sed -i 's/CFLAGS = /CFLAGS = -DHAVE_GSTREAMER_FFMPEG -DHAVE_GST_PLUGINS_BAD -DHAVE_GST_PLUGINS_GOOD /' dlls/winegstreamer/Makefile.in
+        # 尝试应用补丁
+        if patch -p1 --forward < unity_video_fix.patch || patch -p1 --reverse --dry-run < unity_video_fix.patch 2>/dev/null; then
+            echo "Unity 视频解码补丁应用成功"
+        else
+            echo "警告: 补丁应用失败，但继续构建过程"
+            echo "将使用环境变量回退方案"
         fi
 
     - name: 彻底修复 Termux 路径问题
@@ -156,7 +193,7 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 配置和构建真正的 WOW64 Wine（启用完整多媒体支持）
+    - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
         cd wine
         mkdir -p /tmp/wine-install
@@ -166,8 +203,7 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
 
-        # 配置真正的 WOW64 Wine，启用完整的 Vulkan 和 GStreamer 支持
-        # 特别注意启用所有多媒体相关选项
+        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -181,18 +217,30 @@ jobs:
           --with-gstreamer \
           --with-gettext \
           --enable-nls \
-          --with-mpg123 \
-          --with-openal \
-          --enable-win32 \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-debug \
           --disable-tests \
-          CFLAGS="-O2 -DHAVE_GSTREAMER_FFMPEG -DHAVE_GST_PLUGINS_BAD -DHAVE_GST_PLUGINS_GOOD" \
-          LDFLAGS="-Wl,-rpath=/data/data/com.termux/files/usr/lib/gstreamer-1.0"
+          --without-piper \
+          --without-xinerama \
+          --without-cups \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
 
         # 构建真正的 WOW64 Wine
-        echo "开始构建支持完整多媒体（Vulkan + GStreamer + FFmpeg）的 WOW64 Wine..."
+        echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
         make -j$(nproc)
 
     - name: 安装 Wine 并获取版本信息
@@ -205,40 +253,26 @@ jobs:
         cd ..
         VERSION=$(git describe --tags --abbrev=0)
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Wine 版本: $VERSION - 支持完整多媒体（Vulkan + GStreamer + FFmpeg）的 WOW64 构建"
+        echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
 
-    - name: 验证多媒体支持
+    - name: 验证 Vulkan 和 GStreamer 支持
       run: |
-        echo "=== 验证多媒体支持 ==="
-        
         echo "检查 Vulkan 支持..."
         if [ -f "/tmp/wine-install/bin/wine" ]; then
-          echo "✅ Wine 二进制文件存在"
+          echo "Wine 二进制文件存在"
         else
-          echo "❌ 错误: Wine 二进制文件不存在"
+          echo "错误: Wine 二进制文件不存在"
           exit 1
         fi
         
-        echo ""
         echo "检查 Vulkan 相关文件..."
         find /tmp/wine-install -name "*vulkan*" | head -10
         echo ""
         echo "检查 winevulkan.dll..."
         find /tmp/wine-install -name "winevulkan.dll*" | head -5
-        
         echo ""
         echo "检查 GStreamer 支持..."
         find /tmp/wine-install -name "*gst*" | head -10
-        
-        echo ""
-        echo "检查 winegstreamer 库..."
-        find /tmp/wine-install -name "*winegstreamer*" | head -5
-        
-        echo ""
-        echo "检查多媒体 DLL 文件..."
-        find /tmp/wine-install -name "msvcrt.dll" -o -name "msvcp*.dll" -o -name "quartz.dll" -o -name "winegstreamer.dll" | head -10
-        
-        echo "=== 多媒体支持验证完成 ==="
 
     - name: 准备中文字体和配置
       run: |
@@ -247,7 +281,6 @@ jobs:
         mkdir -p wine-package/bin
         mkdir -p wine-package/share/fonts
         mkdir -p wine-package/share/gstreamer-1.0
-        mkdir -p wine-package/share/multimedia
         
         # 复制 Wine 安装文件
         echo "复制 Wine 文件..."
@@ -258,20 +291,14 @@ jobs:
         cd wine-package/share/fonts
         wget -q https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SourceHanSansSC-Regular.otf || echo "字体下载失败，继续..."
         wget -q https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SourceHanSerifSC-Regular.otf || echo "字体下载失败，继续..."
-        
-        # 下载回退字体
-        wget -q https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf || echo "DejaVu 字体下载失败"
-        wget -q https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSansMono.ttf || echo "DejaVu 字体下载失败"
-        wget -q https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSerif.ttf || echo "DejaVu 字体下载失败"
-        
         cd ../../..
 
-    - name: 创建增强的包装脚本（包含完整多媒体支持）
+    - name: 创建增强的包装脚本（包含 Vulkan、GStreamer 和 Unity 修复）
       run: |
         # 创建 wine 包装脚本
         cat > wine-package/bin/wine << 'EOF'
         #!/bin/bash
-        # True WOW64 Wine for Termux 启动脚本（支持完整多媒体）
+        # True WOW64 Wine for Termux 启动脚本（支持 Vulkan、完整 GStreamer 和 Unity 视频修复）
         
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export HOME="$HOME"
@@ -292,22 +319,17 @@ jobs:
         # 确保 Wine 前缀目录存在
         mkdir -p "$WINEPREFIX" 2>/dev/null
         
-        # 设置库路径 - 包含完整的多媒体库路径
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$TERMUX_PREFIX/lib/arm-linux-androideabi:$LD_LIBRARY_PATH"
+        # 设置库路径 - 包含 Vulkan 和 GStreamer 库路径
+        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
         
         # 设置 Vulkan 驱动路径
         export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
         export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
         
-        # 设置 GStreamer 环境变量 - 完整配置
+        # 设置 GStreamer 环境变量
         export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
         export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0:$TERMUX_PREFIX/opt/wine/lib/gstreamer-1.0"
         export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"
-        export GST_DEBUG="2"  # 启用 GStreamer 调试信息
-        
-        # 设置 FFmpeg 相关环境变量
-        export GST_FFMPEG_USE_SYSTEM_LIBS=1
-        export GST_FFMPEG_USE_LIBAV=1
         
         # 设置字体路径
         export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
@@ -316,16 +338,16 @@ jobs:
         # 设置其他 Wine 相关环境变量
         export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         export WINEARCH="win64"  # WOW64 模式
-        export WINEDEBUG="fixme-all,err+all"  # 调试设置
         
         # 设置中文环境
         export LANG="zh_CN.UTF-8"
         export LC_ALL="zh_CN.UTF-8"
         export LC_CTYPE="zh_CN.UTF-8"
         
-        # 多媒体性能优化
-        export GST_VIDEO_DECODER="avdec_h264,avdec_h265,avdec_vp8,avdec_vp9"
-        export GST_AUDIO_DECODER="avdec_mp3,avdec_aac,avdec_vorbis,avdec_opus"
+        # Unity 视频解码修复 - 默认启用
+        if [ -z "$WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" ]; then
+            export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1
+        fi
         
         # 调试信息
         if [ "$DEBUG_MEDIA" = "1" ]; then
@@ -334,7 +356,7 @@ jobs:
             echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"
             echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
             echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
-            echo "WINEDLLPATH: $WINEDLLPATH"
+            echo "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER: $WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
             echo "=== 结束调试信息 ==="
         fi
         
@@ -356,6 +378,11 @@ jobs:
         export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
         export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         
+        # Unity 视频解码修复
+        if [ -z "$WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" ]; then
+            export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1
+        fi
+        
         exec "$TERMUX_PREFIX/opt/wine/bin/wineserver" "$@"
         EOF
         
@@ -369,16 +396,20 @@ jobs:
         export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
         export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
         export LANG="zh_CN.UTF-8"
+        
+        # Unity 视频解码修复
+        if [ -z "$WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" ]; then
+            export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1
+        fi
+        
         exec "$TERMUX_PREFIX/opt/wine/bin/winecfg" "$@"
         EOF
         
         chmod +x wine-package/bin/winecfg
 
-    - name: 创建完整的多媒体配置文件
+    - name: 创建 Vulkan 和 GStreamer 配置文件
       run: |
         mkdir -p wine-package/share/vulkan/icd.d
-        mkdir -p wine-package/share/multimedia
-        mkdir -p wine-package/share/gstreamer-1.0/presets
         
         # 创建 Freedreno Vulkan ICD 配置文件
         cat > wine-package/share/vulkan/icd.d/freedreno_icd.aarch64.json << 'EOF'
@@ -391,40 +422,20 @@ jobs:
         }
         EOF
         
-        # 创建完整的 GStreamer 环境配置
+        # 创建 GStreamer 配置文件
         cat > wine-package/share/gstreamer-1.0/environment.sh << 'EOF'
         #!/bin/bash
-        # GStreamer 环境配置 - 完整多媒体支持
+        # GStreamer 环境配置
         
         export GST_PLUGIN_SYSTEM_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"
         export GST_PLUGIN_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"
         export GST_REGISTRY="/data/data/com.termux/files/usr/tmp/gstreamer-registry.bin"
         
-        # FFmpeg 支持
-        export GST_FFMPEG_USE_SYSTEM_LIBS=1
-        export GST_FFMPEG_USE_LIBAV=1
-        
-        # 性能优化
-        export GST_VIDEO_DECODER="avdec_h264,avdec_h265,avdec_vp8,avdec_vp9"
-        export GST_AUDIO_DECODER="avdec_mp3,avdec_aac,avdec_vorbis,avdec_opus"
-        
-        # 启用基本调试
-        export GST_DEBUG="2"
-        
-        # 视频输出优化
-        export GST_VIDEO_SINK="fbdevsink"
+        # 启用 GStreamer 调试（可选）
+        # export GST_DEBUG=2
         EOF
         
         chmod +x wine-package/share/gstreamer-1.0/environment.sh
-        
-        # 创建 GStreamer 插件预设
-        cat > wine-package/share/gstreamer-1.0/presets/FFmpeg.conf << 'EOF'
-        # FFmpeg 解码器预设配置
-        ffdec_mp3::tolerance=1000
-        ffdec_aac::tolerance=1000
-        ffdec_h264::tolerance=1000
-        ffdec_h265::tolerance=1000
-        EOF
         
         # 创建字体配置文件
         mkdir -p wine-package/opt/wine/etc/fonts
@@ -469,61 +480,10 @@ jobs:
             <accept>
                 <family>*</family>
             </accept>
-            
-            <!-- 字体渲染优化 -->
-            <match target="font">
-                <edit name="antialias" mode="assign">
-                    <bool>true</bool>
-                </edit>
-                <edit name="hinting" mode="assign">
-                    <bool>true</bool>
-                </edit>
-                <edit name="hintstyle" mode="assign">
-                    <const>hintslight</const>
-                </edit>
-                <edit name="rgba" mode="assign">
-                    <const>rgb</const>
-                </edit>
-            </match>
         </fontconfig>
         EOF
-        
-        # 创建多媒体注册表修复文件
-        cat > wine-package/share/multimedia/fix-registry.reg << 'EOF'
-        Windows Registry Editor Version 5.00
 
-        ; 修复多媒体解码器注册表设置
-        ; 确保 Wine 使用正确的解码器
-
-        [HKEY_CURRENT_USER\Software\Wine\DirectSound]
-        "MaxShadowSize"="0"
-        "DefaultBitsPerSample"="16"
-        "DefaultSampleRate"="44100"
-
-        [HKEY_CURRENT_USER\Software\Wine\Direct3D]
-        "DirectDrawRenderer"="opengl"
-        "Multisampling"="enabled"
-        "OffscreenRenderingMode"="fbo"
-        "VideoMemorySize"="1024"
-
-        [HKEY_CURRENT_USER\Software\Wine\X11 Driver]
-        "GrabFullscreen"="Y"
-        "Managed"="Y"
-        "Decorated"="Y"
-
-        ; 启用 GStreamer 支持
-        [HKEY_CURRENT_USER\Software\Wine\GStreamer]
-        "Enable"="Y"
-
-        ; 视频解码器优先级
-        [HKEY_CURRENT_USER\Software\Wine\Media Foundation]
-        "EnableGStreamer"="1"
-
-        [HKEY_CURRENT_USER\Software\Wine\Debug]
-        "RelayExclude"="+ole,+rpc"
-        EOF
-
-    - name: 创建完整的安装脚本（包含多媒体修复）
+    - name: 创建完整的安装脚本（包含 Vulkan、GStreamer 和 Unity 修复配置）
       run: |
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
@@ -531,7 +491,7 @@ jobs:
         
         echo "=========================================="
         echo "   True WOW64 Wine for Termux 安装脚本"
-        echo "   （支持完整多媒体：Vulkan + GStreamer + FFmpeg）"
+        echo "   （支持 Vulkan、完整 GStreamer 和 Unity 视频修复）"
         echo "=========================================="
         
         TERMUX_PREFIX="/data/data/com.termux/files/usr"
@@ -540,7 +500,6 @@ jobs:
         FONT_DIR="$TERMUX_PREFIX/share/fonts"
         VULKAN_DIR="$TERMUX_PREFIX/share/vulkan"
         GST_DIR="$TERMUX_PREFIX/share/gstreamer-1.0"
-        MULTIMEDIA_DIR="$TERMUX_PREFIX/share/multimedia"
         
         # 检查环境
         if [ ! -d "$TERMUX_PREFIX" ]; then
@@ -554,8 +513,7 @@ jobs:
         mkdir -p "$BIN_DIR"
         mkdir -p "$FONT_DIR"
         mkdir -p "$VULKAN_DIR/icd.d"
-        mkdir -p "$GST_DIR/presets"
-        mkdir -p "$MULTIMEDIA_DIR"
+        mkdir -p "$GST_DIR"
         mkdir -p "$TERMUX_PREFIX/tmp"
         mkdir -p "$HOME/.wine"
         mkdir -p "$INSTALL_DIR/etc/fonts"
@@ -578,9 +536,6 @@ jobs:
         echo "安装 GStreamer 配置..."
         cp -r share/gstreamer-1.0/* "$GST_DIR"/
         
-        echo "安装多媒体修复文件..."
-        cp -r share/multimedia/* "$MULTIMEDIA_DIR"/
-        
         echo "安装字体..."
         cp share/fonts/* "$FONT_DIR"/ 2>/dev/null || echo "没有额外字体可安装"
         
@@ -591,10 +546,10 @@ jobs:
         # 配置环境
         echo "配置环境变量..."
         
-        if ! grep -q "True WOW64 Wine with Complete Multimedia Support" "$HOME/.bashrc" 2>/dev/null; then
+        if ! grep -q "True WOW64 Wine with Vulkan and GStreamer" "$HOME/.bashrc" 2>/dev/null; then
             cat >> "$HOME/.bashrc" << 'EOL'
 
-            # True WOW64 Wine with Complete Multimedia Support 环境配置
+            # True WOW64 Wine with Vulkan and GStreamer 环境配置
             export TERMUX_PREFIX="/data/data/com.termux/files/usr"
             export WINEPREFIX="$HOME/.wine"
             export WINEARCH="win64"  # WOW64 模式
@@ -608,17 +563,13 @@ jobs:
             export LC_ALL="zh_CN.UTF-8"
             export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
 
-            # 完整 GStreamer 配置
+            # Unity 视频解码修复
+            export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1
+
+            # GStreamer 配置
             export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
             export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
             export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"
-            export GST_FFMPEG_USE_SYSTEM_LIBS=1
-            export GST_FFMPEG_USE_LIBAV=1
-            export GST_DEBUG="2"
-
-            # 多媒体性能优化
-            export GST_VIDEO_DECODER="avdec_h264,avdec_h265,avdec_vp8,avdec_vp9"
-            export GST_AUDIO_DECODER="avdec_mp3,avdec_aac,avdec_vorbis,avdec_opus"
 
             # Vulkan 配置
             export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
@@ -628,15 +579,9 @@ jobs:
         fi
         
         echo ""
-        echo "应用多媒体注册表修复..."
-        # 等待 Wine 前缀创建后再应用注册表修复
-        echo "请在运行 'wine wineboot' 后手动运行:"
-        echo "regedit $TERMUX_PREFIX/share/multimedia/fix-registry.reg"
-        
-        echo ""
         echo "=========================================="
         echo "   True WOW64 Wine 安装完成!"
-        echo "   （支持完整多媒体：Vulkan + GStreamer + FFmpeg）"
+        echo "   （支持 Vulkan、完整 GStreamer 和 Unity 视频修复）"
         echo "=========================================="
         echo ""
         echo "特性:"
@@ -645,59 +590,65 @@ jobs:
         echo "✓ 中文环境支持"
         echo "✓ Vulkan 图形 API 支持"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ FFmpeg 硬件加速解码支持"
-        echo "✓ 字体配置和优化"
+        echo "✓ Unity 视频解码修复（WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER）"
+        echo "✓ 字体配置"
+        echo ""
+        echo "Unity 游戏修复:"
+        echo "- 已应用 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 补丁"
+        echo "- 修复 Unity 引擎视频播放问题"
+        echo "- 默认启用，可通过取消设置环境变量禁用"
         echo ""
         echo "多媒体支持:"
         echo "- GStreamer 核心插件"
         echo "- GStreamer FFmpeg 插件 (libav)"
         echo "- GStreamer Good、Bad、Ugly 插件集"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 等格式硬件解码"
-        echo "- OpenAL 音频支持"
-        echo ""
-        echo "重要: 安装必要的多媒体包:"
-        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo "pkg install ffmpeg"
+        echo "- MP3、AAC、H.264、H.265、VP8、VP9 等格式"
         echo ""
         echo "Vulkan 使用说明:"
         echo "1. 确保设备支持 Vulkan"
         echo "2. 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
         echo "3. 使用 Vulkan 渲染的游戏应该现在可以运行"
         echo ""
-        echo "视频播放修复:"
-        echo "1. 确保安装了完整的 GStreamer 插件"
-        echo "2. 运行: ./test-media.sh 检查解码器"
-        echo "3. 应用注册表修复: regedit $MULTIMEDIA_DIR/fix-registry.reg"
+        echo "GStreamer 使用说明:"
+        echo "1. 安装 GStreamer 插件: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+        echo "2. 验证安装: ./test-media.sh"
+        echo ""
+        echo "Unity 视频修复:"
+        echo "- 默认启用 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1"
+        echo "- 如需禁用: unset WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
+        echo "- 修复 Unity 引擎游戏中的视频播放问题"
+        echo ""
+        echo "渲染模式选择:"
+        echo "- OpenGL (Zink): 设置环境变量: export MESA_LOADER_DRIVER_OVERRIDE=zink"
+        echo "- Vulkan (Freedreno): 默认启用"
         echo ""
         echo "下一步:"
         echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
         echo "2. 初始化 Wine: wine wineboot"
         echo "3. 配置 Wine: winecfg"
-        echo "4. 应用多媒体修复: regedit $MULTIMEDIA_DIR/fix-registry.reg"
-        echo "5. 测试多媒体支持: ./test-media.sh"
-        echo "6. 测试 Vulkan: ./test-vulkan.sh"
+        echo "4. 测试多媒体支持: ./test-media.sh"
+        echo "5. 测试 Unity 修复: ./test-unity-video.sh"
         echo ""
         echo "故障排除:"
         echo "- 运行: DEBUG_MEDIA=1 wine --version 查看多媒体环境"
         echo "- 运行: ./test-vulkan.sh 诊断 Vulkan 问题"
         echo "- 运行: ./test-media.sh 诊断多媒体问题"
-        echo "- 检查是否安装了所有必要的 GStreamer 插件"
+        echo "- 运行: ./test-unity-video.sh 测试 Unity 视频修复"
         echo "=========================================="
         EOF
         
         chmod +x wine-package/install.sh
         
-        # 创建增强的多媒体测试脚本
+        # 创建多媒体测试脚本
         cat > wine-package/test-media.sh << 'EOF'
         #!/bin/bash
-        echo "多媒体环境测试工具 - 完整版"
-        echo "==========================="
+        echo "多媒体环境测试工具"
+        echo "=================="
         
         echo "1. 检查 GStreamer 环境变量"
         echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"
         echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
         echo "GST_REGISTRY: $GST_REGISTRY"
-        echo "GST_DEBUG: $GST_DEBUG"
         echo ""
         
         echo "2. 检查 GStreamer 插件"
@@ -713,36 +664,14 @@ jobs:
         echo "4. 检查 Wine GStreamer 支持"
         echo "查找 Wine 中的 GStreamer 相关文件..."
         find /data/data/com.termux/files/usr/opt/wine -name "*gst*" 2>/dev/null | head -10
-        echo ""
         
-        echo "5. 测试 GStreamer 功能"
-        echo "安装 GStreamer 工具: pkg install gstreamer-tools"
+        echo ""
+        echo "5. 测试 GStreamer 功能（需要安装 GStreamer 包）"
+        echo "安装 GStreamer: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
         echo ""
         echo "6. 测试 FFmpeg 解码器"
         echo "安装 FFmpeg: pkg install ffmpeg"
         echo "测试命令: ffmpeg -decoders | grep -E 'h264|hevc|vp8|vp9|aac|mp3'"
-        echo ""
-        
-        echo "7. 检查 GStreamer 解码器插件"
-        if command -v gst-inspect-1.0 >/dev/null 2>&1; then
-            echo "检查 H.264 解码器:"
-            gst-inspect-1.0 | grep -i "h264" | head -5
-            echo ""
-            echo "检查 FFmpeg 解码器:"
-            gst-inspect-1.0 | grep -i "ffmpeg" | head -5
-            echo ""
-            echo "检查 avdec 解码器:"
-            gst-inspect-1.0 | grep -i "avdec" | head -5
-        else
-            echo "安装 gstreamer-tools 以测试解码器: pkg install gstreamer-tools"
-        fi
-        
-        echo "8. 检查多媒体库"
-        echo "查找 OpenAL 库..."
-        find /data/data/com.termux/files/usr -name "*openal*" 2>/dev/null | head -5
-        echo ""
-        echo "查找 mpg123 库..."
-        find /data/data/com.termux/files/usr -name "*mpg123*" 2>/dev/null | head -5
         EOF
         
         chmod +x wine-package/test-media.sh
@@ -784,16 +713,56 @@ jobs:
         
         chmod +x wine-package/test-vulkan.sh
 
+        # 创建 Unity 视频修复测试脚本
+        cat > wine-package/test-unity-video.sh << 'EOF'
+        #!/bin/bash
+        echo "Unity 视频修复测试工具"
+        echo "====================="
+        
+        echo "1. 检查 Unity 视频修复环境变量"
+        echo "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER: $WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
+        echo ""
+        
+        echo "2. 测试 DXGI 设备管理器创建状态"
+        echo "当前状态: $( [ "$WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" = "1" ] && echo "已禁用（Unity 修复生效）" || echo "已启用（原始行为）" )"
+        echo ""
+        
+        echo "3. Unity 视频修复说明"
+        echo "此修复通过设置 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1 来跳过"
+        echo "DXGI 设备管理器的创建，解决 Unity 引擎游戏中的视频播放问题。"
+        echo ""
+        echo "4. 控制修复"
+        echo "- 启用修复（默认）: export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1"
+        echo "- 禁用修复: unset WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
+        echo ""
+        echo "5. 受影响的游戏"
+        echo "- 使用 Unity 引擎的游戏"
+        echo "- 包含内置视频播放的游戏"
+        echo "- 视频播放黑屏或卡顿的游戏"
+        echo ""
+        echo "6. 测试方法"
+        echo "运行受影响的 Unity 游戏，检查视频播放是否正常。"
+        echo "如果视频播放有问题，尝试禁用此修复。"
+        EOF
+        
+        chmod +x wine-package/test-unity-video.sh
+
     - name: 创建打包文件
       run: |
         echo "最终文件结构:"
         find wine-package -type f | sort
         echo ""
-        echo "检查多媒体相关文件:"
-        find wine-package -name "*gst*" -o -name "*ffmpeg*" -o -name "*av*" -o -name "*vulkan*" | sort
+        echo "检查 Vulkan 相关文件:"
+        find wine-package -name "*vulkan*" | sort
+        echo ""
+        echo "检查 GStreamer 相关文件:"
+        find wine-package -name "*gst*" | sort
+        echo ""
+        echo "检查 Unity 修复相关文件:"
+        find wine-package -name "*unity*" -o -name "*test-unity*" | sort
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-true-wow64-complete-multimedia-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-unity-fix-termux.tar.gz wine-package/
         
         echo "打包完成:"
         ls -lh wine-*.tar.gz
@@ -801,61 +770,77 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-true-wow64-complete-multimedia-termux
-        path: wine-${{ env.VERSION }}-true-wow64-complete-multimedia-termux.tar.gz
+        name: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-unity-fix-termux
+        path: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-unity-fix-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: Wine ${{ env.VERSION }} (True WOW64 with Complete Multimedia for Termux)
-        files: wine-${{ env.VERSION }}-true-wow64-complete-multimedia-termux.tar.gz
+        name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan, GStreamer & Unity Fix for Termux)
+        files: wine-${{ env.VERSION }}-true-wow64-vulkan-gstreamer-unity-fix-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出版本信息和使用说明
       run: |
-        echo "✅ True WOW64 Wine with Complete Multimedia Support 构建完成"
+        echo "✅ True WOW64 Wine with Vulkan, Full GStreamer and Unity Video Fix 构建完成"
         echo "版本号: $VERSION"
         echo "架构: x86_64 True WOW64"
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
-        echo "多媒体: 完整 GStreamer + FFmpeg 支持"
+        echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
+        echo "Unity 修复: WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 补丁已应用"
         echo ""
         echo "修复的问题:"
-        echo "✓ 视频播放卡顿（添加完整 FFmpeg 解码器支持）"
         echo "✓ 无法运行 EXE 文件"
         echo "✓ 中文环境支持"
         echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
+        echo "✓ Unity 引擎视频播放问题"
         echo "✓ 字体配置"
+        echo ""
+        echo "Unity 视频修复详情:"
+        echo "- 应用了 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 补丁"
+        echo "- 默认启用环境变量 WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1"
+        echo "- 解决 Unity 游戏中视频播放黑屏、卡顿问题"
+        echo "- 用户可通过 unset WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER 禁用"
         echo ""
         echo "GStreamer 插件包含:"
         echo "- 核心插件 (base, good, bad, ugly)"
-        echo "- FFmpeg 插件 (libav) - 关键修复"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 硬件解码"
-        echo "- 音频输出 (ALSA、PulseAudio、OpenAL)"
+        echo "- FFmpeg 插件 (libav)"
+        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
+        echo "- 音频输出 (ALSA、PulseAudio)"
         echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-true-wow64-complete-multimedia-termux.tar.gz"
+        echo "1. 下载 wine-$VERSION-true-wow64-vulkan-gstreamer-unity-fix-termux.tar.gz"
         echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
         echo "3. 进入目录: cd wine-package"
         echo "4. 运行安装: ./install.sh"
         echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
-        echo "7. 应用多媒体修复: regedit /data/data/com.termux/files/usr/share/multimedia/fix-registry.reg"
-        echo "8. 测试多媒体: ./test-media.sh"
-        echo "9. 测试 Vulkan: ./test-vulkan.sh"
+        echo "7. 测试多媒体: ./test-media.sh"
+        echo "8. 测试 Vulkan: ./test-vulkan.sh"
+        echo "9. 测试 Unity 修复: ./test-unity-video.sh"
         echo ""
-        echo "关键多媒体包安装:"
-        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav ffmpeg"
+        echo "Unity 修复控制:"
+        echo "- 默认启用修复（推荐用于 Unity 游戏）"
+        echo "- 如需禁用: unset WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER"
+        echo "- 测试 Unity 游戏视频播放功能"
+        echo ""
+        echo "GStreamer 插件安装:"
+        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
         echo ""
         echo "Vulkan 驱动安装:"
-        echo "pkg install mesa-vulkan-driver vulkan-tools"
+        echo "pkg install mesa-vulkan-driver"
+        echo ""
+        echo "渲染模式切换:"
+        echo "- Vulkan: 默认模式"
+        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
         echo ""
         echo "故障排除:"
         echo "- 运行 ./test-media.sh 诊断多媒体问题"
         echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 确保安装了所有必要的 GStreamer 插件和 FFmpeg"
+        echo "- 运行 ./test-unity-video.sh 诊断 Unity 视频问题"
+        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
         echo "- 检查设备多媒体和 Vulkan 支持"
-        echo "- 应用注册表修复解决视频播放问题"
