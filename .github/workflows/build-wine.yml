@@ -1,5 +1,3 @@
-[file name]: build-wine.yml
-[file content begin]
 # build-wine.yml
 name: Build Wine (True WOW64 for Termux with Vulkan and Full GStreamer + FFmpeg)
 
@@ -861,4 +859,3 @@ jobs:
         echo "- 确保安装了所有必要的 GStreamer 插件和 FFmpeg"
         echo "- 检查设备多媒体和 Vulkan 支持"
         echo "- 应用注册表修复解决视频播放问题"
-[file content end]
