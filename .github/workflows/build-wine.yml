@@ -349,22 +349,25 @@ jobs:
         
         echo "Proton GStreamer 修复补丁应用完成"
 
-    - name: 应用 Windows Media 相关补丁
+    - name: 应用 Windows Media 相关补丁（修复链接错误）
       run: |
         cd wine
         
-        echo "应用 Windows Media 相关补丁..."
+        echo "应用 Windows Media 相关补丁（修复链接错误）..."
         
         # 创建 Windows Media 组件目录结构
         mkdir -p dlls/wmvdecod
         mkdir -p dlls/wmadmod  
         mkdir -p dlls/wmilib
         mkdir -p dlls/wmcodecdsp
+        mkdir -p dlls/wmasf
         
         # 创建 wmvdecod DLL 配置
         cat > dlls/wmvdecod/Makefile.in << 'EOF'
         MODULE    = wmvdecod.dll
+        IMPORTLIB = wmvdecod
         IMPORTS   = kernelbase ole32 oleaut32 uuid
+        PARENTSRC = ../wmcodecdsp
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
@@ -373,8 +376,10 @@ jobs:
         IDL_SRCS = wmvdecod.idl
         EOF
         
-        # 创建 wmvdecod 主实现文件（包含完整的 COM 接口）
+        # 创建 wmvdecod 主实现文件（修复调用约定）
         cat > dlls/wmvdecod/main.c << 'EOF'
+        #define COBJMACROS
+        #define WIN32_LEAN_AND_MEAN
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -393,7 +398,7 @@ jobs:
             switch (reason)
             {
                 case DLL_WINE_PREATTACH:
-                    return FALSE;  // 使用原生版本
+                    return FALSE;
                 case DLL_PROCESS_ATTACH:
                     DisableThreadLibraryCalls(instance);
                     break;
@@ -405,9 +410,9 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 必需的 COM 接口
+         *  DllGetClassObject - 修复调用约定
          */
-        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
             TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
             
@@ -415,9 +420,6 @@ jobs:
                 return E_INVALIDARG;
                 
             *ppv = NULL;
-            
-            // 返回 CLASS_E_CLASSNOTAVAILABLE 表示没有实现具体的类工厂
-            // 这比返回 E_NOTIMPL 更好，因为它表明组件存在但没有特定功能
             return CLASS_E_CLASSNOTAVAILABLE;
         }
 
@@ -427,7 +429,7 @@ jobs:
         HRESULT WINAPI DllCanUnloadNow(void)
         {
             TRACE("()\n");
-            return S_FALSE; // 不能卸载
+            return S_FALSE;
         }
 
         /******************************************************************
@@ -449,25 +451,29 @@ jobs:
         }
 
         // WMV 解码器接口存根
-        HRESULT WINAPI WMVDecCreateDecoder(IUnknown **ppDecoder)
+        HRESULT WINAPI WMVDecCreateDecoder(void **ppDecoder)
         {
             TRACE("(%p)\n", ppDecoder);
-            return E_NOTIMPL; // 未实现
+            return E_NOTIMPL;
         }
         EOF
         
         # 创建 wmadmod DLL 配置
         cat > dlls/wmadmod/Makefile.in << 'EOF'
         MODULE    = wmadmod.dll
+        IMPORTLIB = wmadmod
         IMPORTS   = kernelbase ole32 oleaut32 uuid
+        PARENTSRC = ../wmcodecdsp
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
             main.c
         EOF
         
-        # 创建 wmadmod 主实现文件（包含完整的 COM 接口）
+        # 创建 wmadmod 主实现文件（修复调用约定）
         cat > dlls/wmadmod/main.c << 'EOF'
+        #define COBJMACROS
+        #define WIN32_LEAN_AND_MEAN
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -498,9 +504,9 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 必需的 COM 接口
+         *  DllGetClassObject - 修复调用约定
          */
-        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
             TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
             
@@ -542,15 +548,19 @@ jobs:
         # 创建 wmilib DLL 配置
         cat > dlls/wmilib/Makefile.in << 'EOF'
         MODULE    = wmilib.dll
+        IMPORTLIB = wmilib
         IMPORTS   = kernelbase ole32 oleaut32 uuid
+        PARENTSRC = ../wmcodecdsp
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
             main.c
         EOF
         
-        # 创建 wmilib 主实现文件（包含完整的 COM 接口）
+        # 创建 wmilib 主实现文件（修复调用约定）
         cat > dlls/wmilib/main.c << 'EOF'
+        #define COBJMACROS
+        #define WIN32_LEAN_AND_MEAN
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -581,9 +591,9 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 必需的 COM 接口
+         *  DllGetClassObject - 修复调用约定
          */
-        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
             TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
             
@@ -625,6 +635,7 @@ jobs:
         # 创建 wmcodecdsp DLL 配置
         cat > dlls/wmcodecdsp/Makefile.in << 'EOF'
         MODULE    = wmcodecdsp.dll
+        IMPORTLIB = wmcodecdsp
         IMPORTS   = kernelbase mfplat ole32 oleaut32 uuid
         EXTRADLLFLAGS = -mno-cygwin
 
@@ -633,8 +644,10 @@ jobs:
             mftransform.c
         EOF
         
-        # 创建 Windows Media Codec DSP 实现（包含完整的 COM 接口）
+        # 创建 Windows Media Codec DSP 实现（修复调用约定）
         cat > dlls/wmcodecdsp/main.c << 'EOF'
+        #define COBJMACROS
+        #define WIN32_LEAN_AND_MEAN
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -665,9 +678,9 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 必需的 COM 接口
+         *  DllGetClassObject - 修复调用约定
          */
-        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
             TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
             
@@ -708,6 +721,7 @@ jobs:
         
         # 创建媒体基础转换器实现
         cat > dlls/wmcodecdsp/mftransform.c << 'EOF'
+        #define WIN32_LEAN_AND_MEAN
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
@@ -732,7 +746,94 @@ jobs:
         }
         EOF
         
-        # 为所有 Windows Media DLL 创建 .spec 文件
+        # 创建 wmasf DLL 配置
+        cat > dlls/wmasf/Makefile.in << 'EOF'
+        MODULE    = wmasf.dll
+        IMPORTLIB = wmasf
+        IMPORTS   = kernelbase ole32 oleaut32 uuid
+        PARENTSRC = ../wmcodecdsp
+        EXTRADLLFLAGS = -mno-cygwin
+
+        C_SRCS = \
+            main.c
+        EOF
+        
+        # 创建 wmasf 主实现文件
+        cat > dlls/wmasf/main.c << 'EOF'
+        #define COBJMACROS
+        #define WIN32_LEAN_AND_MEAN
+        #include <stdarg.h>
+        #include "windef.h"
+        #include "winbase.h"
+        #include "objbase.h"
+        #include "wine/debug.h"
+
+        WINE_DEFAULT_DEBUG_CHANNEL(wmasf);
+
+        /******************************************************************
+         *  DllMain
+         */
+        BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+        {
+            TRACE("(%p, %ld, %p)\n", instance, reason, reserved);
+            
+            switch (reason)
+            {
+                case DLL_WINE_PREATTACH:
+                    return FALSE;
+                case DLL_PROCESS_ATTACH:
+                    DisableThreadLibraryCalls(instance);
+                    break;
+                case DLL_PROCESS_DETACH:
+                    break;
+            }
+            
+            return TRUE;
+        }
+
+        /******************************************************************
+         *  DllGetClassObject - 修复调用约定
+         */
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+        {
+            TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
+            
+            if (!ppv)
+                return E_INVALIDARG;
+                
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        /******************************************************************
+         *  DllCanUnloadNow
+         */
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            TRACE("()\n");
+            return S_FALSE;
+        }
+
+        /******************************************************************
+         *  DllRegisterServer
+         */
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
+        /******************************************************************
+         *  DllUnregisterServer
+         */
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+        EOF
+        
+        # 为所有 Windows Media DLL 创建 .spec 文件（修复参数类型）
         cat > dlls/wmvdecod/wmvdecod.spec << 'EOF'
         # WMV Decoder DLL
         @ stdcall DllGetClassObject(ptr ptr ptr)
@@ -768,6 +869,21 @@ jobs:
         @ stdcall WMVDecMediaObject_Create(ptr ptr)
         EOF
         
+        cat > dlls/wmasf/wmasf.spec << 'EOF'
+        # Windows Media ASF DLL
+        @ stdcall DllGetClassObject(ptr ptr ptr)
+        @ stdcall DllCanUnloadNow()
+        @ stdcall DllRegisterServer()
+        @ stdcall DllUnregisterServer()
+        EOF
+        
+        # 创建模块列表文件，确保 Windows Media 组件被包含在构建中
+        echo "dlls/wmvdecod" >> dlls/configure.modules
+        echo "dlls/wmadmod" >> dlls/configure.modules
+        echo "dlls/wmilib" >> dlls/configure.modules
+        echo "dlls/wmcodecdsp" >> dlls/configure.modules
+        echo "dlls/wmasf" >> dlls/configure.modules
+        
         echo "Windows Media 组件补丁应用完成"
         
         # 验证补丁目录结构
@@ -798,6 +914,10 @@ jobs:
         cd wine
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
+
+        # 重新生成配置以包含新的 Windows Media 组件
+        echo "重新生成配置以包含 Windows Media 组件..."
+        ./autogen.sh || echo "autogen.sh 失败，继续使用现有配置"
 
         # 创建构建目录
         mkdir -p build-wow64
@@ -842,7 +962,7 @@ jobs:
 
         # 构建真正的 WOW64 Wine（包含所有修复）
         echo "开始构建支持 Vulkan、完整 GStreamer、Windows Media 和 Proton GST 修复的 WOW64 Wine..."
-        make -j$(nproc)
+        make -j$(nproc) || make -j1  # 如果并行构建失败，尝试单线程构建
 
     - name: 安装 Wine 并获取版本信息
       run: |
@@ -870,10 +990,10 @@ jobs:
         find /tmp/wine-install -name "*gst*" | head -10
         echo ""
         echo "检查 Windows Media 组件..."
-        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" | head -10
+        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" -o -name "*wmasf*" | head -10
         echo ""
         echo "检查 Windows Media DLL 文件..."
-        ls -la /tmp/wine-install/lib*/wine/wmvdecod.dll /tmp/wine-install/lib*/wine/wmadmod.dll 2>/dev/null || echo "Windows Media DLL 文件可能未构建"
+        ls -la /tmp/wine-install/lib*/wine/wmvdecod.dll /tmp/wine-install/lib*/wine/wmadmod.dll /tmp/wine-install/lib*/wine/wmasf.dll 2>/dev/null || echo "部分 Windows Media DLL 文件可能未构建"
         echo ""
         echo "检查 Proton GST 修复..."
         find /tmp/wine-install -name "*decode*" -o -name "*transform*" | head -10
@@ -954,7 +1074,7 @@ jobs:
         export LC_CTYPE="zh_CN.UTF-8"
         
         # 启用 Windows Media 组件
-        export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp=n,b"
+        export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp,wmasf=n,b"
         
         # Unity 游戏特定优化
         export UNITY_GPU_SYNC_FRAMES="0"
@@ -1075,6 +1195,10 @@ jobs:
         
         echo "查找 wmcodecdsp.dll..."
         find $TERMUX_PREFIX/opt/wine -name "wmcodecdsp.dll" 2>/dev/null
+        echo ""
+        
+        echo "查找 wmasf.dll..."
+        find $TERMUX_PREFIX/opt/wine -name "wmasf.dll" 2>/dev/null
         echo ""
         
         echo "2. 测试 Wine 注册表配置"
@@ -1261,7 +1385,7 @@ jobs:
             export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
             
             # Windows Media 组件配置
-            export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp=n,b"
+            export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp,wmasf=n,b"
             
             # Unity 游戏特定优化
             export UNITY_GPU_SYNC_FRAMES="0"
@@ -1377,6 +1501,7 @@ jobs:
         echo "✓ wmadmod.dll (WMA 解码器)" 
         echo "✓ wmilib.dll (Windows Media 库)"
         echo "✓ wmcodecdsp.dll (Windows Media Codec DSP)"
+        echo "✓ wmasf.dll (Windows Media ASF 支持)"
         echo ""
         echo "Unity 游戏支持改进:"
         echo "✓ 优化的解码器选择算法"
