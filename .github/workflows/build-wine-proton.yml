@@ -44,6 +44,7 @@ jobs:
           libxrender-dev \
           libxinerama-dev \
           libgl-dev \
+          libsdl2-dev \
           libglu-dev \
           libosmesa6-dev \
           libfreetype6-dev \
