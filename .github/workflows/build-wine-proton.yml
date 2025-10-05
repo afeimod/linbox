@@ -142,13 +142,13 @@ jobs:
           --with-gstreamer \
           --with-gettext \
           --enable-nls \
-          --without-dbus \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
           --without-capi \
           --without-oss \
           --without-ldap
+          #--without-dbus \
         # --without-coreaudio \
           #--without-gphoto \
           #--without-osmesa \
