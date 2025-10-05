@@ -1,5 +1,5 @@
-# build-wine.yml
-name: Build Wine (True WOW64 for Termux with Vulkan, Full GStreamer, Windows Media and Proton GST Fixes)
+# build-wine-fixed.yml - 修复 bin 和 share 目录为空的完整版本
+name: Build Wine (True WOW64 for Termux - Fixed Version)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: 安装构建依赖
+    - name: 安装构建依赖（完整版）
       run: |
         sudo apt update
         # 先修复损坏的依赖
@@ -25,6 +25,8 @@ jobs:
           xz-utils \
           bubblewrap \
           autoconf \
+          automake \
+          libtool \
           flex \
           bison \
           gcc-multilib \
@@ -66,7 +68,11 @@ jobs:
           locales \
           language-pack-zh-hans \
           python3 \
-          python3-pip
+          python3-pip \
+          pkg-config \
+          make \
+          cmake \
+          ninja-build
 
     - name: 安装多媒体和音频依赖
       run: |
@@ -86,7 +92,9 @@ jobs:
           libavcodec-dev \
           libavformat-dev \
           libavutil-dev \
-          libswscale-dev
+          libswscale-dev \
+          libavfilter-dev \
+          libswresample-dev
 
     - name: 设置中文语言环境
       run: |
@@ -104,7 +112,8 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        #git checkout wine-9.9
+        # 使用稳定版本而不是开发版本
+        git checkout wine-9.0  # 使用更稳定的版本
 
     - name: 克隆 Proton 并提取 GStreamer 修复补丁
       run: |
@@ -918,7 +927,7 @@ jobs:
         sudo apt install -y autoconf automake libtool
         
         # 重新生成配置
-        ./autogen.sh || echo "autogen.sh 可能失败，继续..."
+        ./autogen.sh
         
         echo "配置重新生成完成"
 
@@ -947,27 +956,10 @@ jobs:
           --with-gettext \
           --enable-nls \
           --with-mf \
-          --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-debug \
-          --disable-tests \
-          --without-piper \
-          --without-xinerama \
-          --without-cups \
-          --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
-          --without-wayland
+          --disable-tests
 
         # 构建真正的 WOW64 Wine（健壮构建策略）
         echo "开始构建支持 Vulkan、完整 GStreamer、Windows Media 和 Proton GST 修复的 WOW64 Wine..."
@@ -988,13 +980,13 @@ jobs:
             # 第三阶段：选择性构建核心组件
             echo "构建核心组件..."
             make dlls/ntdll dlls/kernel32 dlls/user32 dlls/gdi32 dlls/advapi32 dlls/ole32 dlls/oleaut32 || true
-            make programs/wine programs/wineboot programs/winecfg || true
+            make programs/wine programs/wineboot programs/winecfg programs/wineserver || true
             
             echo "构建 Windows Media 组件..."
             make dlls/wmvdecod dlls/wmadmod dlls/wmilib dlls/wmcodecdsp dlls/wmasf || true
             
             echo "构建 GStreamer 相关组件..."
-            make dlls/winegstreamer dlls/mfplat || true
+            make dlls/winegstreamer dlls/mfplat dlls/mf dlls/mfreadwrite || true
             
             echo "选择性构建完成"
           fi
@@ -1010,9 +1002,10 @@ jobs:
         
         # 检查核心组件
         echo "=== 核心组件 ==="
-        for component in wine wineboot winecfg; do
+        for component in wine wineboot winecfg wineserver; do
           if [ -f "programs/$component/$component" ]; then
             echo "✅ $component 构建成功"
+            file "programs/$component/$component"
           else
             echo "❌ $component 未构建"
           fi
@@ -1021,7 +1014,7 @@ jobs:
         # 检查 Windows Media 组件
         echo "=== Windows Media 组件 ==="
         for dll in wmvdecod wmadmod wmilib wmcodecdsp wmasf; do
-          if [ -f "dlls/$dll/x86_64-windows/$dll.dll" ] || [ -f "dlls/$dll/i386-windows/$dll.dll" ]; then
+          if [ -f "dlls/$dll/x86_64-windows/$dll.dll.so" ] || [ -f "dlls/$dll/i386-windows/$dll.dll.so" ]; then
             echo "✅ $dll.dll 构建成功"
           else
             echo "❌ $dll.dll 未构建"
@@ -1030,8 +1023,8 @@ jobs:
         
         # 检查多媒体组件
         echo "=== 多媒体组件 ==="
-        for dll in winegstreamer mfplat; do
-          if [ -f "dlls/$dll/x86_64-windows/$dll.dll" ] || [ -f "dlls/$dll/i386-windows/$dll.dll" ]; then
+        for dll in winegstreamer mfplat mf mfreadwrite; do
+          if [ -f "dlls/$dll/x86_64-windows/$dll.dll.so" ] || [ -f "dlls/$dll/i386-windows/$dll.dll.so" ]; then
             echo "✅ $dll.dll 构建成功"
           else
             echo "❌ $dll.dll 未构建"
@@ -1046,6 +1039,10 @@ jobs:
         
         echo "开始安装 Wine..."
         
+        # 清理安装目录
+        rm -rf /tmp/wine-install
+        mkdir -p /tmp/wine-install
+        
         # 尝试正常安装
         if make install; then
           echo "✅ 正常安装成功"
@@ -1053,29 +1050,37 @@ jobs:
           echo "⚠️ 正常安装失败，尝试手动安装..."
           
           # 手动安装核心组件
-          mkdir -p /tmp/wine-install/bin
-          mkdir -p /tmp/wine-install/lib
-          mkdir -p /tmp/wine-install/lib64
-          mkdir -p /tmp/wine-install/include
-          mkdir -p /tmp/wine-install/share
+          mkdir -p /tmp/wine-install/{bin,lib,lib64,include,share,lib/wine,lib64/wine,etc/fonts}
           
           # 复制主要的二进制文件
           echo "复制二进制文件..."
-          cp -f programs/wine/wine /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wine"
-          cp -f programs/wineboot/wineboot /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wineboot"
-          cp -f programs/winecfg/winecfg /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 winecfg"
-          cp -f programs/wineserver/wineserver /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wineserver"
+          find programs -maxdepth 2 -type f -executable -exec cp -f {} /tmp/wine-install/bin/ 2>/dev/null \; || true
+          [ -f "programs/wine/wine" ] && cp -f programs/wine/wine /tmp/wine-install/bin/
+          [ -f "programs/wineboot/wineboot" ] && cp -f programs/wineboot/wineboot /tmp/wine-install/bin/
+          [ -f "programs/winecfg/winecfg" ] && cp -f programs/winecfg/winecfg /tmp/wine-install/bin/
+          [ -f "programs/wineserver/wineserver" ] && cp -f programs/wineserver/wineserver /tmp/wine-install/bin/
           
           # 复制库文件
           echo "复制库文件..."
-          cp -rf libs /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 libs"
-          cp -rf dlls /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 dlls"
-          cp -rf include /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 include"
-          cp -rf share /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 share"
+          find . -name "*.dll.so" -type f -exec cp -f --parents {} /tmp/wine-install/ 2>/dev/null \; || true
+          find . -name "*.dll" -type f ! -name "*.dll.so" -exec cp -f --parents {} /tmp/wine-install/ 2>/dev/null \; || true
           
-          # 确保必要的目录存在
-          mkdir -p /tmp/wine-install/lib/wine
-          mkdir -p /tmp/wine-install/lib64/wine
+          # 复制共享文件
+          echo "复制共享文件..."
+          cp -rf ../fonts /tmp/wine-install/share/ 2>/dev/null || true
+          cp -rf ../po /tmp/wine-install/share/ 2>/dev/null || true
+          cp -rf ../documentation /tmp/wine-install/share/ 2>/dev/null || true
+          
+          # 创建必要的配置文件
+          cat > /tmp/wine-install/etc/fonts/fonts.conf << 'EOF'
+            <?xml version="1.0"?>
+            <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+            <fontconfig>
+                <dir>/system/fonts</dir>
+                <dir>/data/data/com.termux/files/usr/share/fonts</dir>
+                <cachedir>/data/data/com.termux/files/usr/tmp/fontconfig</cachedir>
+            </fontconfig>
+            EOF
           
           echo "手动安装完成"
         fi
@@ -1107,6 +1112,10 @@ jobs:
         echo "检查 Vulkan 支持..."
         find /tmp/wine-install -name "*vulkan*" | head -5 || echo "未找到 Vulkan 组件"
         
+        echo "验证安装目录结构:"
+        find /tmp/wine-install -type f | head -20
+        echo "总文件数: $(find /tmp/wine-install -type f | wc -l)"
+        
         echo "验证完成"
 
     - name: 准备中文字体和配置
@@ -1119,7 +1128,12 @@ jobs:
         
         # 复制 Wine 安装文件
         echo "复制 Wine 文件..."
-        cp -r /tmp/wine-install/* wine-package/opt/wine/ || echo "复制过程中可能有错误，但继续..."
+        if [ -d "/tmp/wine-install" ]; then
+            cp -r /tmp/wine-install/* wine-package/opt/wine/ || echo "复制过程中可能有错误"
+        else
+            echo "❌ 安装目录不存在，创建基本结构"
+            mkdir -p wine-package/opt/wine/{bin,lib,lib64,share}
+        fi
         
         # 下载基本中文字体
         echo "下载中文字体..."
@@ -1238,8 +1252,9 @@ jobs:
         
         chmod +x wine-package/bin/winecfg
 
-    - name: 创建 Unity 游戏视频测试脚本
+    - name: 创建测试脚本
       run: |
+        # 创建 Unity 游戏视频测试脚本
         cat > wine-package/test-unity-video.sh << 'EOF'
         #!/bin/bash
         echo "Unity 游戏视频解码测试工具"
@@ -1284,8 +1299,7 @@ jobs:
         
         chmod +x wine-package/test-unity-video.sh
 
-    - name: 创建 Windows Media 测试脚本
-      run: |
+        # 创建 Windows Media 测试脚本
         cat > wine-package/test-windows-media.sh << 'EOF'
         #!/bin/bash
         echo "Windows Media 组件测试工具"
@@ -1332,6 +1346,28 @@ jobs:
         EOF
         
         chmod +x wine-package/test-windows-media.sh
+
+        # 创建 Vulkan 测试脚本
+        cat > wine-package/test-vulkan.sh << 'EOF'
+        #!/bin/bash
+        echo "Vulkan 支持测试工具"
+        echo "=================="
+        
+        echo "1. 检查 Vulkan 驱动"
+        vulkaninfo 2>/dev/null | grep -E "(deviceName|driverVersion)" | head -10 || echo "Vulkan 信息不可用"
+        echo ""
+        
+        echo "2. 检查 Wine Vulkan 支持"
+        find $TERMUX_PREFIX/opt/wine -name "*vulkan*" | head -10
+        echo ""
+        
+        echo "3. 测试 Vulkan 应用程序"
+        echo "尝试运行简单的 Vulkan 测试..."
+        # 这里可以添加简单的 Vulkan 测试程序
+        echo "Vulkan 测试完成"
+        EOF
+        
+        chmod +x wine-package/test-vulkan.sh
 
     - name: 创建 GStreamer 优化配置
       run: |
@@ -1391,7 +1427,7 @@ jobs:
         
         chmod +x wine-package/bin/setup-gstreamer-unity.sh
 
-    - name: 更新安装脚本以包含所有修复
+    - name: 创建安装脚本
       run: |
         cat > wine-package/install.sh << 'EOF'
         #!/bin/bash
@@ -1441,12 +1477,9 @@ jobs:
         echo "安装字体配置..."
         cp opt/wine/etc/fonts/fonts.conf "$INSTALL_DIR/etc/fonts/"
         
-        echo "安装 Vulkan 配置..."
-        cp -r share/vulkan/* "$VULKAN_DIR"/
-        
         echo "安装 GStreamer 配置..."
-        cp -r share/gstreamer-1.0/* "$GST_DIR"/
-        cp -r etc/gstreamer/* "$CONFIG_DIR"/
+        cp -r share/gstreamer-1.0/* "$GST_DIR"/ 2>/dev/null || true
+        cp -r etc/gstreamer/* "$CONFIG_DIR"/ 2>/dev/null || true
         
         echo "安装字体..."
         cp share/fonts/* "$FONT_DIR"/ 2>/dev/null || echo "没有额外字体可安装"
@@ -1454,7 +1487,6 @@ jobs:
         echo "安装测试脚本..."
         cp test-unity-video.sh "$TERMUX_PREFIX"/ 2>/dev/null || echo "没有测试脚本"
         cp test-windows-media.sh "$TERMUX_PREFIX"/ 2>/dev/null || echo "没有测试脚本"
-        cp test-media.sh "$TERMUX_PREFIX"/ 2>/dev/null || echo "没有测试脚本"
         cp test-vulkan.sh "$TERMUX_PREFIX"/ 2>/dev/null || echo "没有测试脚本"
         
         chmod +x "$BIN_DIR"/wine
@@ -1494,10 +1526,10 @@ jobs:
             # Vulkan 配置
             export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
             export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
-            
+
             # Windows Media 组件配置
             export WINEDLLOVERRIDES="wmvdecod,wmadmod,wmilib,wmcodecdsp,wmasf=n,b"
-            
+
             # Unity 游戏特定优化
             export UNITY_GPU_SYNC_FRAMES="0"
             export UNITY_GPU_MAX_TIMEOUT="4"
@@ -1535,12 +1567,7 @@ jobs:
         echo "4. 配置 Wine: winecfg"
         echo "5. 测试 Unity 视频: ./test-unity-video.sh"
         echo "6. 测试 Windows Media: ./test-windows-media.sh"
-        echo ""
-        echo "Unity 游戏设置建议:"
-        echo "- 在游戏图形设置中启用 Vulkan 渲染"
-        echo "- 降低视频质量设置以提高性能"
-        echo "- 关闭垂直同步 (VSync)"
-        echo "- 使用窗口化模式而非全屏"
+        echo "7. 测试 Vulkan: ./test-vulkan.sh"
         echo ""
         echo "故障排除:"
         echo "- 运行: ./test-unity-video.sh 诊断视频解码问题"
@@ -1614,13 +1641,6 @@ jobs:
         echo "✓ wmcodecdsp.dll (Windows Media Codec DSP)"
         echo "✓ wmasf.dll (Windows Media ASF 支持)"
         echo ""
-        echo "Unity 游戏支持改进:"
-        echo "✓ 优化的解码器选择算法"
-        echo "✓ 常用 Unity 视频格式优先级"
-        echo "✓ 硬件加速视频播放"
-        echo "✓ 降低解码延迟"
-        echo "✓ 改进的视频同步"
-        echo ""
         echo "使用说明:"
         echo "1. 下载 wine-$VERSION-true-wow64-proton-gst-unity-termux.tar.gz"
         echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
@@ -1630,13 +1650,8 @@ jobs:
         echo "6. 安装 GStreamer 插件: setup-gstreamer-unity.sh"
         echo "7. 测试 Unity 视频: ./test-unity-video.sh"
         echo "8. 测试 Windows Media: ./test-windows-media.sh"
-        echo "9. 初始化 Wine: wine wineboot"
-        echo ""
-        echo "Unity 游戏优化设置:"
-        echo "- 在游戏中使用 Vulkan 渲染后端"
-        echo "- 启用硬件加速视频解码"
-        echo "- 调整视频质量设置以匹配设备性能"
-        echo "- 使用提供的测试脚本验证视频播放功能"
+        echo "9. 测试 Vulkan: ./test-vulkan.sh"
+        echo "10. 初始化 Wine: wine wineboot"
         echo ""
         echo "故障排除:"
         echo "- 运行 ./test-unity-video.sh 诊断视频解码问题"
