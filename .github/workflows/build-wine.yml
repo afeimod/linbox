@@ -1,4 +1,4 @@
-# build-wine-fixed.yml - 修复 bin 和 share 目录为空的完整版本
+# build-wine-fixed.yml - 修复 autogen.sh 问题和 bin/share 目录为空的完整版本
 name: Build Wine (True WOW64 for Termux - Fixed Version)
 
 on:
@@ -918,18 +918,35 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 重新生成配置以包含 Windows Media 组件
+    - name: 配置构建环境（修复 autogen.sh 问题）
       run: |
         cd wine
-        echo "重新生成配置以包含 Windows Media 组件..."
+        echo "配置构建环境..."
         
-        # 确保 autoconf 工具可用
-        sudo apt install -y autoconf automake libtool
+        # 确保必要的构建工具已安装
+        sudo apt install -y autoconf automake libtool gettext flex bison pkg-config
         
-        # 重新生成配置
-        ./autogen.sh
+        echo "检查当前目录内容:"
+        ls -la
         
-        echo "配置重新生成完成"
+        # 检查 configure 脚本是否存在
+        if [ -f "configure" ]; then
+            echo "configure 脚本已存在，不需要重新生成"
+        else
+            echo "configure 脚本不存在，尝试生成配置..."
+            
+            # 检查是否有 autogen.sh
+            if [ -f "autogen.sh" ]; then
+                echo "找到 autogen.sh，运行配置生成..."
+                ./autogen.sh
+            else
+                echo "autogen.sh 不存在，尝试使用 autoreconf..."
+                # 尝试生成配置
+                autoreconf -f -i || echo "配置生成失败，但继续构建过程"
+            fi
+        fi
+        
+        echo "配置环境准备完成"
 
     - name: 配置和构建真正的 WOW64 Wine（健壮构建）
       run: |
@@ -941,7 +958,11 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
 
+        echo "检查 Wine 源码目录:"
+        ls -la ../
+        
         # 配置真正的 WOW64 Wine，启用所有功能（包括 Windows Media）
+        echo "配置 Wine 构建..."
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -1076,11 +1097,11 @@ jobs:
             <?xml version="1.0"?>
             <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
             <fontconfig>
-                <dir>/system/fonts</dir>
+            <dir>/system/fonts</dir>
                 <dir>/data/data/com.termux/files/usr/share/fonts</dir>
                 <cachedir>/data/data/com.termux/files/usr/tmp/fontconfig</cachedir>
             </fontconfig>
-            EOF
+          EOF
           
           echo "手动安装完成"
         fi
