@@ -364,7 +364,7 @@ jobs:
         # 创建 wmvdecod DLL 配置
         cat > dlls/wmvdecod/Makefile.in << 'EOF'
         MODULE    = wmvdecod.dll
-        IMPORTS   = kernelbase
+        IMPORTS   = kernelbase ole32 oleaut32 uuid
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
@@ -373,15 +373,19 @@ jobs:
         IDL_SRCS = wmvdecod.idl
         EOF
         
-        # 创建 wmvdecod 主实现文件
+        # 创建 wmvdecod 主实现文件（包含完整的 COM 接口）
         cat > dlls/wmvdecod/main.c << 'EOF'
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "objbase.h"
         #include "wine/debug.h"
 
         WINE_DEFAULT_DEBUG_CHANNEL(wmvdecod);
 
+        /******************************************************************
+         *  DllMain
+         */
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             TRACE("(%p, %ld, %p)\n", instance, reason, reserved);
@@ -400,32 +404,81 @@ jobs:
             return TRUE;
         }
 
+        /******************************************************************
+         *  DllGetClassObject - 必需的 COM 接口
+         */
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        {
+            TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
+            
+            if (!ppv)
+                return E_INVALIDARG;
+                
+            *ppv = NULL;
+            
+            // 返回 CLASS_E_CLASSNOTAVAILABLE 表示没有实现具体的类工厂
+            // 这比返回 E_NOTIMPL 更好，因为它表明组件存在但没有特定功能
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        /******************************************************************
+         *  DllCanUnloadNow
+         */
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            TRACE("()\n");
+            return S_FALSE; // 不能卸载
+        }
+
+        /******************************************************************
+         *  DllRegisterServer
+         */
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
+        /******************************************************************
+         *  DllUnregisterServer
+         */
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
         // WMV 解码器接口存根
         HRESULT WINAPI WMVDecCreateDecoder(IUnknown **ppDecoder)
         {
             TRACE("(%p)\n", ppDecoder);
-            return 0x80004001; // 未实现
+            return E_NOTIMPL; // 未实现
         }
         EOF
         
         # 创建 wmadmod DLL 配置
         cat > dlls/wmadmod/Makefile.in << 'EOF'
         MODULE    = wmadmod.dll
-        IMPORTS   = kernelbase
+        IMPORTS   = kernelbase ole32 oleaut32 uuid
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
             main.c
         EOF
         
+        # 创建 wmadmod 主实现文件（包含完整的 COM 接口）
         cat > dlls/wmadmod/main.c << 'EOF'
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "objbase.h"
         #include "wine/debug.h"
 
         WINE_DEFAULT_DEBUG_CHANNEL(wmadmod);
 
+        /******************************************************************
+         *  DllMain
+         */
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             TRACE("(%p, %ld, %p)\n", instance, reason, reserved);
@@ -442,27 +495,73 @@ jobs:
             }
             
             return TRUE;
+        }
+
+        /******************************************************************
+         *  DllGetClassObject - 必需的 COM 接口
+         */
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        {
+            TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
+            
+            if (!ppv)
+                return E_INVALIDARG;
+                
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        /******************************************************************
+         *  DllCanUnloadNow
+         */
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            TRACE("()\n");
+            return S_FALSE;
+        }
+
+        /******************************************************************
+         *  DllRegisterServer
+         */
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
+        /******************************************************************
+         *  DllUnregisterServer
+         */
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
         }
         EOF
         
         # 创建 wmilib DLL 配置
         cat > dlls/wmilib/Makefile.in << 'EOF'
         MODULE    = wmilib.dll
-        IMPORTS   = kernelbase
+        IMPORTS   = kernelbase ole32 oleaut32 uuid
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
             main.c
         EOF
         
+        # 创建 wmilib 主实现文件（包含完整的 COM 接口）
         cat > dlls/wmilib/main.c << 'EOF'
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "objbase.h"
         #include "wine/debug.h"
 
         WINE_DEFAULT_DEBUG_CHANNEL(wmilib);
 
+        /******************************************************************
+         *  DllMain
+         */
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             TRACE("(%p, %ld, %p)\n", instance, reason, reserved);
@@ -480,30 +579,73 @@ jobs:
             
             return TRUE;
         }
+
+        /******************************************************************
+         *  DllGetClassObject - 必需的 COM 接口
+         */
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        {
+            TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
+            
+            if (!ppv)
+                return E_INVALIDARG;
+                
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        /******************************************************************
+         *  DllCanUnloadNow
+         */
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            TRACE("()\n");
+            return S_FALSE;
+        }
+
+        /******************************************************************
+         *  DllRegisterServer
+         */
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
+        /******************************************************************
+         *  DllUnregisterServer
+         */
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
         EOF
         
         # 创建 wmcodecdsp DLL 配置
         cat > dlls/wmcodecdsp/Makefile.in << 'EOF'
         MODULE    = wmcodecdsp.dll
-        IMPORTS   = kernelbase mfplat
+        IMPORTS   = kernelbase mfplat ole32 oleaut32 uuid
         EXTRADLLFLAGS = -mno-cygwin
 
         C_SRCS = \
             main.c \
             mftransform.c
-        
-        IDL_SRCS = wmcodecdsp.idl
         EOF
         
-        # 创建 Windows Media Codec DSP 实现
+        # 创建 Windows Media Codec DSP 实现（包含完整的 COM 接口）
         cat > dlls/wmcodecdsp/main.c << 'EOF'
         #include <stdarg.h>
         #include "windef.h"
         #include "winbase.h"
+        #include "objbase.h"
         #include "wine/debug.h"
 
         WINE_DEFAULT_DEBUG_CHANNEL(wmcodecdsp);
 
+        /******************************************************************
+         *  DllMain
+         */
         BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
         {
             TRACE("(%p, %ld, %p)\n", instance, reason, reserved);
@@ -520,6 +662,47 @@ jobs:
             }
             
             return TRUE;
+        }
+
+        /******************************************************************
+         *  DllGetClassObject - 必需的 COM 接口
+         */
+        HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
+        {
+            TRACE("(%s, %s, %p)\n", wine_dbgstr_guid(rclsid), wine_dbgstr_guid(riid), ppv);
+            
+            if (!ppv)
+                return E_INVALIDARG;
+                
+            *ppv = NULL;
+            return CLASS_E_CLASSNOTAVAILABLE;
+        }
+
+        /******************************************************************
+         *  DllCanUnloadNow
+         */
+        HRESULT WINAPI DllCanUnloadNow(void)
+        {
+            TRACE("()\n");
+            return S_FALSE;
+        }
+
+        /******************************************************************
+         *  DllRegisterServer
+         */
+        HRESULT WINAPI DllRegisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
+        }
+
+        /******************************************************************
+         *  DllUnregisterServer
+         */
+        HRESULT WINAPI DllUnregisterServer(void)
+        {
+            TRACE("()\n");
+            return S_OK;
         }
         EOF
         
@@ -549,11 +732,47 @@ jobs:
         }
         EOF
         
+        # 为所有 Windows Media DLL 创建 .spec 文件
+        cat > dlls/wmvdecod/wmvdecod.spec << 'EOF'
+        # WMV Decoder DLL
+        @ stdcall DllGetClassObject(ptr ptr ptr)
+        @ stdcall DllCanUnloadNow()
+        @ stdcall DllRegisterServer()
+        @ stdcall DllUnregisterServer()
+        @ stdcall WMVDecCreateDecoder(ptr)
+        EOF
+        
+        cat > dlls/wmadmod/wmadmod.spec << 'EOF'
+        # WMA Decoder Module DLL
+        @ stdcall DllGetClassObject(ptr ptr ptr)
+        @ stdcall DllCanUnloadNow()
+        @ stdcall DllRegisterServer()
+        @ stdcall DllUnregisterServer()
+        EOF
+        
+        cat > dlls/wmilib/wmilib.spec << 'EOF'
+        # Windows Media Library DLL
+        @ stdcall DllGetClassObject(ptr ptr ptr)
+        @ stdcall DllCanUnloadNow()
+        @ stdcall DllRegisterServer()
+        @ stdcall DllUnregisterServer()
+        EOF
+        
+        cat > dlls/wmcodecdsp/wmcodecdsp.spec << 'EOF'
+        # Windows Media Codec DSP DLL
+        @ stdcall DllGetClassObject(ptr ptr ptr)
+        @ stdcall DllCanUnloadNow()
+        @ stdcall DllRegisterServer()
+        @ stdcall DllUnregisterServer()
+        @ stdcall WMADecMediaObject_Create(ptr ptr)
+        @ stdcall WMVDecMediaObject_Create(ptr ptr)
+        EOF
+        
         echo "Windows Media 组件补丁应用完成"
         
         # 验证补丁目录结构
         echo "验证 Windows Media 组件结构:"
-        find dlls/wm* -type f -name "*.c" -o -name "Makefile.in" | sort
+        find dlls/wm* -type f | sort
 
     - name: 彻底修复 Termux 路径问题
       run: |
