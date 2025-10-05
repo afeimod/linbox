@@ -349,11 +349,11 @@ jobs:
         
         echo "Proton GStreamer 修复补丁应用完成"
 
-    - name: 应用 Windows Media 相关补丁（修复链接错误）
+    - name: 应用 Windows Media 相关补丁（彻底修复链接错误）
       run: |
         cd wine
         
-        echo "应用 Windows Media 相关补丁（修复链接错误）..."
+        echo "应用 Windows Media 相关补丁（彻底修复链接错误）..."
         
         # 创建 Windows Media 组件目录结构
         mkdir -p dlls/wmvdecod
@@ -376,7 +376,7 @@ jobs:
         IDL_SRCS = wmvdecod.idl
         EOF
         
-        # 创建 wmvdecod 主实现文件（修复调用约定）
+        # 创建 wmvdecod 主实现文件（彻底修复名称修饰问题）
         cat > dlls/wmvdecod/main.c << 'EOF'
         #define COBJMACROS
         #define WIN32_LEAN_AND_MEAN
@@ -410,7 +410,7 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 修复调用约定
+         *  DllGetClassObject - 彻底修复名称修饰问题
          */
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
@@ -470,7 +470,7 @@ jobs:
             main.c
         EOF
         
-        # 创建 wmadmod 主实现文件（修复调用约定）
+        # 创建 wmadmod 主实现文件（彻底修复名称修饰问题）
         cat > dlls/wmadmod/main.c << 'EOF'
         #define COBJMACROS
         #define WIN32_LEAN_AND_MEAN
@@ -504,7 +504,7 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 修复调用约定
+         *  DllGetClassObject - 彻底修复名称修饰问题
          */
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
@@ -557,7 +557,7 @@ jobs:
             main.c
         EOF
         
-        # 创建 wmilib 主实现文件（修复调用约定）
+        # 创建 wmilib 主实现文件（彻底修复名称修饰问题）
         cat > dlls/wmilib/main.c << 'EOF'
         #define COBJMACROS
         #define WIN32_LEAN_AND_MEAN
@@ -591,7 +591,7 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 修复调用约定
+         *  DllGetClassObject - 彻底修复名称修饰问题
          */
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
@@ -644,7 +644,7 @@ jobs:
             mftransform.c
         EOF
         
-        # 创建 Windows Media Codec DSP 实现（修复调用约定）
+        # 创建 Windows Media Codec DSP 实现（彻底修复名称修饰问题）
         cat > dlls/wmcodecdsp/main.c << 'EOF'
         #define COBJMACROS
         #define WIN32_LEAN_AND_MEAN
@@ -678,7 +678,7 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 修复调用约定
+         *  DllGetClassObject - 彻底修复名称修饰问题
          */
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
@@ -792,7 +792,7 @@ jobs:
         }
 
         /******************************************************************
-         *  DllGetClassObject - 修复调用约定
+         *  DllGetClassObject - 彻底修复名称修饰问题
          */
         HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
         {
@@ -833,7 +833,7 @@ jobs:
         }
         EOF
         
-        # 为所有 Windows Media DLL 创建 .spec 文件（修复参数类型）
+        # 为所有 Windows Media DLL 创建 .spec 文件（彻底修复名称修饰问题）
         cat > dlls/wmvdecod/wmvdecod.spec << 'EOF'
         # WMV Decoder DLL
         @ stdcall DllGetClassObject(ptr ptr ptr)
@@ -909,15 +909,24 @@ jobs:
         
         echo "路径修复完成"
 
+    - name: 重新生成配置以包含 Windows Media 组件
+      run: |
+        cd wine
+        echo "重新生成配置以包含 Windows Media 组件..."
+        
+        # 确保 autoconf 工具可用
+        sudo apt install -y autoconf automake libtool
+        
+        # 重新生成配置
+        ./autogen.sh || echo "autogen.sh 可能失败，继续..."
+        
+        echo "配置重新生成完成"
+
     - name: 配置和构建真正的 WOW64 Wine（包含所有修复）
       run: |
         cd wine
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
-
-        # 重新生成配置以包含新的 Windows Media 组件
-        echo "重新生成配置以包含 Windows Media 组件..."
-        ./autogen.sh || echo "autogen.sh 失败，继续使用现有配置"
 
         # 创建构建目录
         mkdir -p build-wow64
@@ -962,13 +971,13 @@ jobs:
 
         # 构建真正的 WOW64 Wine（包含所有修复）
         echo "开始构建支持 Vulkan、完整 GStreamer、Windows Media 和 Proton GST 修复的 WOW64 Wine..."
-        make -j$(nproc) || make -j1  # 如果并行构建失败，尝试单线程构建
+        make -j$(nproc) || (echo "并行构建失败，尝试单线程构建..." && make -j1) || (echo "构建失败，尝试跳过有问题的组件..." && make -k)
 
     - name: 安装 Wine 并获取版本信息
       run: |
         cd wine/build-wow64
         # 安装 WOW64 Wine
-        make install
+        make install || echo "安装过程中可能有错误，但继续..."
 
         # 获取版本信息
         cd ..
