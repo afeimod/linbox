@@ -154,10 +154,10 @@ jobs:
           --without-gphoto \
           --without-osmesa \
           --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
+          #--without-udev \
+          #--without-unwind \
+          #--without-usb \
+          #--without-v4l2 \
           --without-wayland
         
         # 构建并安装
