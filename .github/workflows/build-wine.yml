@@ -113,7 +113,7 @@ jobs:
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
         # 使用稳定版本而不是开发版本
-        git checkout wine-9.0  # 使用更稳定的版本
+        git checkout wine-9.9  # 使用更稳定的版本
 
     - name: 克隆 Proton 并提取 GStreamer 修复补丁
       run: |
