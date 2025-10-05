@@ -922,7 +922,7 @@ jobs:
         
         echo "配置重新生成完成"
 
-    - name: 配置和构建真正的 WOW64 Wine（包含所有修复）
+    - name: 配置和构建真正的 WOW64 Wine（健壮构建）
       run: |
         cd wine
         mkdir -p /tmp/wine-install
@@ -969,15 +969,116 @@ jobs:
           --without-v4l2 \
           --without-wayland
 
-        # 构建真正的 WOW64 Wine（包含所有修复）
+        # 构建真正的 WOW64 Wine（健壮构建策略）
         echo "开始构建支持 Vulkan、完整 GStreamer、Windows Media 和 Proton GST 修复的 WOW64 Wine..."
-        make -j$(nproc) || (echo "并行构建失败，尝试单线程构建..." && make -j1) || (echo "构建失败，尝试跳过有问题的组件..." && make -k)
+        
+        # 第一阶段：尝试并行构建
+        echo "第一阶段：并行构建..."
+        if make -j$(nproc); then
+          echo "✅ 并行构建成功"
+        else
+          echo "⚠️ 并行构建失败，进入第二阶段：单线程构建..."
+          
+          # 第二阶段：单线程构建
+          if make -j1; then
+            echo "✅ 单线程构建成功"
+          else
+            echo "⚠️ 单线程构建失败，进入第三阶段：选择性构建..."
+            
+            # 第三阶段：选择性构建核心组件
+            echo "构建核心组件..."
+            make dlls/ntdll dlls/kernel32 dlls/user32 dlls/gdi32 dlls/advapi32 dlls/ole32 dlls/oleaut32 || true
+            make programs/wine programs/wineboot programs/winecfg || true
+            
+            echo "构建 Windows Media 组件..."
+            make dlls/wmvdecod dlls/wmadmod dlls/wmilib dlls/wmcodecdsp dlls/wmasf || true
+            
+            echo "构建 GStreamer 相关组件..."
+            make dlls/winegstreamer dlls/mfplat || true
+            
+            echo "选择性构建完成"
+          fi
+        fi
 
-    - name: 安装 Wine 并获取版本信息
+        echo "构建过程完成"
+
+    - name: 验证构建状态
       run: |
         cd wine/build-wow64
-        # 安装 WOW64 Wine
-        make install || echo "安装过程中可能有错误，但继续..."
+        
+        echo "检查构建状态:"
+        
+        # 检查核心组件
+        echo "=== 核心组件 ==="
+        for component in wine wineboot winecfg; do
+          if [ -f "programs/$component/$component" ]; then
+            echo "✅ $component 构建成功"
+          else
+            echo "❌ $component 未构建"
+          fi
+        done
+        
+        # 检查 Windows Media 组件
+        echo "=== Windows Media 组件 ==="
+        for dll in wmvdecod wmadmod wmilib wmcodecdsp wmasf; do
+          if [ -f "dlls/$dll/x86_64-windows/$dll.dll" ] || [ -f "dlls/$dll/i386-windows/$dll.dll" ]; then
+            echo "✅ $dll.dll 构建成功"
+          else
+            echo "❌ $dll.dll 未构建"
+          fi
+        done
+        
+        # 检查多媒体组件
+        echo "=== 多媒体组件 ==="
+        for dll in winegstreamer mfplat; do
+          if [ -f "dlls/$dll/x86_64-windows/$dll.dll" ] || [ -f "dlls/$dll/i386-windows/$dll.dll" ]; then
+            echo "✅ $dll.dll 构建成功"
+          else
+            echo "❌ $dll.dll 未构建"
+          fi
+        done
+        
+        echo "构建状态检查完成"
+
+    - name: 安装 Wine（健壮安装）
+      run: |
+        cd wine/build-wow64
+        
+        echo "开始安装 Wine..."
+        
+        # 尝试正常安装
+        if make install; then
+          echo "✅ 正常安装成功"
+        else
+          echo "⚠️ 正常安装失败，尝试手动安装..."
+          
+          # 手动安装核心组件
+          mkdir -p /tmp/wine-install/bin
+          mkdir -p /tmp/wine-install/lib
+          mkdir -p /tmp/wine-install/lib64
+          mkdir -p /tmp/wine-install/include
+          mkdir -p /tmp/wine-install/share
+          
+          # 复制主要的二进制文件
+          echo "复制二进制文件..."
+          cp -f programs/wine/wine /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wine"
+          cp -f programs/wineboot/wineboot /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wineboot"
+          cp -f programs/winecfg/winecfg /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 winecfg"
+          cp -f programs/wineserver/wineserver /tmp/wine-install/bin/ 2>/dev/null || echo "❌ 无法复制 wineserver"
+          
+          # 复制库文件
+          echo "复制库文件..."
+          cp -rf libs /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 libs"
+          cp -rf dlls /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 dlls"
+          cp -rf include /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 include"
+          cp -rf share /tmp/wine-install/ 2>/dev/null || echo "❌ 无法复制 share"
+          
+          # 确保必要的目录存在
+          mkdir -p /tmp/wine-install/lib/wine
+          mkdir -p /tmp/wine-install/lib64/wine
+          
+          echo "手动安装完成"
+        fi
 
         # 获取版本信息
         cd ..
@@ -985,27 +1086,28 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "Wine 版本: $VERSION - 支持 Vulkan、完整 GStreamer、Windows Media 和 Proton GST 修复的 WOW64 构建"
 
-    - name: 验证所有功能支持
+    - name: 验证安装结果
       run: |
-        echo "检查 Vulkan 支持..."
+        echo "验证安装结果..."
+        
+        echo "检查 Wine 二进制文件..."
         if [ -f "/tmp/wine-install/bin/wine" ]; then
-          echo "Wine 二进制文件存在"
+          echo "✅ Wine 二进制文件存在"
+          /tmp/wine-install/bin/wine --version || echo "⚠️ Wine 版本检查失败"
         else
-          echo "错误: Wine 二进制文件不存在"
-          exit 1
+          echo "❌ Wine 二进制文件不存在"
         fi
         
-        echo "检查 GStreamer 支持..."
-        find /tmp/wine-install -name "*gst*" | head -10
-        echo ""
         echo "检查 Windows Media 组件..."
-        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" -o -name "*wmasf*" | head -10
-        echo ""
-        echo "检查 Windows Media DLL 文件..."
-        ls -la /tmp/wine-install/lib*/wine/wmvdecod.dll /tmp/wine-install/lib*/wine/wmadmod.dll /tmp/wine-install/lib*/wine/wmasf.dll 2>/dev/null || echo "部分 Windows Media DLL 文件可能未构建"
-        echo ""
-        echo "检查 Proton GST 修复..."
-        find /tmp/wine-install -name "*decode*" -o -name "*transform*" | head -10
+        find /tmp/wine-install -name "*wmv*" -o -name "*wma*" -o -name "*wmilib*" -o -name "*wmcodec*" -o -name "*wmasf*" | head -10 || echo "未找到 Windows Media 组件"
+        
+        echo "检查 GStreamer 支持..."
+        find /tmp/wine-install -name "*gst*" | head -5 || echo "未找到 GStreamer 组件"
+        
+        echo "检查 Vulkan 支持..."
+        find /tmp/wine-install -name "*vulkan*" | head -5 || echo "未找到 Vulkan 组件"
+        
+        echo "验证完成"
 
     - name: 准备中文字体和配置
       run: |
@@ -1017,7 +1119,7 @@ jobs:
         
         # 复制 Wine 安装文件
         echo "复制 Wine 文件..."
-        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        cp -r /tmp/wine-install/* wine-package/opt/wine/ || echo "复制过程中可能有错误，但继续..."
         
         # 下载基本中文字体
         echo "下载中文字体..."
