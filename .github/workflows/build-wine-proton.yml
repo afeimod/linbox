@@ -143,22 +143,23 @@ jobs:
           --with-gettext \
           --enable-nls \
           --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
+          #--without-sane \
+         # --without-pcap \
+         # --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
           --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss 
-          #--without-udev \
+         # --without-coreaudio \
+          #--without-gphoto \
+          #--without-osmesa \
+          --without-oss \
+          --without-ldap
+         # --without-udev \
           #--without-unwind \
-          #--without-usb \
-          #--without-v4l2 \
-          #--without-wayland
+         # --without-usb \
+         # --without-v4l2 \
+         # --without-wayland
         
         # 构建并安装
         make -j$(nproc)
