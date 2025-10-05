@@ -143,18 +143,18 @@ jobs:
           --with-gettext \
           --enable-nls \
           --without-dbus \
-          #--without-sane \
-         # --without-pcap \
-         # --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
           --without-capi \
-         # --without-coreaudio \
-          #--without-gphoto \
-          #--without-osmesa \
           --without-oss \
           --without-ldap
+        # --without-coreaudio \
+          #--without-gphoto \
+          #--without-osmesa \
+         #--without-sane \
+         # --without-pcap \
+         # --without-pcsclite \
          # --without-udev \
           #--without-unwind \
          # --without-usb \
