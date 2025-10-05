@@ -1092,16 +1092,6 @@ jobs:
           cp -rf ../po /tmp/wine-install/share/ 2>/dev/null || true
           cp -rf ../documentation /tmp/wine-install/share/ 2>/dev/null || true
           
-          # 创建必要的配置文件
-          cat > /tmp/wine-install/etc/fonts/fonts.conf << 'EOF'
-            <?xml version="1.0"?>
-            <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-            <fontconfig>
-            <dir>/system/fonts</dir>
-                <dir>/data/data/com.termux/files/usr/share/fonts</dir>
-                <cachedir>/data/data/com.termux/files/usr/tmp/fontconfig</cachedir>
-            </fontconfig>
-          EOF
           
           echo "手动安装完成"
         fi
