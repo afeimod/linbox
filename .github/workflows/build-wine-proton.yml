@@ -153,12 +153,12 @@ jobs:
           --without-coreaudio \
           --without-gphoto \
           --without-osmesa \
-          --without-oss \
+          --without-oss 
           #--without-udev \
           #--without-unwind \
           #--without-usb \
           #--without-v4l2 \
-          --without-wayland
+          #--without-wayland
         
         # 构建并安装
         make -j$(nproc)
