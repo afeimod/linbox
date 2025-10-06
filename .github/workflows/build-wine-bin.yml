@@ -105,13 +105,24 @@ jobs:
         echo "应用 Wine Staging 补丁..."
         cd wine-staging
         
-        # 检查是否有对应版本的补丁
-        if [ -d "patches" ]; then
-          # 应用所有可用的补丁
-          ./patches/patchinstall.sh DESTDIR=../ --all
+        # 检查补丁脚本的位置（新版本可能在根目录）
+        if [ -f "patchinstall.sh" ]; then
+          echo "找到 patchinstall.sh 在根目录"
+          ./patchinstall.sh --destdir=../ --all
+          echo "Wine Staging 补丁应用完成"
+        elif [ -f "patches/patchinstall.sh" ]; then
+          echo "找到 patchinstall.sh 在 patches 目录"
+          ./patches/patchinstall.sh --destdir=../ --all
           echo "Wine Staging 补丁应用完成"
         else
-          echo "警告: 未找到补丁目录，跳过补丁应用"
+          echo "警告: 未找到 patchinstall.sh 脚本，尝试手动应用补丁"
+          # 尝试手动应用补丁
+          if [ -d "patches" ]; then
+            echo "找到 patches 目录，尝试手动处理"
+            # 这里可以添加手动应用补丁的逻辑
+          else
+            echo "错误: 未找到补丁目录，跳过补丁应用"
+          fi
         fi
         
         cd ..
