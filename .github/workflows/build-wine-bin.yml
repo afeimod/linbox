@@ -144,17 +144,15 @@ jobs:
           echo "主要源下载失败，尝试备用源..."
           if ! wget -O unity-video-decode.patch https://raw.githubusercontent.com/Kron4ek/Wine-Builds/master/patches/unity-video-decode/unity-video-decode.patch 2>/dev/null; then
             echo "Unity 视频解码补丁下载失败，创建基本补丁"
-            # 创建基本的 Unity 视频解码补丁
-            cat > unity-video-decode.patch << 'UNITYPATCH'
-            --- a/dlls/winegstreamer/Makefile.in
-            +++ b/dlls/winegstreamer/Makefile.in
-            @@ -1,4 +1,4 @@
-             MODULE    = winegstreamer.dll
-             IMPORTLIB = winegstreamer
-             IMPORTS   = strmiids uuid ole32 oleaut32 rpcrt4 shlwapi advapi32
-            -PARENTSRC = ../strmbase
-            +PARENTSRC = ../strmbase
-             UNITYPATCH
+            # 创建基本的 Unity 视频解码补丁 - 使用 echo 命令避免 heredoc 问题
+            echo '--- a/dlls/winegstreamer/Makefile.in' > unity-video-decode.patch
+            echo '+++ b/dlls/winegstreamer/Makefile.in' >> unity-video-decode.patch
+            echo '@@ -1,4 +1,4 @@' >> unity-video-decode.patch
+            echo ' MODULE    = winegstreamer.dll' >> unity-video-decode.patch
+            echo ' IMPORTLIB = winegstreamer' >> unity-video-decode.patch
+            echo ' IMPORTS   = strmiids uuid ole32 oleaut32 rpcrt4 shlwapi advapi32' >> unity-video-decode.patch
+            echo '-PARENTSRC = ../strmbase' >> unity-video-decode.patch
+            echo '+PARENTSRC = ../strmbase' >> unity-video-decode.patch
           fi
         fi
         
@@ -164,19 +162,17 @@ jobs:
           echo "主要源下载失败，尝试备用源..."
           if ! wget -O wine-ffmpeg.patch https://raw.githubusercontent.com/Kron4ek/Wine-Builds/master/patches/wine-ffmpeg/wine-ffmpeg.patch 2>/dev/null; then
             echo "FFmpeg 补丁下载失败，创建基本补丁"
-            # 创建基本的 FFmpeg 补丁
-            cat > wine-ffmpeg.patch << 'FFMPEGPATCH'
-            --- a/configure.ac
-            +++ b/configure.ac
-            @@ -100,6 +100,7 @@
-             AC_ARG_ENABLE(win16,
-               AS_HELP_STRING([--disable-win16],[do not build 16-bit Windows support]))
- 
-            +AC_CHECK_HEADERS([libavcodec/avcodec.h libavformat/avformat.h])
-             AC_CHECK_HEADERS([libxml/parser.h])
- 
-             dnl Note: this test should be before the tests that use X11
-             FFMPEGPATCH
+            # 创建基本的 FFmpeg 补丁 - 使用 echo 命令避免 heredoc 问题
+            echo '--- a/configure.ac' > wine-ffmpeg.patch
+            echo '+++ b/configure.ac' >> wine-ffmpeg.patch
+            echo '@@ -100,6 +100,7 @@' >> wine-ffmpeg.patch
+            echo ' AC_ARG_ENABLE(win16,' >> wine-ffmpeg.patch
+            echo '               AS_HELP_STRING([--disable-win16],[do not build 16-bit Windows support]))' >> wine-ffmpeg.patch
+            echo '' >> wine-ffmpeg.patch
+            echo '+AC_CHECK_HEADERS([libavcodec/avcodec.h libavformat/avformat.h])' >> wine-ffmpeg.patch
+            echo ' AC_CHECK_HEADERS([libxml/parser.h])' >> wine-ffmpeg.patch
+            echo '' >> wine-ffmpeg.patch
+            echo ' dnl Note: this test should be before the tests that use X11' >> wine-ffmpeg.patch
           fi
         fi
         
@@ -337,121 +333,115 @@ jobs:
         # 确保目录存在
         mkdir -p wine-package/bin
         
-        # 创建 wine 包装脚本
-        cat > wine-package/bin/wine << 'EOF'
-        #!/bin/bash
-        # True WOW64 Wine for Termux 启动脚本（支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）
-        
-        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        export HOME="$HOME"
-        
-        # 设置临时目录
-        export TMPDIR="$TERMUX_PREFIX/tmp"
-        export TEMP="$TMPDIR"
-        export TMP="$TMPDIR"
-        
-        # 确保临时目录存在
-        mkdir -p "$TMPDIR" 2>/dev/null
-        
-        # 设置 Wine 前缀
-        if [ -z "$WINEPREFIX" ]; then
-            export WINEPREFIX="$HOME/.wine"
-        fi
-        
-        # 确保 Wine 前缀目录存在
-        mkdir -p "$WINEPREFIX" 2>/dev/null
-        
-        # 设置库路径 - 包含 Vulkan 和 GStreamer 库路径
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
-        
-        # 设置 Vulkan 驱动路径
-        export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-        export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
-        
-        # 设置 GStreamer 环境变量
-        export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
-        export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0:$TERMUX_PREFIX/opt/wine/lib/gstreamer-1.0"
-        export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"
-        
-        # 设置字体路径
-        export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
-        export FONTCONFIG_FILE="$FONTCONFIG_PATH/fonts.conf"
-        
-        # 设置其他 Wine 相关环境变量
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-        export WINEARCH="win64"  # WOW64 模式
-        
-        # 启用 Staging 补丁功能
-        export STAGING_SHARED_MEMORY=1
-        export STAGING_WRITECOPY=1
-        export STAGING_CSMT=1
-        
-        # Unity 视频解码优化
-        export UNITY_VIDEO_DECODE_OPTIMIZE=1
-        export WINE_UNITY_VIDEO_FIX=1
-        
-        # FFmpeg 相关设置
-        export WINE_FFMPEG_ENABLE=1
-        export AVCODEC_DECODER_ENABLE=1
-        
-        # 设置中文环境
-        export LANG="zh_CN.UTF-8"
-        export LC_ALL="zh_CN.UTF-8"
-        export LC_CTYPE="zh_CN.UTF-8"
-        
-        # 调试信息
-        if [ "$DEBUG_MEDIA" = "1" ]; then
-            echo "=== 多媒体环境调试信息 ==="
-            echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-            echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"
-            echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
-            echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
-            echo "Staging 环境变量:"
-            echo "  STAGING_SHARED_MEMORY=$STAGING_SHARED_MEMORY"
-            echo "  STAGING_WRITECOPY=$STAGING_WRITECOPY"
-            echo "  STAGING_CSMT=$STAGING_CSMT"
-            echo "Unity 视频解码: $UNITY_VIDEO_DECODE_OPTIMIZE"
-            echo "FFmpeg 支持: $WINE_FFMPEG_ENABLE"
-            echo "=== 结束调试信息 ==="
-        fi
-        
-        # 运行真正的 wine 程序
-        exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
-        EOF
+        # 创建 wine 包装脚本 - 使用 echo 命令避免 heredoc 问题
+        echo '#!/bin/bash' > wine-package/bin/wine
+        echo '# True WOW64 Wine for Termux 启动脚本（支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo 'export TERMUX_PREFIX="/data/data/com.termux/files/usr"' >> wine-package/bin/wine
+        echo 'export HOME="$HOME"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置临时目录' >> wine-package/bin/wine
+        echo 'export TMPDIR="$TERMUX_PREFIX/tmp"' >> wine-package/bin/wine
+        echo 'export TEMP="$TMPDIR"' >> wine-package/bin/wine
+        echo 'export TMP="$TMPDIR"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 确保临时目录存在' >> wine-package/bin/wine
+        echo 'mkdir -p "$TMPDIR" 2>/dev/null' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置 Wine 前缀' >> wine-package/bin/wine
+        echo 'if [ -z "$WINEPREFIX" ]; then' >> wine-package/bin/wine
+        echo '    export WINEPREFIX="$HOME/.wine"' >> wine-package/bin/wine
+        echo 'fi' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 确保 Wine 前缀目录存在' >> wine-package/bin/wine
+        echo 'mkdir -p "$WINEPREFIX" 2>/dev/null' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置库路径 - 包含 Vulkan 和 GStreamer 库路径' >> wine-package/bin/wine
+        echo 'export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置 Vulkan 驱动路径' >> wine-package/bin/wine
+        echo 'export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"' >> wine-package/bin/wine
+        echo 'export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置 GStreamer 环境变量' >> wine-package/bin/wine
+        echo 'export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"' >> wine-package/bin/wine
+        echo 'export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0:$TERMUX_PREFIX/opt/wine/lib/gstreamer-1.0"' >> wine-package/bin/wine
+        echo 'export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置字体路径' >> wine-package/bin/wine
+        echo 'export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"' >> wine-package/bin/wine
+        echo 'export FONTCONFIG_FILE="$FONTCONFIG_PATH/fonts.conf"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置其他 Wine 相关环境变量' >> wine-package/bin/wine
+        echo 'export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"' >> wine-package/bin/wine
+        echo 'export WINEARCH="win64"  # WOW64 模式' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 启用 Staging 补丁功能' >> wine-package/bin/wine
+        echo 'export STAGING_SHARED_MEMORY=1' >> wine-package/bin/wine
+        echo 'export STAGING_WRITECOPY=1' >> wine-package/bin/wine
+        echo 'export STAGING_CSMT=1' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# Unity 视频解码优化' >> wine-package/bin/wine
+        echo 'export UNITY_VIDEO_DECODE_OPTIMIZE=1' >> wine-package/bin/wine
+        echo 'export WINE_UNITY_VIDEO_FIX=1' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# FFmpeg 相关设置' >> wine-package/bin/wine
+        echo 'export WINE_FFMPEG_ENABLE=1' >> wine-package/bin/wine
+        echo 'export AVCODEC_DECODER_ENABLE=1' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 设置中文环境' >> wine-package/bin/wine
+        echo 'export LANG="zh_CN.UTF-8"' >> wine-package/bin/wine
+        echo 'export LC_ALL="zh_CN.UTF-8"' >> wine-package/bin/wine
+        echo 'export LC_CTYPE="zh_CN.UTF-8"' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 调试信息' >> wine-package/bin/wine
+        echo 'if [ "$DEBUG_MEDIA" = "1" ]; then' >> wine-package/bin/wine
+        echo '    echo "=== 多媒体环境调试信息 ==="' >> wine-package/bin/wine
+        echo '    echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"' >> wine-package/bin/wine
+        echo '    echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"' >> wine-package/bin/wine
+        echo '    echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"' >> wine-package/bin/wine
+        echo '    echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"' >> wine-package/bin/wine
+        echo '    echo "Staging 环境变量:"' >> wine-package/bin/wine
+        echo '    echo "  STAGING_SHARED_MEMORY=$STAGING_SHARED_MEMORY"' >> wine-package/bin/wine
+        echo '    echo "  STAGING_WRITECOPY=$STAGING_WRITECOPY"' >> wine-package/bin/wine
+        echo '    echo "  STAGING_CSMT=$STAGING_CSMT"' >> wine-package/bin/wine
+        echo '    echo "Unity 视频解码: $UNITY_VIDEO_DECODE_OPTIMIZE"' >> wine-package/bin/wine
+        echo '    echo "FFmpeg 支持: $WINE_FFMPEG_ENABLE"' >> wine-package/bin/wine
+        echo '    echo "=== 结束调试信息 ==="' >> wine-package/bin/wine
+        echo 'fi' >> wine-package/bin/wine
+        echo '' >> wine-package/bin/wine
+        echo '# 运行真正的 wine 程序' >> wine-package/bin/wine
+        echo 'exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"' >> wine-package/bin/wine
         
         chmod +x wine-package/bin/wine
         
         # 创建 wineserver 包装脚本
-        cat > wine-package/bin/wineserver << 'EOF'
-        #!/bin/bash
-        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        export TMPDIR="$TERMUX_PREFIX/tmp"
-        export TEMP="$TMPDIR"
-        export TMP="$TMPDIR"
-        
-        mkdir -p "$TMPDIR" 2>/dev/null
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-        
-        exec "$TERMUX_PREFIX/opt/wine/bin/wineserver" "$@"
-        EOF
+        echo '#!/bin/bash' > wine-package/bin/wineserver
+        echo 'export TERMUX_PREFIX="/data/data/com.termux/files/usr"' >> wine-package/bin/wineserver
+        echo 'export TMPDIR="$TERMUX_PREFIX/tmp"' >> wine-package/bin/wineserver
+        echo 'export TEMP="$TMPDIR"' >> wine-package/bin/wineserver
+        echo 'export TMP="$TMPDIR"' >> wine-package/bin/wineserver
+        echo '' >> wine-package/bin/wineserver
+        echo 'mkdir -p "$TMPDIR" 2>/dev/null' >> wine-package/bin/wineserver
+        echo 'export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"' >> wine-package/bin/wineserver
+        echo 'export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"' >> wine-package/bin/wineserver
+        echo '' >> wine-package/bin/wineserver
+        echo 'exec "$TERMUX_PREFIX/opt/wine/bin/wineserver" "$@"' >> wine-package/bin/wineserver
         
         chmod +x wine-package/bin/wineserver
 
         # 创建 winecfg 包装脚本
-        cat > wine-package/bin/winecfg << 'EOF'
-        #!/bin/bash
-        export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        export TMPDIR="$TERMUX_PREFIX/tmp"
-        export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"
-        export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-        export LANG="zh_CN.UTF-8"
-        exec "$TERMUX_PREFIX/opt/wine/bin/winecfg" "$@"
-        EOF
+        echo '#!/bin/bash' > wine-package/bin/winecfg
+        echo 'export TERMUX_PREFIX="/data/data/com.termux/files/usr"' >> wine-package/bin/winecfg
+        echo 'export TMPDIR="$TERMUX_PREFIX/tmp"' >> wine-package/bin/winecfg
+        echo 'export LD_LIBRARY_PATH="$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0:$LD_LIBRARY_PATH"' >> wine-package/bin/winecfg
+        echo 'export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"' >> wine-package/bin/winecfg
+        echo 'export LANG="zh_CN.UTF-8"' >> wine-package/bin/winecfg
+        echo 'exec "$TERMUX_PREFIX/opt/wine/bin/winecfg" "$@"' >> wine-package/bin/winecfg
         
         chmod +x wine-package/bin/winecfg
 
-    - name: 创建 Vulkan、GStreamer、Staging、Unity 视频解码和 FFmpeg 配置文件
+    - name: 创建配置文件
       run: |
         # 确保所有必要的目录都存在
         echo "创建必要的目录结构..."
@@ -462,589 +452,261 @@ jobs:
         mkdir -p wine-package/share/ffmpeg
         mkdir -p wine-package/opt/wine/etc/fonts
         
-        echo "目录结构创建完成:"
-        find wine-package -type d | sort
-        
-        # 创建 Freedreno Vulkan ICD 配置文件
-        echo "创建 Vulkan 配置文件..."
-        cat > wine-package/share/vulkan/icd.d/freedreno_icd.aarch64.json << 'EOF'
-        {
-            "file_format_version": "1.0.0",
-            "ICD": {
-                "library_path": "libvulkan_freedreno.so",
-                "api_version": "1.0.0"
-            }
-        }
-        EOF
+        # 创建 Vulkan 配置文件
+        echo '{"file_format_version": "1.0.0","ICD": {"library_path": "libvulkan_freedreno.so","api_version": "1.0.0"}}' > wine-package/share/vulkan/icd.d/freedreno_icd.aarch64.json
         
         # 创建 GStreamer 配置文件
-        echo "创建 GStreamer 配置文件..."
-        cat > wine-package/share/gstreamer-1.0/environment.sh << 'EOF'
-        #!/bin/bash
-        # GStreamer 环境配置
-        
-        export GST_PLUGIN_SYSTEM_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"
-        export GST_PLUGIN_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"
-        export GST_REGISTRY="/data/data/com.termux/files/usr/tmp/gstreamer-registry.bin"
-        
-        # 启用 GStreamer 调试（可选）
-        # export GST_DEBUG=2
-        EOF
-        
+        echo '#!/bin/bash' > wine-package/share/gstreamer-1.0/environment.sh
+        echo '# GStreamer 环境配置' >> wine-package/share/gstreamer-1.0/environment.sh
+        echo 'export GST_PLUGIN_SYSTEM_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"' >> wine-package/share/gstreamer-1.0/environment.sh
+        echo 'export GST_PLUGIN_PATH="/data/data/com.termux/files/usr/lib/gstreamer-1.0"' >> wine-package/share/gstreamer-1.0/environment.sh
+        echo 'export GST_REGISTRY="/data/data/com.termux/files/usr/tmp/gstreamer-registry.bin"' >> wine-package/share/gstreamer-1.0/environment.sh
         chmod +x wine-package/share/gstreamer-1.0/environment.sh
         
-        # 创建 Staging 环境配置文件
-        echo "创建 Staging 配置文件..."
-        cat > wine-package/share/wine-staging/environment.sh << 'EOF'
-        #!/bin/bash
-        # Wine Staging 环境配置
-        
-        # Staging 补丁功能启用
-        export STAGING_SHARED_MEMORY=1
-        export STAGING_WRITECOPY=1
-        export STAGING_CSMT=1
-        
-        # 其他有用的 Staging 设置
-        export STAGING_AUDIO_DUMP=0
-        export STAGING_AUDIO_DUMP_DIR="/data/data/com.termux/files/usr/tmp/audio_dump"
-        
-        echo "Wine Staging 环境已配置"
-        EOF
-        
+        # 创建 Staging 配置文件
+        echo '#!/bin/bash' > wine-package/share/wine-staging/environment.sh
+        echo '# Wine Staging 环境配置' >> wine-package/share/wine-staging/environment.sh
+        echo 'export STAGING_SHARED_MEMORY=1' >> wine-package/share/wine-staging/environment.sh
+        echo 'export STAGING_WRITECOPY=1' >> wine-package/share/wine-staging/environment.sh
+        echo 'export STAGING_CSMT=1' >> wine-package/share/wine-staging/environment.sh
+        echo 'export STAGING_AUDIO_DUMP=0' >> wine-package/share/wine-staging/environment.sh
+        echo 'export STAGING_AUDIO_DUMP_DIR="/data/data/com.termux/files/usr/tmp/audio_dump"' >> wine-package/share/wine-staging/environment.sh
+        echo 'echo "Wine Staging 环境已配置"' >> wine-package/share/wine-staging/environment.sh
         chmod +x wine-package/share/wine-staging/environment.sh
         
         # 创建 Unity 视频解码配置文件
-        echo "创建 Unity 视频解码配置文件..."
-        cat > wine-package/share/unity-video/environment.sh << 'EOF'
-        #!/bin/bash
-        # Unity 视频解码环境配置
-        
-        # 启用 Unity 视频解码优化
-        export UNITY_VIDEO_DECODE_OPTIMIZE=1
-        export WINE_UNITY_VIDEO_FIX=1
-        
-        # Unity 视频解码设置
-        export UNITY_VIDEO_HARDWARE_DECODE=1
-        export UNITY_VIDEO_THREADS=2
-        
-        echo "Unity 视频解码环境已配置"
-        EOF
-        
+        echo '#!/bin/bash' > wine-package/share/unity-video/environment.sh
+        echo '# Unity 视频解码环境配置' >> wine-package/share/unity-video/environment.sh
+        echo 'export UNITY_VIDEO_DECODE_OPTIMIZE=1' >> wine-package/share/unity-video/environment.sh
+        echo 'export WINE_UNITY_VIDEO_FIX=1' >> wine-package/share/unity-video/environment.sh
+        echo 'export UNITY_VIDEO_HARDWARE_DECODE=1' >> wine-package/share/unity-video/environment.sh
+        echo 'export UNITY_VIDEO_THREADS=2' >> wine-package/share/unity-video/environment.sh
+        echo 'echo "Unity 视频解码环境已配置"' >> wine-package/share/unity-video/environment.sh
         chmod +x wine-package/share/unity-video/environment.sh
         
         # 创建 FFmpeg 配置文件
-        echo "创建 FFmpeg 配置文件..."
-        cat > wine-package/share/ffmpeg/environment.sh << 'EOF'
-        #!/bin/bash
-        # FFmpeg 环境配置
-        
-        # 启用 Wine FFmpeg 支持
-        export WINE_FFMPEG_ENABLE=1
-        export AVCODEC_DECODER_ENABLE=1
-        export AVFORMAT_DEMUXER_ENABLE=1
-        
-        # FFmpeg 解码器设置
-        export FFMPEG_HARDWARE_ACCELERATION=1
-        export FFMPEG_THREAD_COUNT=2
-        
-        echo "FFmpeg 环境已配置"
-        EOF
-        
+        echo '#!/bin/bash' > wine-package/share/ffmpeg/environment.sh
+        echo '# FFmpeg 环境配置' >> wine-package/share/ffmpeg/environment.sh
+        echo 'export WINE_FFMPEG_ENABLE=1' >> wine-package/share/ffmpeg/environment.sh
+        echo 'export AVCODEC_DECODER_ENABLE=1' >> wine-package/share/ffmpeg/environment.sh
+        echo 'export AVFORMAT_DEMUXER_ENABLE=1' >> wine-package/share/ffmpeg/environment.sh
+        echo 'export FFMPEG_HARDWARE_ACCELERATION=1' >> wine-package/share/ffmpeg/environment.sh
+        echo 'export FFMPEG_THREAD_COUNT=2' >> wine-package/share/ffmpeg/environment.sh
+        echo 'echo "FFmpeg 环境已配置"' >> wine-package/share/ffmpeg/environment.sh
         chmod +x wine-package/share/ffmpeg/environment.sh
         
         # 创建字体配置文件
-        echo "创建字体配置文件..."
-        cat > wine-package/opt/wine/etc/fonts/fonts.conf << 'EOF'
-        <?xml version="1.0"?>
-        <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-        <fontconfig>
-            <dir>/data/data/com.termux/files/usr/share/fonts</dir>
-            <dir>/system/fonts</dir>
-            <dir>/system/fonts/fallback</dir>
-            
-            <!-- 中文字体配置 -->
-            <alias>
-                <family>serif</family>
-                <prefer>
-                    <family>Source Han Serif SC</family>
-                    <family>Noto Serif CJK SC</family>
-                    <family>DejaVu Serif</family>
-                    <family>Times New Roman</family>
-                </prefer>
-            </alias>
-            <alias>
-                <family>sans-serif</family>
-                <prefer>
-                    <family>Source Han Sans SC</family>
-                    <family>Noto Sans CJK SC</family>
-                    <family>DejaVu Sans</family>
-                    <family>Arial</family>
-                </prefer>
-            </alias>
-            <alias>
-                <family>monospace</family>
-                <prefer>
-                    <family>Source Han Sans SC</family>
-                    <family>Noto Sans Mono CJK SC</family>
-                    <family>DejaVu Sans Mono</family>
-                    <family>Courier New</family>
-                </prefer>
-            </alias>
-            
-            <!-- 接受所有字体 -->
-            <accept>
-                <family>*</family>
-            </accept>
-        </fontconfig>
-        EOF
-        
-        echo "所有配置文件创建完成"
-        echo "最终目录结构:"
-        find wine-package -type f | sort
+        echo '<?xml version="1.0"?>' > wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '<fontconfig>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <dir>/data/data/com.termux/files/usr/share/fonts</dir>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <dir>/system/fonts</dir>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <dir>/system/fonts/fallback</dir>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <alias><family>serif</family><prefer><family>Source Han Serif SC</family><family>Noto Serif CJK SC</family><family>DejaVu Serif</family><family>Times New Roman</family></prefer></alias>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <alias><family>sans-serif</family><prefer><family>Source Han Sans SC</family><family>Noto Sans CJK SC</family><family>DejaVu Sans</family><family>Arial</family></prefer></alias>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <alias><family>monospace</family><prefer><family>Source Han Sans SC</family><family>Noto Sans Mono CJK SC</family><family>DejaVu Sans Mono</family><family>Courier New</family></prefer></alias>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '    <accept><family>*</family></accept>' >> wine-package/opt/wine/etc/fonts/fonts.conf
+        echo '</fontconfig>' >> wine-package/opt/wine/etc/fonts/fonts.conf
 
-    - name: 创建完整的安装脚本（包含 Vulkan、GStreamer、Staging、Unity 视频解码和 FFmpeg 配置）
+    - name: 创建安装和测试脚本
       run: |
-        # 确保目录存在
-        mkdir -p wine-package
-        
-        cat > wine-package/install.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        echo "=========================================="
-        echo "   True WOW64 Wine for Termux 安装脚本"
-        echo "   （支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）"
-        echo "=========================================="
-        
-        TERMUX_PREFIX="/data/data/com.termux/files/usr"
-        INSTALL_DIR="$TERMUX_PREFIX/opt/wine"
-        BIN_DIR="$TERMUX_PREFIX/bin"
-        FONT_DIR="$TERMUX_PREFIX/share/fonts"
-        VULKAN_DIR="$TERMUX_PREFIX/share/vulkan"
-        GST_DIR="$TERMUX_PREFIX/share/gstreamer-1.0"
-        STAGING_DIR="$TERMUX_PREFIX/share/wine-staging"
-        UNITY_VIDEO_DIR="$TERMUX_PREFIX/share/unity-video"
-        FFMPEG_DIR="$TERMUX_PREFIX/share/ffmpeg"
-        
-        # 检查环境
-        if [ ! -d "$TERMUX_PREFIX" ]; then
-            echo "错误: 这似乎不是 Termux 环境!"
-            exit 1
-        fi
-        
-        # 创建目录
-        echo "创建目录..."
-        mkdir -p "$INSTALL_DIR"
-        mkdir -p "$BIN_DIR"
-        mkdir -p "$FONT_DIR"
-        mkdir -p "$VULKAN_DIR/icd.d"
-        mkdir -p "$GST_DIR"
-        mkdir -p "$STAGING_DIR"
-        mkdir -p "$UNITY_VIDEO_DIR"
-        mkdir -p "$FFMPEG_DIR"
-        mkdir -p "$TERMUX_PREFIX/tmp"
-        mkdir -p "$HOME/.wine"
-        mkdir -p "$INSTALL_DIR/etc/fonts"
-        
-        # 安装文件
-        echo "安装 Wine 文件..."
-        cp -r opt/wine/* "$INSTALL_DIR"/
-        
-        echo "安装启动脚本..."
-        cp bin/wine "$BIN_DIR"/
-        cp bin/wineserver "$BIN_DIR"/
-        cp bin/winecfg "$BIN_DIR"/
-        
-        echo "安装字体配置..."
-        cp opt/wine/etc/fonts/fonts.conf "$INSTALL_DIR/etc/fonts/"
-        
-        echo "安装 Vulkan 配置..."
-        cp -r share/vulkan/* "$VULKAN_DIR"/
-        
-        echo "安装 GStreamer 配置..."
-        cp -r share/gstreamer-1.0/* "$GST_DIR"/
-        
-        echo "安装 Staging 配置..."
-        cp -r share/wine-staging/* "$STAGING_DIR"/
-        
-        echo "安装 Unity 视频解码配置..."
-        cp -r share/unity-video/* "$UNITY_VIDEO_DIR"/
-        
-        echo "安装 FFmpeg 配置..."
-        cp -r share/ffmpeg/* "$FFMPEG_DIR"/
-        
-        echo "安装字体..."
-        cp share/fonts/* "$FONT_DIR"/ 2>/dev/null || echo "没有额外字体可安装"
-        
-        chmod +x "$BIN_DIR"/wine
-        chmod +x "$BIN_DIR"/wineserver
-        chmod +x "$BIN_DIR"/winecfg
-        
-        # 配置环境
-        echo "配置环境变量..."
-        
-        if ! grep -q "True WOW64 Wine with Vulkan, GStreamer, Staging, Unity Video and FFmpeg" "$HOME/.bashrc" 2>/dev/null; then
-            cat >> "$HOME/.bashrc" << 'EOL'
-
-            # True WOW64 Wine with Vulkan, GStreamer, Staging, Unity Video and FFmpeg 环境配置
-            export TERMUX_PREFIX="/data/data/com.termux/files/usr"
-            export WINEPREFIX="$HOME/.wine"
-            export WINEARCH="win64"  # WOW64 模式
-            export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0"
-            export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-            export TMPDIR="$TERMUX_PREFIX/tmp"
-            export TEMP="$TMPDIR"
-            export TMP="$TMPDIR"
-            export LANG="zh_CN.UTF-8"
-            export LC_ALL="zh_CN.UTF-8"
-            export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
-
-            # GStreamer 配置
-            export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
-            export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"
-            export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"
-
-            # Vulkan 配置
-            export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-            export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"
-
-            # Wine Staging 配置
-            export STAGING_SHARED_MEMORY=1
-            export STAGING_WRITECOPY=1
-            export STAGING_CSMT=1
-
-            # Unity 视频解码配置
-            export UNITY_VIDEO_DECODE_OPTIMIZE=1
-            export WINE_UNITY_VIDEO_FIX=1
-            export UNITY_VIDEO_HARDWARE_DECODE=1
-
-            # FFmpeg 配置
-            export WINE_FFMPEG_ENABLE=1
-            export AVCODEC_DECODER_ENABLE=1
-            export AVFORMAT_DEMUXER_ENABLE=1
-            # ==========================================
-            EOL
-        fi
-        
-        echo ""
-        echo "=========================================="
-        echo "   True WOW64 Wine 安装完成!"
-        echo "   （支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）"
-        echo "=========================================="
-        echo ""
-        echo "特性:"
-        echo "✓ 真正的 WOW64 架构"
-        echo "✓ 同时支持 32 位和 64 位 Windows 应用程序"
-        echo "✓ 中文环境支持"
-        echo "✓ Vulkan 图形 API 支持"
-        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ Wine Staging 补丁（增强兼容性和性能）"
-        echo "✓ Unity 视频解码补丁（优化 Unity 游戏视频播放）"
-        echo "✓ FFmpeg 补丁（增强多媒体格式支持）"
-        echo "✓ 字体配置"
-        echo ""
-        echo "多媒体支持:"
-        echo "- GStreamer 核心插件"
-        echo "- GStreamer FFmpeg 插件 (libav)"
-        echo "- GStreamer Good、Bad、Ugly 插件集"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 等格式"
-        echo "- Unity 游戏视频优化解码"
-        echo "- 增强的 FFmpeg 编解码器支持"
-        echo ""
-        echo "Staging 补丁功能:"
-        echo "- CSMT（命令流多线程）- 提升图形性能"
-        echo "- 共享内存优化"
-        echo "- WriteCopy 内存管理"
-        echo "- 额外的音频和视频编解码器支持"
-        echo "- 游戏和应用程序兼容性改进"
-        echo ""
-        echo "Unity 视频解码功能:"
-        echo "- 优化 Unity 游戏中的视频播放"
-        echo "- 硬件加速视频解码"
-        echo "- 改进的视频同步和性能"
-        echo "- 支持更多视频格式"
-        echo ""
-        echo "FFmpeg 功能:"
-        echo "- 增强的多媒体格式支持"
-        echo "- 改进的视频和音频编解码"
-        echo "- 更好的流媒体支持"
-        echo "- 硬件加速编解码"
-        echo ""
-        echo "Vulkan 使用说明:"
-        echo "1. 确保设备支持 Vulkan"
-        echo "2. 确保安装了 Mesa Vulkan 驱动: pkg install mesa-vulkan-driver"
-        echo "3. 使用 Vulkan 渲染的游戏应该现在可以运行"
-        echo ""
-        echo "GStreamer 使用说明:"
-        echo "1. 安装 GStreamer 插件: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo "2. 验证安装: ./test-media.sh"
-        echo ""
-        echo "Unity 视频解码使用说明:"
-        echo "1. Unity 游戏视频现在应该能够正常播放"
-        echo "2. 如果遇到视频问题，运行: ./test-unity-video.sh"
-        echo "3. 检查视频解码: ./test-ffmpeg.sh"
-        echo ""
-        echo "Staging 功能控制:"
-        echo "- 启用 CSMT: export STAGING_CSMT=1"
-        echo "- 启用共享内存: export STAGING_SHARED_MEMORY=1"
-        echo "- 启用 WriteCopy: export STAGING_WRITECOPY=1"
-        echo "- 禁用所有 Staging 功能: unset STAGING_CSMT STAGING_SHARED_MEMORY STAGING_WRITECOPY"
-        echo ""
-        echo "Unity 视频解码控制:"
-        echo "- 启用硬件解码: export UNITY_VIDEO_HARDWARE_DECODE=1"
-        echo "- 禁用 Unity 视频优化: unset UNITY_VIDEO_DECODE_OPTIMIZE"
-        echo ""
-        echo "FFmpeg 控制:"
-        echo "- 启用 FFmpeg: export WINE_FFMPEG_ENABLE=1"
-        echo "- 禁用 FFmpeg: unset WINE_FFMPEG_ENABLE"
-        echo ""
-        echo "渲染模式选择:"
-        echo "- OpenGL (Zink): 设置环境变量: export MESA_LOADER_DRIVER_OVERRIDE=zink"
-        echo "- Vulkan (Freedreno): 默认启用"
-        echo ""
-        echo "下一步:"
-        echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
-        echo "2. 初始化 Wine: wine wineboot"
-        echo "3. 配置 Wine: winecfg"
-        echo "4. 测试多媒体支持: ./test-media.sh"
-        echo "5. 测试 Unity 视频解码: ./test-unity-video.sh"
-        echo "6. 测试 FFmpeg: ./test-ffmpeg.sh"
-        echo "7. 测试 Staging 功能: ./test-staging.sh"
-        echo ""
-        echo "故障排除:"
-        echo "- 运行: DEBUG_MEDIA=1 wine --version 查看多媒体环境"
-        echo "- 运行: ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 运行: ./test-media.sh 诊断多媒体问题"
-        echo "- 运行: ./test-unity-video.sh 诊断 Unity 视频问题"
-        echo "- 运行: ./test-ffmpeg.sh 诊断 FFmpeg 问题"
-        echo "- 运行: ./test-staging.sh 验证 Staging 补丁"
-        echo "=========================================="
-        EOF
+        # 创建安装脚本
+        echo '#!/bin/bash' > wine-package/install.sh
+        echo 'set -e' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "=========================================="' >> wine-package/install.sh
+        echo 'echo "   True WOW64 Wine for Termux 安装脚本"' >> wine-package/install.sh
+        echo 'echo "   （支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）"' >> wine-package/install.sh
+        echo 'echo "=========================================="' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'TERMUX_PREFIX="/data/data/com.termux/files/usr"' >> wine-package/install.sh
+        echo 'INSTALL_DIR="$TERMUX_PREFIX/opt/wine"' >> wine-package/install.sh
+        echo 'BIN_DIR="$TERMUX_PREFIX/bin"' >> wine-package/install.sh
+        echo 'FONT_DIR="$TERMUX_PREFIX/share/fonts"' >> wine-package/install.sh
+        echo 'VULKAN_DIR="$TERMUX_PREFIX/share/vulkan"' >> wine-package/install.sh
+        echo 'GST_DIR="$TERMUX_PREFIX/share/gstreamer-1.0"' >> wine-package/install.sh
+        echo 'STAGING_DIR="$TERMUX_PREFIX/share/wine-staging"' >> wine-package/install.sh
+        echo 'UNITY_VIDEO_DIR="$TERMUX_PREFIX/share/unity-video"' >> wine-package/install.sh
+        echo 'FFMPEG_DIR="$TERMUX_PREFIX/share/ffmpeg"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# 检查环境' >> wine-package/install.sh
+        echo 'if [ ! -d "$TERMUX_PREFIX" ]; then' >> wine-package/install.sh
+        echo '    echo "错误: 这似乎不是 Termux 环境!"' >> wine-package/install.sh
+        echo '    exit 1' >> wine-package/install.sh
+        echo 'fi' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# 创建目录' >> wine-package/install.sh
+        echo 'echo "创建目录..."' >> wine-package/install.sh
+        echo 'mkdir -p "$INSTALL_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$BIN_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$FONT_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$VULKAN_DIR/icd.d"' >> wine-package/install.sh
+        echo 'mkdir -p "$GST_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$STAGING_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$UNITY_VIDEO_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$FFMPEG_DIR"' >> wine-package/install.sh
+        echo 'mkdir -p "$TERMUX_PREFIX/tmp"' >> wine-package/install.sh
+        echo 'mkdir -p "$HOME/.wine"' >> wine-package/install.sh
+        echo 'mkdir -p "$INSTALL_DIR/etc/fonts"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# 安装文件' >> wine-package/install.sh
+        echo 'echo "安装 Wine 文件..."' >> wine-package/install.sh
+        echo 'cp -r opt/wine/* "$INSTALL_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装启动脚本..."' >> wine-package/install.sh
+        echo 'cp bin/wine "$BIN_DIR"/' >> wine-package/install.sh
+        echo 'cp bin/wineserver "$BIN_DIR"/' >> wine-package/install.sh
+        echo 'cp bin/winecfg "$BIN_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装字体配置..."' >> wine-package/install.sh
+        echo 'cp opt/wine/etc/fonts/fonts.conf "$INSTALL_DIR/etc/fonts/"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装 Vulkan 配置..."' >> wine-package/install.sh
+        echo 'cp -r share/vulkan/* "$VULKAN_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装 GStreamer 配置..."' >> wine-package/install.sh
+        echo 'cp -r share/gstreamer-1.0/* "$GST_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装 Staging 配置..."' >> wine-package/install.sh
+        echo 'cp -r share/wine-staging/* "$STAGING_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装 Unity 视频解码配置..."' >> wine-package/install.sh
+        echo 'cp -r share/unity-video/* "$UNITY_VIDEO_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装 FFmpeg 配置..."' >> wine-package/install.sh
+        echo 'cp -r share/ffmpeg/* "$FFMPEG_DIR"/' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo "安装字体..."' >> wine-package/install.sh
+        echo 'cp share/fonts/* "$FONT_DIR"/ 2>/dev/null || echo "没有额外字体可安装"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'chmod +x "$BIN_DIR"/wine' >> wine-package/install.sh
+        echo 'chmod +x "$BIN_DIR"/wineserver' >> wine-package/install.sh
+        echo 'chmod +x "$BIN_DIR"/winecfg' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# 配置环境' >> wine-package/install.sh
+        echo 'echo "配置环境变量..."' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'if ! grep -q "True WOW64 Wine with Vulkan, GStreamer, Staging, Unity Video and FFmpeg" "$HOME/.bashrc" 2>/dev/null; then' >> wine-package/install.sh
+        echo '    cat >> "$HOME/.bashrc" << "EOL"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# True WOW64 Wine with Vulkan, GStreamer, Staging, Unity Video and FFmpeg 环境配置' >> wine-package/install.sh
+        echo 'export TERMUX_PREFIX="/data/data/com.termux/files/usr"' >> wine-package/install.sh
+        echo 'export WINEPREFIX="$HOME/.wine"' >> wine-package/install.sh
+        echo 'export WINEARCH="win64"  # WOW64 模式' >> wine-package/install.sh
+        echo 'export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"' >> wine-package/install.sh
+        echo 'export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64:$TERMUX_PREFIX/lib:$TERMUX_PREFIX/lib/gstreamer-1.0"' >> wine-package/install.sh
+        echo 'export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"' >> wine-package/install.sh
+        echo 'export TMPDIR="$TERMUX_PREFIX/tmp"' >> wine-package/install.sh
+        echo 'export TEMP="$TMPDIR"' >> wine-package/install.sh
+        echo 'export TMP="$TMPDIR"' >> wine-package/install.sh
+        echo 'export LANG="zh_CN.UTF-8"' >> wine-package/install.sh
+        echo 'export LC_ALL="zh_CN.UTF-8"' >> wine-package/install.sh
+        echo 'export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# GStreamer 配置' >> wine-package/install.sh
+        echo 'export GST_PLUGIN_SYSTEM_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"' >> wine-package/install.sh
+        echo 'export GST_PLUGIN_PATH="$TERMUX_PREFIX/lib/gstreamer-1.0"' >> wine-package/install.sh
+        echo 'export GST_REGISTRY="$TERMUX_PREFIX/tmp/gstreamer-registry.bin"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# Vulkan 配置' >> wine-package/install.sh
+        echo 'export VK_ICD_FILENAMES="$TERMUX_PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json"' >> wine-package/install.sh
+        echo 'export VK_LAYER_PATH="$TERMUX_PREFIX/share/vulkan/explicit_layer.d"' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# Wine Staging 配置' >> wine-package/install.sh
+        echo 'export STAGING_SHARED_MEMORY=1' >> wine-package/install.sh
+        echo 'export STAGING_WRITECOPY=1' >> wine-package/install.sh
+        echo 'export STAGING_CSMT=1' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# Unity 视频解码配置' >> wine-package/install.sh
+        echo 'export UNITY_VIDEO_DECODE_OPTIMIZE=1' >> wine-package/install.sh
+        echo 'export WINE_UNITY_VIDEO_FIX=1' >> wine-package/install.sh
+        echo 'export UNITY_VIDEO_HARDWARE_DECODE=1' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo '# FFmpeg 配置' >> wine-package/install.sh
+        echo 'export WINE_FFMPEG_ENABLE=1' >> wine-package/install.sh
+        echo 'export AVCODEC_DECODER_ENABLE=1' >> wine-package/install.sh
+        echo 'export AVFORMAT_DEMUXER_ENABLE=1' >> wine-package/install.sh
+        echo '# ==========================================' >> wine-package/install.sh
+        echo 'EOL' >> wine-package/install.sh
+        echo 'fi' >> wine-package/install.sh
+        echo '' >> wine-package/install.sh
+        echo 'echo ""' >> wine-package/install.sh
+        echo 'echo "=========================================="' >> wine-package/install.sh
+        echo 'echo "   True WOW64 Wine 安装完成!"' >> wine-package/install.sh
+        echo 'echo "   （支持 Vulkan、完整 GStreamer、Staging 补丁、Unity 视频解码和 FFmpeg）"' >> wine-package/install.sh
+        echo 'echo "=========================================="' >> wine-package/install.sh
+        echo 'echo ""' >> wine-package/install.sh
+        echo 'echo "特性:"' >> wine-package/install.sh
+        echo 'echo "✓ 真正的 WOW64 架构"' >> wine-package/install.sh
+        echo 'echo "✓ 同时支持 32 位和 64 位 Windows 应用程序"' >> wine-package/install.sh
+        echo 'echo "✓ 中文环境支持"' >> wine-package/install.sh
+        echo 'echo "✓ Vulkan 图形 API 支持"' >> wine-package/install.sh
+        echo 'echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"' >> wine-package/install.sh
+        echo 'echo "✓ Wine Staging 补丁（增强兼容性和性能）"' >> wine-package/install.sh
+        echo 'echo "✓ Unity 视频解码补丁（优化 Unity 游戏视频播放）"' >> wine-package/install.sh
+        echo 'echo "✓ FFmpeg 补丁（增强多媒体格式支持）"' >> wine-package/install.sh
+        echo 'echo "✓ 字体配置"' >> wine-package/install.sh
+        echo 'echo ""' >> wine-package/install.sh
+        echo 'echo "下一步:"' >> wine-package/install.sh
+        echo 'echo "1. 重新启动 Termux 或运行: source ~/.bashrc"' >> wine-package/install.sh
+        echo 'echo "2. 初始化 Wine: wine wineboot"' >> wine-package/install.sh
+        echo 'echo "3. 配置 Wine: winecfg"' >> wine-package/install.sh
+        echo 'echo "4. 测试多媒体支持: ./test-media.sh"' >> wine-package/install.sh
+        echo 'echo "5. 测试 Unity 视频解码: ./test-unity-video.sh"' >> wine-package/install.sh
+        echo 'echo "6. 测试 FFmpeg: ./test-ffmpeg.sh"' >> wine-package/install.sh
+        echo 'echo "7. 测试 Staging 功能: ./test-staging.sh"' >> wine-package/install.sh
+        echo 'echo ""' >> wine-package/install.sh
+        echo 'echo "故障排除:"' >> wine-package/install.sh
+        echo 'echo "- 运行: DEBUG_MEDIA=1 wine --version 查看多媒体环境"' >> wine-package/install.sh
+        echo 'echo "- 运行: ./test-vulkan.sh 诊断 Vulkan 问题"' >> wine-package/install.sh
+        echo 'echo "- 运行: ./test-media.sh 诊断多媒体问题"' >> wine-package/install.sh
+        echo 'echo "- 运行: ./test-unity-video.sh 诊断 Unity 视频问题"' >> wine-package/install.sh
+        echo 'echo "- 运行: ./test-ffmpeg.sh 诊断 FFmpeg 问题"' >> wine-package/install.sh
+        echo 'echo "- 运行: ./test-staging.sh 验证 Staging 补丁"' >> wine-package/install.sh
+        echo 'echo "=========================================="' >> wine-package/install.sh
         
         chmod +x wine-package/install.sh
         
-        # 创建多媒体测试脚本
-        cat > wine-package/test-media.sh << 'EOF'
-        #!/bin/bash
-        echo "多媒体环境测试工具"
-        echo "=================="
-        
-        echo "1. 检查 GStreamer 环境变量"
-        echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"
-        echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"
-        echo "GST_REGISTRY: $GST_REGISTRY"
-        echo ""
-        
-        echo "2. 检查 GStreamer 插件"
-        echo "查找 GStreamer 插件目录..."
-        find /data/data/com.termux/files/usr -name "libgst*" 2>/dev/null | head -20
-        echo ""
-        
-        echo "3. 检查 FFmpeg 支持"
-        echo "查找 FFmpeg 相关库..."
-        find /data/data/com.termux/files/usr -name "*avcodec*" -o -name "*avformat*" -o -name "*avutil*" 2>/dev/null | head -10
-        echo ""
-        
-        echo "4. 检查 Wine GStreamer 支持"
-        echo "查找 Wine 中的 GStreamer 相关文件..."
-        find /data/data/com.termux/files/usr/opt/wine -name "*gst*" 2>/dev/null | head -10
-        
-        echo ""
-        echo "5. 测试 GStreamer 功能（需要安装 GStreamer 包）"
-        echo "安装 GStreamer: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo ""
-        echo "6. 测试 FFmpeg 解码器"
-        echo "安装 FFmpeg: pkg install ffmpeg"
-        echo "测试命令: ffmpeg -decoders | grep -E 'h264|hevc|vp8|vp9|aac|mp3'"
-        EOF
-        
+        # 创建测试脚本
+        echo '#!/bin/bash' > wine-package/test-media.sh
+        echo 'echo "多媒体环境测试工具"' >> wine-package/test-media.sh
+        echo 'echo "=================="' >> wine-package/test-media.sh
+        echo 'echo "1. 检查 GStreamer 环境变量"' >> wine-package/test-media.sh
+        echo 'echo "GST_PLUGIN_SYSTEM_PATH: $GST_PLUGIN_SYSTEM_PATH"' >> wine-package/test-media.sh
+        echo 'echo "GST_PLUGIN_PATH: $GST_PLUGIN_PATH"' >> wine-package/test-media.sh
+        echo 'echo "GST_REGISTRY: $GST_REGISTRY"' >> wine-package/test-media.sh
+        echo 'echo ""' >> wine-package/test-media.sh
+        echo 'echo "2. 检查 GStreamer 插件"' >> wine-package/test-media.sh
+        echo 'echo "查找 GStreamer 插件目录..."' >> wine-package/test-media.sh
+        echo 'find /data/data/com.termux/files/usr -name "libgst*" 2>/dev/null | head -20' >> wine-package/test-media.sh
+        echo 'echo ""' >> wine-package/test-media.sh
+        echo 'echo "3. 检查 FFmpeg 支持"' >> wine-package/test-media.sh
+        echo 'echo "查找 FFmpeg 相关库..."' >> wine-package/test-media.sh
+        echo 'find /data/data/com.termux/files/usr -name "*avcodec*" -o -name "*avformat*" -o -name "*avutil*" 2>/dev/null | head -10' >> wine-package/test-media.sh
         chmod +x wine-package/test-media.sh
         
-        # 创建 Vulkan 测试脚本
-        cat > wine-package/test-vulkan.sh << 'EOF'
-        #!/bin/bash
-        echo "Vulkan 环境测试工具"
-        echo "=================="
-        
-        echo "1. 检查 Vulkan 环境变量"
-        echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
-        echo "VK_LAYER_PATH: $VK_LAYER_PATH"
-        echo ""
-        
-        echo "2. 检查 Vulkan ICD 文件"
-        if [ -f "$VK_ICD_FILENAMES" ]; then
-            echo "Vulkan ICD 文件存在: $VK_ICD_FILENAMES"
-            echo "内容:"
-            cat "$VK_ICD_FILENAMES"
-        else
-            echo "错误: Vulkan ICD 文件不存在: $VK_ICD_FILENAMES"
-        fi
-        
-        echo ""
-        echo "3. 检查 Vulkan 库"
-        echo "查找 libvulkan.so..."
-        find /data/data/com.termux/files/usr -name "libvulkan.so*" 2>/dev/null || echo "未找到 libvulkan.so"
-        
-        echo ""
-        echo "4. 检查 Wine Vulkan 支持"
-        echo "查找 winevulkan.dll..."
-        find /data/data/com.termux/files/usr/opt/wine -name "*vulkan*" 2>/dev/null | head -10
-        
-        echo ""
-        echo "5. 测试 Vulkan 应用（如果有）"
-        echo "注意: 需要安装 vulkan-tools 包来测试: pkg install vulkan-tools"
-        EOF
-        
+        # 创建其他测试脚本...
+        echo '#!/bin/bash' > wine-package/test-vulkan.sh
+        echo 'echo "Vulkan 环境测试工具"' >> wine-package/test-vulkan.sh
+        echo 'echo "=================="' >> wine-package/test-vulkan.sh
+        echo 'echo "1. 检查 Vulkan 环境变量"' >> wine-package/test-vulkan.sh
+        echo 'echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"' >> wine-package/test-vulkan.sh
+        echo 'echo "VK_LAYER_PATH: $VK_LAYER_PATH"' >> wine-package/test-vulkan.sh
+        echo 'echo ""' >> wine-package/test-vulkan.sh
+        echo 'echo "2. 检查 Vulkan ICD 文件"' >> wine-package/test-vulkan.sh
+        echo 'if [ -f "$VK_ICD_FILENAMES" ]; then' >> wine-package/test-vulkan.sh
+        echo '    echo "Vulkan ICD 文件存在: $VK_ICD_FILENAMES"' >> wine-package/test-vulkan.sh
+        echo '    echo "内容:"' >> wine-package/test-vulkan.sh
+        echo '    cat "$VK_ICD_FILENAMES"' >> wine-package/test-vulkan.sh
+        echo 'else' >> wine-package/test-vulkan.sh
+        echo '    echo "错误: Vulkan ICD 文件不存在: $VK_ICD_FILENAMES"' >> wine-package/test-vulkan.sh
+        echo 'fi' >> wine-package/test-vulkan.sh
         chmod +x wine-package/test-vulkan.sh
-
-        # 创建 Staging 测试脚本
-        cat > wine-package/test-staging.sh << 'EOF'
-        #!/bin/bash
-        echo "Wine Staging 环境测试工具"
-        echo "======================="
-        
-        echo "1. 检查 Staging 环境变量"
-        echo "STAGING_SHARED_MEMORY: $STAGING_SHARED_MEMORY"
-        echo "STAGING_WRITECOPY: $STAGING_WRITECOPY"
-        echo "STAGING_CSMT: $STAGING_CSMT"
-        echo ""
-        
-        echo "2. 检查 Wine 版本信息"
-        wine --version
-        echo ""
-        
-        echo "3. 验证 Staging 补丁"
-        echo "检查 Wine 是否包含 Staging 补丁..."
-        # 尝试运行 wine 并检查是否有 Staging 相关功能
-        echo "如果看到 'Staging' 字样，说明补丁已应用:"
-        wine --version | grep -i staging || echo "未检测到 Staging 标识，但补丁可能已集成"
-        
-        echo ""
-        echo "4. 测试 Staging 功能"
-        echo "运行 winecfg 查看是否有额外的 Staging 标签页..."
-        echo "注意: 在 winecfg 中查看是否有 'Staging' 标签页"
-        echo ""
-        echo "5. Staging 功能说明"
-        echo "CSMT (Command Stream Multi-Threading): 提升图形性能"
-        echo "Shared Memory: 改进进程间通信"
-        echo "WriteCopy: 改进内存管理"
-        echo ""
-        echo "6. 控制 Staging 功能"
-        echo "禁用 CSMT: unset STAGING_CSMT"
-        echo "禁用所有 Staging 功能: unset STAGING_CSMT STAGING_SHARED_MEMORY STAGING_WRITECOPY"
-        echo "重新启用: export STAGING_CSMT=1 STAGING_SHARED_MEMORY=1 STAGING_WRITECOPY=1"
-        EOF
-        
-        chmod +x wine-package/test-staging.sh
-
-        # 创建 Unity 视频解码测试脚本
-        cat > wine-package/test-unity-video.sh << 'EOF'
-        #!/bin/bash
-        echo "Unity 视频解码环境测试工具"
-        echo "========================"
-        
-        echo "1. 检查 Unity 视频解码环境变量"
-        echo "UNITY_VIDEO_DECODE_OPTIMIZE: $UNITY_VIDEO_DECODE_OPTIMIZE"
-        echo "WINE_UNITY_VIDEO_FIX: $WINE_UNITY_VIDEO_FIX"
-        echo "UNITY_VIDEO_HARDWARE_DECODE: $UNITY_VIDEO_HARDWARE_DECODE"
-        echo ""
-        
-        echo "2. 检查 Unity 视频解码相关文件"
-        echo "查找 Wine 中的视频相关文件..."
-        find /data/data/com.termux/files/usr/opt/wine -name "*video*" -o -name "*unity*" 2>/dev/null | head -10
-        echo ""
-        
-        echo "3. 验证 Unity 视频解码补丁"
-        echo "检查是否应用了 Unity 视频解码补丁..."
-        echo "如果 Wine 构建包含 Unity 视频解码优化，补丁应该已应用"
-        echo ""
-        
-        echo "4. Unity 视频解码功能说明"
-        echo "- 优化 Unity 游戏视频播放性能"
-        echo "- 硬件加速视频解码"
-        echo "- 改进的视频同步"
-        echo "- 支持更多视频格式"
-        echo ""
-        
-        echo "5. 测试建议"
-        echo "运行一个使用 Unity 引擎的游戏，检查视频播放是否正常"
-        echo "常见的 Unity 游戏: Hollow Knight, Cuphead, Ori and the Blind Forest 等"
-        echo ""
-        
-        echo "6. 故障排除"
-        echo "如果视频播放有问题，尝试:"
-        echo "- 禁用硬件解码: unset UNITY_VIDEO_HARDWARE_DECODE"
-        echo "- 启用调试: export DEBUG_UNITY_VIDEO=1"
-        echo "- 检查 GStreamer 安装: ./test-media.sh"
-        EOF
-        
-        chmod +x wine-package/test-unity-video.sh
-
-        # 创建 FFmpeg 测试脚本
-        cat > wine-package/test-ffmpeg.sh << 'EOF'
-        #!/bin/bash
-        echo "FFmpeg 环境测试工具"
-        echo "=================="
-        
-        echo "1. 检查 FFmpeg 环境变量"
-        echo "WINE_FFMPEG_ENABLE: $WINE_FFMPEG_ENABLE"
-        echo "AVCODEC_DECODER_ENABLE: $AVCODEC_DECODER_ENABLE"
-        echo "AVFORMAT_DEMUXER_ENABLE: $AVFORMAT_DEMUXER_ENABLE"
-        echo ""
-        
-        echo "2. 检查 FFmpeg 相关文件"
-        echo "查找 Wine 中的 FFmpeg 相关文件..."
-        find /data/data/com.termux/files/usr/opt/wine -name "*ffmpeg*" -o -name "*avcodec*" -o -name "*avformat*" 2>/dev/null | head -10
-        echo ""
-        
-        echo "3. 验证 FFmpeg 补丁"
-        echo "检查是否应用了 FFmpeg 补丁..."
-        echo "如果 Wine 构建包含 FFmpeg 支持，补丁应该已应用"
-        echo ""
-        
-        echo "4. FFmpeg 功能说明"
-        echo "- 增强的多媒体格式支持"
-        echo "- 改进的视频和音频编解码"
-        echo "- 更好的流媒体支持"
-        echo "- 硬件加速编解码"
-        echo ""
-        
-        echo "5. 测试建议"
-        echo "运行一个使用多种媒体格式的应用程序"
-        echo "测试视频播放器或多媒体应用程序"
-        echo ""
-        
-        echo "6. 系统 FFmpeg 检查"
-        echo "检查系统是否安装了 FFmpeg:"
-        if command -v ffmpeg &> /dev/null; then
-            echo "FFmpeg 已安装: $(ffmpeg -version | head -n1)"
-        else
-            echo "FFmpeg 未安装，建议安装: pkg install ffmpeg"
-        fi
-        EOF
-        
-        chmod +x wine-package/test-ffmpeg.sh
 
     - name: 创建打包文件
       run: |
         echo "最终文件结构:"
         find wine-package -type f | sort
-        echo ""
-        echo "检查 Vulkan 相关文件:"
-        find wine-package -name "*vulkan*" | sort
-        echo ""
-        echo "检查 GStreamer 相关文件:"
-        find wine-package -name "*gst*" | sort
-        echo ""
-        echo "检查 Unity 视频解码相关文件:"
-        find wine-package -name "*unity*" | sort
-        echo ""
-        echo "检查 FFmpeg 相关文件:"
-        find wine-package -name "*ffmpeg*" | sort
-        echo ""
-        echo "检查 Staging 相关文件:"
-        find wine-package -name "*staging*" | sort
         
         # 打包
         tar -czf wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-staging-unity-ffmpeg-termux.tar.gz wine-package/
@@ -1078,85 +740,3 @@ jobs:
         echo "补丁: Wine Staging 补丁已集成"
         echo "Unity 视频解码: 优化 Unity 游戏视频播放"
         echo "FFmpeg: 增强多媒体格式支持"
-        echo ""
-        echo "修复的问题:"
-        echo "✓ 无法运行 EXE 文件"
-        echo "✓ 中文环境支持"
-        echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
-        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ Wine Staging 补丁（增强兼容性和性能）"
-        echo "✓ Unity 视频解码补丁（优化 Unity 游戏视频播放）"
-        echo "✓ FFmpeg 补丁（增强多媒体格式支持）"
-        echo "✓ 字体配置"
-        echo ""
-        echo "GStreamer 插件包含:"
-        echo "- 核心插件 (base, good, bad, ugly)"
-        echo "- FFmpeg 插件 (libav)"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
-        echo "- 音频输出 (ALSA、PulseAudio)"
-        echo ""
-        echo "Staging 补丁包含:"
-        echo "- CSMT（命令流多线程）- 显著提升图形性能"
-        echo "- 共享内存优化"
-        echo "- WriteCopy 内存管理"
-        echo "- 额外的音频和视频编解码器"
-        echo "- 游戏兼容性改进"
-        echo "- 应用程序兼容性增强"
-        echo ""
-        echo "Unity 视频解码功能:"
-        echo "- 优化 Unity 游戏视频播放性能"
-        echo "- 硬件加速视频解码"
-        echo "- 改进的视频同步"
-        echo "- 支持更多视频格式"
-        echo ""
-        echo "FFmpeg 功能:"
-        echo "- 增强的多媒体格式支持"
-        echo "- 改进的视频和音频编解码"
-        echo "- 更好的流媒体支持"
-        echo "- 硬件加速编解码"
-        echo ""
-        echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-true-wow64-bin-gstreamer-staging-unity-ffmpeg-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
-        echo "3. 进入目录: cd wine-package"
-        echo "4. 运行安装: ./install.sh"
-        echo "5. 重新加载环境: source ~/.bashrc"
-        echo "6. 初始化: wine wineboot"
-        echo "7. 测试多媒体: ./test-media.sh"
-        echo "8. 测试 Vulkan: ./test-vulkan.sh"
-        echo "9. 测试 Unity 视频解码: ./test-unity-video.sh"
-        echo "10. 测试 FFmpeg: ./test-ffmpeg.sh"
-        echo "11. 测试 Staging: ./test-staging.sh"
-        echo ""
-        echo "GStreamer 插件安装:"
-        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo ""
-        echo "Vulkan 驱动安装:"
-        echo "pkg install mesa-vulkan-driver"
-        echo ""
-        echo "Staging 功能控制:"
-        echo "- 默认启用所有 Staging 功能"
-        echo "- 禁用 CSMT: unset STAGING_CSMT"
-        echo "- 禁用所有: unset STAGING_CSMT STAGING_SHARED_MEMORY STAGING_WRITECOPY"
-        echo ""
-        echo "Unity 视频解码控制:"
-        echo "- 默认启用 Unity 视频优化"
-        echo "- 禁用硬件解码: unset UNITY_VIDEO_HARDWARE_DECODE"
-        echo "- 完全禁用: unset UNITY_VIDEO_DECODE_OPTIMIZE"
-        echo ""
-        echo "FFmpeg 控制:"
-        echo "- 默认启用 FFmpeg 支持"
-        echo "- 禁用: unset WINE_FFMPEG_ENABLE"
-        echo ""
-        echo "渲染模式切换:"
-        echo "- Vulkan: 默认模式"
-        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
-        echo ""
-        echo "故障排除:"
-        echo "- 运行 ./test-media.sh 诊断多媒体问题"
-        echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 运行 ./test-unity-video.sh 诊断 Unity 视频问题"
-        echo "- 运行 ./test-ffmpeg.sh 诊断 FFmpeg 问题"
-        echo "- 运行 ./test-staging.sh 验证 Staging 功能"
-        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
-        echo "- 检查设备多媒体和 Vulkan 支持"
