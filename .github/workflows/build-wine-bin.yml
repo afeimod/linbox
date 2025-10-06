@@ -101,11 +101,15 @@ jobs:
         cd wine
         
         # 下载补丁文件
-        echo "下载补丁文件..."
+        echo "下载补丁文件.1.."
         wget -q https://github.com/afeimod/linbox/raw/main/path/ntsync-fix-32-bit-processes.patch
+        echo "下载补丁文件2..."
         wget -q https://github.com/afeimod/linbox/raw/main/path/gstreamer-patch2.patch
+        echo "下载补丁文件.3.."
         wget -q https://github.com/afeimod/linbox/raw/main/path/gstreamer-patch2-non-staging.patch
+        echo "下载补丁文件4..."
         wget -q https://github.com/afeimod/linbox/raw/main/path/gstreamer-patch1.patch
+        echo "下载补丁文件5..."
         wget -q https://github.com/afeimod/linbox/raw/main/path/sync-unix-staging.patch
         
         # 应用补丁
