@@ -154,7 +154,7 @@ jobs:
              IMPORTS   = strmiids uuid ole32 oleaut32 rpcrt4 shlwapi advapi32
             -PARENTSRC = ../strmbase
             +PARENTSRC = ../strmbase
-            UNITYPATCH
+             UNITYPATCH
           fi
         fi
         
@@ -176,7 +176,7 @@ jobs:
              AC_CHECK_HEADERS([libxml/parser.h])
  
              dnl Note: this test should be before the tests that use X11
-            FFMPEGPATCH
+             FFMPEGPATCH
           fi
         fi
         
