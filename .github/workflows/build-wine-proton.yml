@@ -131,6 +131,7 @@ jobs:
         
         ../configure \
           --enable-win64 \
+          --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install-proton \
           --with-x \
           --with-vulkan \
@@ -145,23 +146,22 @@ jobs:
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
-          --without-ldap
-          # --enable-archs=i386,x86_64 \
-          # --without-capi \
-         # --without-oss \
-         # --with-cups \
-          #--without-dbus \
-        # --without-coreaudio \
-          #--without-gphoto \
-          #--without-osmesa \
-         #--without-sane \
-         # --without-pcap \
-         # --without-pcsclite \
-         # --without-udev \
-          #--without-unwind \
-         # --without-usb \
-         # --without-v4l2 \
-         # --without-wayland
+          --without-ldap \
+          --without-capi \
+          --without-oss \
+          --without-cups \
+          --without-dbus \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
         
         # 构建并安装
         make -j$(nproc)
