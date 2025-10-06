@@ -131,13 +131,13 @@ jobs:
         
         ../configure \
           --enable-win64 \
-          --enable-archs=i386,x86_64 \
+         # --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install-proton \
           --with-x \
           --with-vulkan \
           --with-alsa \
           --with-pulse \
-          --with-cups \
+         # --with-cups \
           --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
@@ -147,8 +147,8 @@ jobs:
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
-          --without-capi \
-          --without-oss \
+         # --without-capi \
+         # --without-oss \
           --without-ldap
           #--without-dbus \
         # --without-coreaudio \
