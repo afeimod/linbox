@@ -64,8 +64,7 @@ jobs:
           gettext \
           libgettextpo-dev \
           locales \
-          language-pack-zh-hans \
-          patch  # 添加 patch 工具
+          language-pack-zh-hans
 
     - name: 安装多媒体和音频依赖
       run: |
@@ -94,71 +93,131 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.9
+        #git checkout wine-9.9
 
-        # 只修改有问题的步骤，其他保持不变
-    - name: 智能补丁应用
+    - name: 创建并应用补丁
       run: |
         cd wine
-    
-        # 获取 Wine 版本信息
-        WINE_VERSION=$(git describe --tags --abbrev=0)
-        echo "构建 Wine 版本: $WINE_VERSION"
-    
-        # 基于版本选择补丁策略
-        echo "选择补丁策略..."
-    
-        # 对于 Wine 9.9，使用最新的补丁组合
-        PATCH_SET="latest"
-    
-        case "$PATCH_SET" in
-          "latest")
-            # 尝试最新的补丁组合
-            patch_files=(
-              "ntsync-fix-32-bit-processes.patch"
-              "gstreamer-patch1-7f833db1.patch"
-              "gstreamer-patch2-7f833db1.patch" 
-              "sync-unix-staging.patch"
-            )
-            ;;
-          *)
-            # 回退到基础补丁
-            patch_files=(
-              "ntsync-fix-32-bit-processes.patch"
-              "gstreamer-patch1.patch"
-              "gstreamer-patch2-non-staging.patch"
-            )
-            ;;
-        esac
-    
-        echo "选择的补丁集: ${patch_files[*]}"
-    
-        # 下载和应用补丁
-        success_count=0
-        for patch_file in "${patch_files[@]}"; do
-          echo "处理补丁: $patch_file"
-      
-          # 下载补丁
-          if wget -q "https://github.com/afeimod/linbox/raw/main/path/$patch_file"; then
-            echo "✓ 下载成功"
         
-            # 应用补丁
-            if patch -p1 --forward < "$patch_file" || patch -p1 --reverse --dry-run < "$patch_file" 2>/dev/null; then
-              # 如果正向应用失败但反向检查成功，说明补丁可能已应用
-              patch -p1 < "$patch_file" 2>/dev/null && echo "✓ 应用成功" && ((success_count++)) || echo "⚠ 补丁可能已应用"
+        # 创建补丁文件
+        cat > wine_do_not_create_dxgi_manager2.patch << 'EOF'
+        --- wine10.4/dlls/mfplat/main.c	2025-09-06 11:24:06.099619799 +0000
+        +++ proton/dlls/mfplat/main.c	2025-09-06 11:33:37.008543902 +0000
+        @@ -43,6 +43,7 @@
+         #include "strsafe.h"
+         #undef INITGUID
+         #include "evr.h"
+        +#include "wine/mfinternal.h"
+         /* mfd3d12 guids are not included in mfuuid */
+         #define INITGUID
+         #undef EXTERN_GUID
+        @@ -6298,10 +6299,9 @@
+             return S_OK;
+         }
+         
+        -static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
+        +static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
+         {
+        -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
+        -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+        +    return CoCreateInstance(&CLSID_MPEG4ByteStreamHandlerPlugin, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+         }
+         
+         static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
+        @@ -6337,12 +6337,14 @@
+            this handler for all possible types.
+          */
+         
+        +    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
+        +
+             if (url_ext || mimeW)
+             {
+                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
+         
+                 if (FAILED(hr))
+        -            hr = resolver_create_gstreamer_handler(handler);
+        +            hr = resolver_create_default_handler(handler);
+             }
+         
+             CoTaskMemFree(mimeW);
+        @@ -6360,7 +6362,7 @@
+             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
+         
+             if (FAILED(hr))
+        -        hr = resolver_create_gstreamer_handler(handler);
+        +        hr = resolver_create_default_handler(handler);
+         
+             return hr;
+         }
+        @@ -9222,9 +9224,16 @@
+         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
+         {
+             struct dxgi_device_manager *object;
+        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
+         
+             TRACE("%p, %p.\n", token, manager);
+         
+        +    if (do_not_create && do_not_create[0] != '\0')
+        +    {
+        +        FIXME("stubbing out\n");
+        +        return E_NOTIMPL;
+        +    }
+        +
+             if (!token || !manager)
+                 return E_POINTER;
+        EOF
+        
+        # 检查目标文件是否存在
+        if [ -f "dlls/mfplat/main.c" ]; then
+            echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
+            
+            # 尝试应用补丁
+            if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
+                echo "✅ 补丁应用成功"
+                
+                # 验证补丁应用
+                echo "验证补丁应用..."
+                if grep -q "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c; then
+                    echo "✅ 补丁验证成功：找到了补丁代码"
+                else
+                    echo "⚠️ 警告：补丁可能未完全应用"
+                fi
             else
-              echo "⚠ 补丁不适用，跳过"
+                echo "❌ 补丁应用失败，尝试手动应用..."
+                
+                # 手动应用关键修改
+                echo "尝试手动应用补丁..."
+                
+                # 首先检查是否需要添加头文件包含
+                if ! grep -q "wine/mfinternal.h" dlls/mfplat/main.c; then
+                    echo "手动添加 wine/mfinternal.h 包含..."
+                    sed -i '/#include "evr.h"/a #include "wine/mfinternal.h"' dlls/mfplat/main.c
+                fi
+                
+                # 检查并修改函数名
+                sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
+                
+                # 修改函数实现
+                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
+        static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
+        {\
+            return CoCreateInstance(&CLSID_MPEG4ByteStreamHandlerPlugin, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
+        }' dlls/mfplat/main.c
+                
+                # 添加调试信息
+                sed -i '/this handler for all possible types./a\\n    TRACE( "url_ext %s mimeW %s\\n", debugstr_w(url_ext), debugstr_w(mimeW) );' dlls/mfplat/main.c
+                
+                # 添加 DXGI 设备管理器禁用代码
+                sed -i '/struct dxgi_device_manager \*object;/a\\    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
+                sed -i '/TRACE("%p, %p.\\n", token, manager);/a\\\n    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\n    {\n        FIXME("stubbing out\\n");\n        return E_NOTIMPL;\n    }' dlls/mfplat/main.c
+                
+                echo "手动补丁应用完成"
             fi
-          else
-            echo "✗ 下载失败"
-          fi
-          echo "---"
-        done
-    
-        echo "补丁应用总结: $success_count/${#patch_files[@]} 个补丁成功应用"
-    
-        # 设置环境变量供后续步骤使用
-        echo "PATCHES_APPLIED=$success_count" >> $GITHUB_ENV
+        else
+            echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
+            echo "当前目录结构："
+            find . -name "main.c" | head -10
+        fi
 
     - name: 彻底修复 Termux 路径问题
       run: |
@@ -189,7 +248,7 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
 
-        # 精简配置 - 只保留必要的中文、GStreamer 和 Vulkan 支持
+        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -202,7 +261,28 @@ jobs:
           --with-fontconfig \
           --with-gstreamer \
           --with-gettext \
-          --enable-nls
+          --enable-nls \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-debug \
+          --disable-tests \
+          --without-piper \
+          --without-xinerama \
+          --without-cups \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
 
         # 构建真正的 WOW64 Wine
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
