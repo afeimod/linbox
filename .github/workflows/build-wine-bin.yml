@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.2
+        #git checkout wine-9.2
 
     - name: 创建并应用补丁
       run: |
