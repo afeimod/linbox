@@ -353,13 +353,13 @@ jobs:
                 const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
                 
                 sed -i '/TRACE("%p, %p.\\n", token, manager);/a\
-            \
-                if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\
-                {\
-                    FIXME("stubbing out\\n");\
-                    return E_NOTIMPL;\
-                }' dlls/mfplat/main.c
-                fi
+                \
+                    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\
+                    {\
+                        FIXME("stubbing out\\n");\
+                        return E_NOTIMPL;\
+                    }' dlls/mfplat/main.c
+                
                 # 删除可能重复的错误代码
                 sed -i '/^[[:space:]]*if (do_not_create && do_not_create\[0\] != '"'"'\\0'"'"')/d' dlls/mfplat/main.c
                 sed -i '/^[[:space:]]*{/,/^[[:space:]]*}/d' dlls/mfplat/main.c
