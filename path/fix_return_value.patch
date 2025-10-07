@@ -1,0 +1,19 @@
+--- a/dlls/mfplat/main.c
++++ b/dlls/mfplat/main.c
+@@ -6298,9 +6298,14 @@
+     return S_OK;
+ }
+ 
+-static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
++static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
+ {
+-    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
++    HRESULT hr = CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
++    if (FAILED(hr))
++    {
++        return hr;
++    }
++    return hr;
+ }
+ 
+ static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
