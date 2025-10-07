@@ -37,7 +37,7 @@
      }
  
      CoTaskMemFree(mimeW);
-@@ -6360,7 +6362,7 @@
+@@ -6358,7 +6360,7 @@
      hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
  
      if (FAILED(hr))
