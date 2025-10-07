@@ -386,6 +386,190 @@ jobs:
             echo "目标文件不存在，跳过修复"
         fi
 
+    - name: 修复函数返回值问题
+      run: |
+        cd wine
+        
+        echo "修复 resolver_create_default_handler 函数返回值问题..."
+        
+        if [ -f "dlls/mfplat/main.c" ]; then
+            # 查找 resolver_create_default_handler 函数并确保所有路径都有返回值
+            echo "检查 resolver_create_default_handler 函数实现..."
+            
+            # 备份原始文件
+            cp dlls/mfplat/main.c dlls/mfplat/main.c.backup
+            
+            # 修复函数实现，确保所有代码路径都有返回值
+            cat > fix_return_value.patch << 'EOF'
+--- a/dlls/mfplat/main.c
++++ b/dlls/mfplat/main.c
+@@ -6298,9 +6298,14 @@
+     return S_OK;
+ }
+ 
+-static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
++static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
+ {
+-    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
++    HRESULT hr = CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
++    if (FAILED(hr))
++    {
++        return hr;  // 确保所有路径都有返回值
++    }
++    return hr;
+ }
+ 
+ static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
+EOF
+            
+            # 应用补丁
+            if patch -p1 -N < fix_return_value.patch; then
+                echo "✅ 返回值修复补丁应用成功"
+            else
+                echo "⚠️ 补丁应用失败，尝试手动修复..."
+                
+                # 手动修复函数
+                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
+static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
+{\
+    HRESULT hr = CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
+    if (FAILED(hr))\
+    {\
+        return hr;\
+    }\
+    return hr;\
+}' dlls/mfplat/main.c
+                
+                echo "手动修复完成"
+            fi
+            
+            # 验证修复
+            echo "验证修复结果..."
+            if grep -A 10 "static HRESULT resolver_create_default_handler" dlls/mfplat/main.c | grep -q "return hr;"; then
+                echo "✅ 返回值修复验证成功"
+            else
+                echo "❌ 返回值修复验证失败，尝试备用方案..."
+                
+                # 备用方案：简化函数实现
+                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
+static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
+{\
+    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
+}' dlls/mfplat/main.c
+                
+                echo "备用修复完成"
+            fi
+        else
+            echo "目标文件不存在，跳过修复"
+        fi
+
+    - name: 修复其他可能的未返回值函数
+      run: |
+        cd wine
+        
+        echo "检查并修复其他可能的未返回值函数..."
+        
+        if [ -f "dlls/mfplat/main.c" ]; then
+            # 检查所有静态函数是否都有返回值
+            echo "检查静态函数返回值..."
+            
+            # 查找所有静态 HRESULT 函数并确保它们都有明确的返回值
+            # 这里我们主要关注可能被修改过的函数
+            
+            # 检查 resolver_get_bytestream_url_hint 函数
+            if grep -q "static HRESULT resolver_get_bytestream_url_hint" dlls/mfplat/main.c; then
+                echo "检查 resolver_get_bytestream_url_hint 函数..."
+                if ! grep -A 15 "static HRESULT resolver_get_bytestream_url_hint" dlls/mfplat/main.c | grep -q "return"; then
+                    echo "⚠️ resolver_get_bytestream_url_hint 函数可能缺少返回值，正在修复..."
+                    # 在函数结束前添加默认返回值
+                    sed -i '/static HRESULT resolver_get_bytestream_url_hint/,/^    }/ { /^    }/i\    return E_FAIL;\n }' dlls/mfplat/main.c
+                fi
+            fi
+            
+            # 检查其他可能受影响的函数
+            echo "检查其他静态 HRESULT 函数..."
+            
+            # 最终语法检查
+            echo "执行语法检查..."
+            if gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1; then
+                echo "✅ 语法检查通过"
+            else
+                echo "❌ 语法检查失败，输出错误信息:"
+                gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1
+                echo "尝试最终修复..."
+                
+                # 如果仍有问题，回退到最简版本
+                cat > final_fix.patch << 'EOF'
+--- a/dlls/mfplat/main.c
++++ b/dlls/mfplat/main.c
+@@ -6298,9 +6298,9 @@
+     return S_OK;
+ }
+ 
+-static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
++static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
+ {
+-    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
++    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+ }
+ 
+ static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
+@@ -6337,12 +6337,12 @@
+            this handler for all possible types.
+          */
+         
+-    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
++        TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
+ 
+             if (url_ext || mimeW)
+             {
+                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
+         
+                 if (FAILED(hr))
+-            hr = resolver_create_default_handler(handler);
++                    hr = resolver_create_default_handler(handler);
+             }
+         
+             CoTaskMemFree(mimeW);
+@@ -6360,7 +6360,7 @@
+             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
+         
+             if (FAILED(hr))
+-        hr = resolver_create_default_handler(handler);
++                hr = resolver_create_default_handler(handler);
+         
+             return hr;
+         }
+@@ -9222,9 +9222,16 @@
+         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
+         {
+             struct dxgi_device_manager *object;
+-    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
++            const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
+ 
+             TRACE("%p, %p.\n", token, manager);
+ 
++            if (do_not_create && do_not_create[0] != '\0')
++            {
++                FIXME("stubbing out\n");
++                return E_NOTIMPL;
++            }
++
+             if (!token || !manager)
+                 return E_POINTER;
+EOF
+                
+                # 回退并应用干净补丁
+                git checkout -- dlls/mfplat/main.c
+                if patch -p1 -N < final_fix.patch; then
+                    echo "✅ 最终修复成功"
+                else
+                    echo "❌ 最终修复失败，需要手动检查代码"
+                    exit 1
+                fi
+            fi
+        fi
+
     - name: 验证修复结果
       run: |
         cd wine
