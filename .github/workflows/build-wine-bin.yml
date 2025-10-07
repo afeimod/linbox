@@ -97,46 +97,68 @@ jobs:
         git checkout wine-9.9
 
         # 只修改有问题的步骤，其他保持不变
-    - name: 下载并应用补丁（稳定版）
+    - name: 智能补丁应用
       run: |
         cd wine
     
-        echo "开始处理补丁..."
+        # 获取 Wine 版本信息
+        WINE_VERSION=$(git describe --tags --abbrev=0)
+        echo "构建 Wine 版本: $WINE_VERSION"
     
-        # 创建补丁列表，带备用URL
-        declare -A patch_urls=(
-          ["ntsync-fix-32-bit-processes.patch"]="https://github.com/afeimod/linbox/raw/main/path/ntsync-fix-32-bit-processes.patch"
-          ["gstreamer-patch1.patch"]="https://github.com/afeimod/linbox/raw/main/path/gstreamer-patch1.patch"
-        )
+        # 基于版本选择补丁策略
+        echo "选择补丁策略..."
     
-        applied_count=0
-        for patch_name in "${!patch_urls[@]}"; do
-          url="${patch_urls[$patch_name]}"
-          echo "处理补丁: $patch_name"
+        # 对于 Wine 9.9，使用最新的补丁组合
+        PATCH_SET="latest"
+    
+        case "$PATCH_SET" in
+          "latest")
+            # 尝试最新的补丁组合
+            patch_files=(
+              "ntsync-fix-32-bit-processes.patch"
+              "gstreamer-patch1-7f833db1.patch"
+              "gstreamer-patch2-7f833db1.patch" 
+              "sync-unix-staging.patch"
+            )
+            ;;
+          *)
+            # 回退到基础补丁
+            patch_files=(
+              "ntsync-fix-32-bit-processes.patch"
+              "gstreamer-patch1.patch"
+              "gstreamer-patch2-non-staging.patch"
+            )
+            ;;
+        esac
+    
+        echo "选择的补丁集: ${patch_files[*]}"
+    
+        # 下载和应用补丁
+        success_count=0
+        for patch_file in "${patch_files[@]}"; do
+          echo "处理补丁: $patch_file"
       
           # 下载补丁
-          if wget -q -O "$patch_name" "$url"; then
-            echo "✓ 下载成功: $patch_name"
+          if wget -q "https://github.com/afeimod/linbox/raw/main/path/$patch_file"; then
+            echo "✓ 下载成功"
         
-            # 尝试应用补丁
-            if patch --dry-run -p1 < "$patch_name" 2>/dev/null; then
-              patch -p1 < "$patch_name"
-              echo "✓ 应用成功: $patch_name"
-              ((applied_count++))
+            # 应用补丁
+            if patch -p1 --forward < "$patch_file" || patch -p1 --reverse --dry-run < "$patch_file" 2>/dev/null; then
+              # 如果正向应用失败但反向检查成功，说明补丁可能已应用
+              patch -p1 < "$patch_file" 2>/dev/null && echo "✓ 应用成功" && ((success_count++)) || echo "⚠ 补丁可能已应用"
             else
-              echo "⚠ 补丁可能不适用: $patch_name，跳过"
+              echo "⚠ 补丁不适用，跳过"
             fi
           else
-            echo "✗ 下载失败: $patch_name"
+            echo "✗ 下载失败"
           fi
+          echo "---"
         done
     
-        echo "补丁处理完成: 成功应用 $applied_count 个补丁"
+        echo "补丁应用总结: $success_count/${#patch_files[@]} 个补丁成功应用"
     
-        # 即使没有补丁应用成功也继续构建
-        if [ $applied_count -eq 0 ]; then
-          echo "警告: 没有补丁被应用，将继续无补丁构建"
-        fi
+        # 设置环境变量供后续步骤使用
+        echo "PATCHES_APPLIED=$success_count" >> $GITHUB_ENV
 
     - name: 彻底修复 Termux 路径问题
       run: |
