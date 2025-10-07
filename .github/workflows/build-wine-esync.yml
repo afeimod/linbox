@@ -98,7 +98,7 @@ jobs:
     - name: 下载并应用9.2补丁
       run: |
         cd wine
-        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/wine_9.2_mfplat_fix.path.patch
+        wget -O wine_9.2_mfplat_fix.path.patch https://github.com/afeimod/linbox/raw/main/path/wine_9.2_mfplat_fix.path.patch
         if patch -p1 -N < wine_9.2_mfplat_fix.path.patch; then
             echo "✅ 补丁应用成功"
         else
