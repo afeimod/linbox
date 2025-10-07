@@ -95,204 +95,30 @@ jobs:
         cd wine
         git checkout wine-9.2
 
-    - name: 创建并应用修复后的补丁（解决 CLSID 问题）
+    - name: 下载并应用主要修复补丁
       run: |
         cd wine
-        
-        echo "创建修复后的补丁文件，解决 CLSID_MPEG4ByteStreamHandlerPlugin 未声明问题..."
-        
-        # 创建修复后的补丁文件
-        cat > wine_fixed_mfplat_patch.patch << 'EOF'
-        --- a/dlls/mfplat/main.c
-        +++ b/dlls/mfplat/main.c
-        @@ -43,6 +43,7 @@
-         #include "strsafe.h"
-         #undef INITGUID
-         #include "evr.h"
-        +#include "wine/mfinternal.h"
-         
-         /* mfd3d12 guids are not included in mfuuid */
-         #define INITGUID
-        @@ -6298,10 +6299,9 @@
-             return S_OK;
-         }
-         
-        -static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
-        +static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
-         {
-        -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
-        -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-        +    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-         }
-         
-         static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
-        @@ -6337,12 +6337,14 @@
-            this handler for all possible types.
-          */
-         
-        +    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
-        +
-             if (url_ext || mimeW)
-             {
-                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
-         
-                 if (FAILED(hr))
-        -            hr = resolver_create_gstreamer_handler(handler);
-        +            hr = resolver_create_default_handler(handler);
-             }
-         
-             CoTaskMemFree(mimeW);
-        @@ -6360,7 +6362,7 @@
-             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
-         
-             if (FAILED(hr))
-        -        hr = resolver_create_gstreamer_handler(handler);
-        +        hr = resolver_create_default_handler(handler);
-         
-             return hr;
-         }
-        @@ -9222,9 +9224,16 @@
-         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
-         {
-             struct dxgi_device_manager *object;
-        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
-         
-             TRACE("%p, %p.\n", token, manager);
-         
-        +    if (do_not_create && do_not_create[0] != '\0')
-        +    {
-        +        FIXME("stubbing out\n");
-        +        return E_NOTIMPL;
-        +    }
-        +
-             if (!token || !manager)
-                 return E_POINTER;
-        EOF
-        
-        # 检查目标文件是否存在
-        if [ -f "dlls/mfplat/main.c" ]; then
-            echo "找到目标文件 dlls/mfplat/main.c，准备应用修复后的补丁..."
-            
-            # 首先检查 CLSID_AVIByteStreamHandler 是否可用
-            if grep -q "CLSID_AVIByteStreamHandler" dlls/mfplat/main.c; then
-                echo "✅ CLSID_AVIByteStreamHandler 在代码中可用"
-            else
-                echo "⚠️ CLSID_AVIByteStreamHandler 未找到，检查其他可用的 CLSID..."
-                # 寻找其他可用的 CLSID
-                if grep -q "CLSID_MPEG2ByteStreamHandler" dlls/mfplat/main.c; then
-                    echo "使用 CLSID_MPEG2ByteStreamHandler 作为替代"
-                    sed -i 's/CLSID_AVIByteStreamHandler/CLSID_MPEG2ByteStreamHandler/g' wine_fixed_mfplat_patch.patch
-                elif grep -q "CLSID_WICImagingFactory" dlls/mfplat/main.c; then
-                    echo "使用 CLSID_WICImagingFactory 作为替代"
-                    sed -i 's/CLSID_AVIByteStreamHandler/CLSID_WICImagingFactory/g' wine_fixed_mfplat_patch.patch
-                else
-                    echo "未找到合适的 CLSID，回退到原始 GStreamer 处理程序"
-                    # 修改补丁回退到原始实现
-                    sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^            return CoCreateInstance/ c\
-        static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
-        {\
-            static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};\
-            return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
-        }' wine_fixed_mfplat_patch.patch
-                fi
-            fi
-            
-            # 尝试应用补丁
-            if patch -p1 -N < wine_fixed_mfplat_patch.patch; then
-                echo "✅ 修复后的补丁应用成功"
-                
-                # 验证补丁应用
-                echo "验证补丁应用..."
-                if grep -q "resolver_create_default_handler" dlls/mfplat/main.c && grep -q "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c; then
-                    echo "✅ 补丁验证成功：关键修改已应用"
-                    
-                    # 额外检查：确保没有未声明的标识符
-                    echo "检查潜在的编译问题..."
-                    if grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
-                        echo "❌ 发现未声明的 CLSID_MPEG4ByteStreamHandlerPlugin，正在修复..."
-                        sed -i 's/CLSID_MPEG4ByteStreamHandlerPlugin/CLSID_AVIByteStreamHandler/g' dlls/mfplat/main.c
-                    fi
-                else
-                    echo "⚠️ 警告：补丁可能未完全应用"
-                fi
-            else
-                echo "❌ 补丁应用失败，尝试手动修复..."
-                
-                # 手动应用关键修改
-                echo "开始手动修复..."
-                
-                # 1. 添加必要的头文件包含
-                if ! grep -q "wine/mfinternal.h" dlls/mfplat/main.c; then
-                    echo "添加 wine/mfinternal.h 包含..."
-                    sed -i '/#include "evr.h"/a #include "wine/mfinternal.h"' dlls/mfplat/main.c
-                fi
-                
-                # 2. 修改函数名
-                echo "修改函数名..."
-                sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
-                
-                # 3. 修改函数实现，使用存在的 CLSID
-                echo "修改函数实现..."
-                # 首先检查可用的 CLSID
-                if grep -q "CLSID_AVIByteStreamHandler" dlls/mfplat/main.c; then
-                    CLSID_TO_USE="CLSID_AVIByteStreamHandler"
-                elif grep -q "CLSID_MPEG2ByteStreamHandler" dlls/mfplat/main.c; then
-                    CLSID_TO_USE="CLSID_MPEG2ByteStreamHandler"
-                else
-                    # 回退到原始 GStreamer 处理程序
-                    CLSID_TO_USE="CLSID_GStreamerByteStreamHandler"
-                fi
-                
-                echo "使用 CLSID: $CLSID_TO_USE"
-                
-                # 替换函数实现
-                if [ "$CLSID_TO_USE" = "CLSID_GStreamerByteStreamHandler" ]; then
-                    # 使用原始 GStreamer 处理程序
-                    sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
-        static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
-        {\
-            static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};\
-            return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
-        }' dlls/mfplat/main.c
-                else
-                    # 使用存在的 CLSID
-                    sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
-        static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
-        {\
-            return CoCreateInstance(&'"$CLSID_TO_USE"', NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
-        }' dlls/mfplat/main.c
-                fi
-                
-                # 4. 添加调试信息
-                echo "添加调试信息..."
-                sed -i '/this handler for all possible types./a\\n    TRACE( "url_ext %s mimeW %s\\n", debugstr_w(url_ext), debugstr_w(mimeW) );' dlls/mfplat/main.c
-                
-                # 5. 添加 DXGI 设备管理器禁用代码
-                echo "添加 DXGI 设备管理器禁用代码..."
-                sed -i '/struct dxgi_device_manager \*object;/a\\    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
-                sed -i '/TRACE("%p, %p.\\n", token, manager);/a\\\n    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\n    {\n        FIXME("stubbing out\\n");\n        return E_NOTIMPL;\n    }' dlls/mfplat/main.c
-                
-                echo "手动修复完成"
-            fi
-            
-            # 最终验证
-            echo "最终验证补丁应用..."
-            if grep -q "resolver_create_default_handler" dlls/mfplat/main.c && \
-               grep -q "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c && \
-               ! grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
-                echo "✅ 补丁最终验证成功"
-                echo "应用的关键修改："
-                echo "  - 函数重命名：resolver_create_gstreamer_handler → resolver_create_default_handler"
-                echo "  - 添加了 DXGI 设备管理器禁用选项"
-                echo "  - 避免了未声明的 CLSID"
-            else
-                echo "⚠️ 补丁验证发现问题，但继续构建..."
-            fi
+        wget -O wine_fixed_mfplat_patch.patch https://github.com/afeimod/linbox/raw/main/path/wine_fixed_mfplat_patch.patch
+        if patch -p1 -N < wine_fixed_mfplat_patch.patch; then
+            echo "✅ 主要修复补丁应用成功"
         else
-            echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
-            echo "当前目录结构："
-            find . -name "main.c" | head -10
-            exit 1
+            echo "❌ 补丁应用失败，尝试备用方案"
+            # 备用手动修复逻辑
+            if [ -f "dlls/mfplat/main.c" ]; then
+                echo "执行备用手动修复..."
+                sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
+                sed -i 's/CLSID_GStreamerByteStreamHandler/CLSID_AVIByteStreamHandler/g' dlls/mfplat/main.c
+            fi
+        fi
+
+    - name: 下载并应用返回值修复补丁
+      run: |
+        cd wine
+        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
+        if patch -p1 -N < fix_return_value.patch; then
+            echo "✅ 返回值修复补丁应用成功"
+        else
+            echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
 
     - name: 验证补丁应用结果
@@ -322,12 +148,11 @@ jobs:
             echo "3. 检查未声明的 CLSID:"
             if grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
                 echo "   ❌ 发现未声明的 CLSID_MPEG4ByteStreamHandlerPlugin"
+                # 紧急修复
+                sed -i 's/CLSID_MPEG4ByteStreamHandlerPlugin/CLSID_AVIByteStreamHandler/g' dlls/mfplat/main.c
             else
                 echo "   ✅ 没有未声明的 CLSID"
             fi
-            
-            echo "4. 检查使用的 CLSID:"
-            grep -A 5 "resolver_create_default_handler" dlls/mfplat/main.c | grep "CoCreateInstance" || echo "   未找到 CoCreateInstance 调用"
             
             echo "=== 验证完成 ==="
         else
@@ -340,383 +165,53 @@ jobs:
         
         echo "修复编译错误..."
         
-        # 修复第9231行附近的语法错误
         if [ -f "dlls/mfplat/main.c" ]; then
             echo "修复 DXGI 设备管理器代码中的语法错误..."
             
-            # 查找有问题的代码段
+            # 查找有问题的代码段并修复
             if grep -q "if (do_not_create && do_not_create\[0\] != '\\0')" dlls/mfplat/main.c; then
                 echo "发现语法错误，正在修复..."
                 
-                # 修复语法错误 - 确保正确的代码格式
+                # 修复语法错误
                 sed -i '/struct dxgi_device_manager \*object;/a\
-                const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
+    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
                 
                 sed -i '/TRACE("%p, %p.\\n", token, manager);/a\
-                \
-                    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\
-                    {\
-                        FIXME("stubbing out\\n");\
-                        return E_NOTIMPL;\
-                    }' dlls/mfplat/main.c
-                
-                # 删除可能重复的错误代码
-                sed -i '/^[[:space:]]*if (do_not_create && do_not_create\[0\] != '"'"'\\0'"'"')/d' dlls/mfplat/main.c
-                sed -i '/^[[:space:]]*{/,/^[[:space:]]*}/d' dlls/mfplat/main.c
-                sed -i '/^[[:space:]]*FIXME("stubbing out\\n");/d' dlls/mfplat/main.c
-                sed -i '/^[[:space:]]*return E_NOTIMPL;/d' dlls/mfplat/main.c
+\
+    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\
+    {\
+        FIXME("stubbing out\\n");\
+        return E_NOTIMPL;\
+    }' dlls/mfplat/main.c
                 
                 echo "语法错误修复完成"
             fi
-            
-            # 修复未使用函数的警告
-            echo "检查未使用的函数..."
-            
-            # 检查 resolver_create_default_handler 是否被使用
-            if ! grep -q "resolver_create_default_handler" dlls/mfplat/main.c | grep -v "static HRESULT resolver_create_default_handler" | head -1; then
-                echo "警告: resolver_create_default_handler 可能未被使用"
-            fi
-            
-            # 检查 resolver_get_bytestream_url_hint 是否被使用
-            if ! grep -q "resolver_get_bytestream_url_hint" dlls/mfplat/main.c | grep -v "static HRESULT resolver_get_bytestream_url_hint" | head -1; then
-                echo "警告: resolver_get_bytestream_url_hint 可能未被使用"
-            fi
-            
         else
             echo "目标文件不存在，跳过修复"
         fi
 
-    - name: 修复函数返回值问题
+    - name: 最终语法检查和应用最终补丁
       run: |
         cd wine
         
-        echo "修复 resolver_create_default_handler 函数返回值问题..."
+        echo "执行最终语法检查..."
         
         if [ -f "dlls/mfplat/main.c" ]; then
-            # 查找 resolver_create_default_handler 函数并确保所有路径都有返回值
-            echo "检查 resolver_create_default_handler 函数实现..."
-            
-            # 备份原始文件
-            cp dlls/mfplat/main.c dlls/mfplat/main.c.backup
-            
-            # 修复函数实现，确保所有代码路径都有返回值
-            cat > fix_return_value.patch << 'EOF'
---- a/dlls/mfplat/main.c
-+++ b/dlls/mfplat/main.c
-@@ -6298,9 +6298,14 @@
-     return S_OK;
- }
- 
--static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
-+static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
- {
--    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-+    HRESULT hr = CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-+    if (FAILED(hr))
-+    {
-+        return hr;  // 确保所有路径都有返回值
-+    }
-+    return hr;
- }
- 
- static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
-EOF
-            
-            # 应用补丁
-            if patch -p1 -N < fix_return_value.patch; then
-                echo "✅ 返回值修复补丁应用成功"
-            else
-                echo "⚠️ 补丁应用失败，尝试手动修复..."
-                
-                # 手动修复函数
-                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
-static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
-{\
-    HRESULT hr = CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
-    if (FAILED(hr))\
-    {\
-        return hr;\
-    }\
-    return hr;\
-}' dlls/mfplat/main.c
-                
-                echo "手动修复完成"
-            fi
-            
-            # 验证修复
-            echo "验证修复结果..."
-            if grep -A 10 "static HRESULT resolver_create_default_handler" dlls/mfplat/main.c | grep -q "return hr;"; then
-                echo "✅ 返回值修复验证成功"
-            else
-                echo "❌ 返回值修复验证失败，尝试备用方案..."
-                
-                # 备用方案：简化函数实现
-                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
-static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
-{\
-    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
-}' dlls/mfplat/main.c
-                
-                echo "备用修复完成"
-            fi
-        else
-            echo "目标文件不存在，跳过修复"
-        fi
-
-    - name: 修复其他可能的未返回值函数
-      run: |
-        cd wine
-        
-        echo "检查并修复其他可能的未返回值函数..."
-        
-        if [ -f "dlls/mfplat/main.c" ]; then
-            # 检查所有静态函数是否都有返回值
-            echo "检查静态函数返回值..."
-            
-            # 查找所有静态 HRESULT 函数并确保它们都有明确的返回值
-            # 这里我们主要关注可能被修改过的函数
-            
-            # 检查 resolver_get_bytestream_url_hint 函数
-            if grep -q "static HRESULT resolver_get_bytestream_url_hint" dlls/mfplat/main.c; then
-                echo "检查 resolver_get_bytestream_url_hint 函数..."
-                if ! grep -A 15 "static HRESULT resolver_get_bytestream_url_hint" dlls/mfplat/main.c | grep -q "return"; then
-                    echo "⚠️ resolver_get_bytestream_url_hint 函数可能缺少返回值，正在修复..."
-                    # 在函数结束前添加默认返回值
-                    sed -i '/static HRESULT resolver_get_bytestream_url_hint/,/^    }/ { /^    }/i\    return E_FAIL;\n }' dlls/mfplat/main.c
-                fi
-            fi
-            
-            # 检查其他可能受影响的函数
-            echo "检查其他静态 HRESULT 函数..."
-            
-            # 最终语法检查
-            echo "执行语法检查..."
+            # 语法检查
             if gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1; then
                 echo "✅ 语法检查通过"
             else
-                echo "❌ 语法检查失败，输出错误信息:"
-                gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1
-                echo "尝试最终修复..."
-                
-                # 如果仍有问题，回退到最简版本
-                cat > final_fix.patch << 'EOF'
---- a/dlls/mfplat/main.c
-+++ b/dlls/mfplat/main.c
-@@ -6298,9 +6298,9 @@
-     return S_OK;
- }
- 
--static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
-+static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
- {
--    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-+    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
- }
- 
- static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
-@@ -6337,12 +6337,12 @@
-            this handler for all possible types.
-          */
-         
--    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
-+        TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
- 
-             if (url_ext || mimeW)
-             {
-                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
-         
-                 if (FAILED(hr))
--            hr = resolver_create_default_handler(handler);
-+                    hr = resolver_create_default_handler(handler);
-             }
-         
-             CoTaskMemFree(mimeW);
-@@ -6360,7 +6360,7 @@
-             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
-         
-             if (FAILED(hr))
--        hr = resolver_create_default_handler(handler);
-+                hr = resolver_create_default_handler(handler);
-         
-             return hr;
-         }
-@@ -9222,9 +9222,16 @@
-         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
-         {
-             struct dxgi_device_manager *object;
--    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
-+            const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
- 
-             TRACE("%p, %p.\n", token, manager);
- 
-+            if (do_not_create && do_not_create[0] != '\0')
-+            {
-+                FIXME("stubbing out\n");
-+                return E_NOTIMPL;
-+            }
-+
-             if (!token || !manager)
-                 return E_POINTER;
-EOF
-                
-                # 回退并应用干净补丁
-                git checkout -- dlls/mfplat/main.c
-                if patch -p1 -N < final_fix.patch; then
-                    echo "✅ 最终修复成功"
-                else
-                    echo "❌ 最终修复失败，需要手动检查代码"
-                    exit 1
-                fi
-            fi
-        fi
-
-    - name: 验证修复结果
-      run: |
-        cd wine
-        
-        echo "验证修复结果..."
-        
-        if [ -f "dlls/mfplat/main.c" ]; then
-            echo "=== 语法检查 ==="
-            
-            # 检查 DXGI 设备管理器代码
-            echo "1. 检查 DXGI 设备管理器代码语法:"
-            if grep -A 5 "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c | grep -q "if (do_not_create && do_not_create\[0\] != '\\0')"; then
-                echo "   ✅ DXGI 代码语法正确"
-            else
-                echo "   ⚠️ 未找到 DXGI 代码，可能已被修复"
-            fi
-            
-            echo "2. 检查是否有语法错误:"
-            # 简单的语法检查
-            if gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1 | grep -q "error"; then
-                echo "   ❌ 发现语法错误:"
-                gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1 | head -10
-                
-                echo "尝试备用修复方案..."
-                # 如果仍有错误，使用备用方案
-                cat > wine_final_fix.patch << 'EOF'
-        --- a/dlls/mfplat/main.c
-        +++ b/dlls/mfplat/main.c
-        @@ -6298,10 +6298,9 @@
-             return S_OK;
-         }
-         
-        -static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
-        +static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
-         {
-        -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
-        -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-        +    return CoCreateInstance(&CLSID_AVIByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-         }
-         
-         static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
-        @@ -6337,12 +6336,14 @@
-            this handler for all possible types.
-          */
-         
-        +    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
-        +
-             if (url_ext || mimeW)
-             {
-                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
-         
-                 if (FAILED(hr))
-        -            hr = resolver_create_gstreamer_handler(handler);
-        +            hr = resolver_create_default_handler(handler);
-             }
-         
-             CoTaskMemFree(mimeW);
-        @@ -6360,7 +6361,7 @@
-             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
-         
-             if (FAILED(hr))
-        -        hr = resolver_create_gstreamer_handler(handler);
-        +        hr = resolver_create_default_handler(handler);
-         
-             return hr;
-         }
-        @@ -9222,9 +9223,16 @@
-         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
-         {
-             struct dxgi_device_manager *object;
-        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
-         
-             TRACE("%p, %p.\n", token, manager);
-         
-        +    if (do_not_create && do_not_create[0] != '\0')
-        +    {
-        +        FIXME("stubbing out\n");
-        +        return E_NOTIMPL;
-        +    }
-        +
-             if (!token || !manager)
-                 return E_POINTER;
-        EOF
-                
-                # 回退所有修改并应用干净的补丁
-                echo "回退所有修改并应用干净的补丁..."
-                git checkout -- dlls/mfplat/main.c
-                
+                echo "❌ 语法检查失败，应用最终修复补丁"
+                wget -O wine_final_fix.patch https://github.com/afeimod/linbox/raw/main/path/wine_final_fix.patch
                 if patch -p1 -N < wine_final_fix.patch; then
                     echo "✅ 最终修复补丁应用成功"
                 else
-                    echo "❌ 最终修复补丁应用失败，尝试手动修复关键部分..."
-                    # 只修复最关键的 CLSID 问题
+                    echo "❌ 最终修复补丁应用失败，需要手动修复"
+                    # 紧急手动修复
+                    git checkout -- dlls/mfplat/main.c
                     sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
                     sed -i 's/CLSID_GStreamerByteStreamHandler/CLSID_AVIByteStreamHandler/g' dlls/mfplat/main.c
-                    echo "手动修复完成"
                 fi
-            else
-                echo "   ✅ 没有发现语法错误"
-            fi
-            
-            echo "=== 修复验证完成 ==="
-        fi
-
-    - name: 最终编译前检查
-      run: |
-        cd wine
-        
-        echo "最终编译前检查..."
-        
-        if [ -f "dlls/mfplat/main.c" ]; then
-            echo "=== 关键修改验证 ==="
-            
-            echo "1. 函数重命名检查:"
-            if grep -q "resolver_create_default_handler" dlls/mfplat/main.c; then
-                echo "   ✅ 函数重命名成功"
-            else
-                echo "   ❌ 函数重命名失败"
-            fi
-            
-            echo "2. CLSID 使用检查:"
-            if grep -A 2 "resolver_create_default_handler" dlls/mfplat/main.c | grep -q "CoCreateInstance"; then
-                echo "   ✅ CoCreateInstance 调用存在"
-                grep -A 2 "resolver_create_default_handler" dlls/mfplat/main.c | grep "CoCreateInstance"
-            else
-                echo "   ❌ CoCreateInstance 调用不存在"
-            fi
-            
-            echo "3. 未声明 CLSID 检查:"
-            if grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
-                echo "   ❌ 发现未声明的 CLSID_MPEG4ByteStreamHandlerPlugin"
-                # 紧急修复
-                sed -i 's/CLSID_MPEG4ByteStreamHandlerPlugin/CLSID_AVIByteStreamHandler/g' dlls/mfplat/main.c
-                echo "   ✅ 已修复未声明的 CLSID"
-            else
-                echo "   ✅ 没有未声明的 CLSID"
-            fi
-            
-            echo "=== 检查完成 ==="
-            
-            # 最终语法检查
-            echo "执行最终语法检查..."
-            if gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1; then
-                echo "✅ 最终语法检查通过"
-            else
-                echo "❌ 最终语法检查失败，但继续构建..."
-                gcc -fsyntax-only -c dlls/mfplat/main.c -o /dev/null 2>&1 | head -5
             fi
         fi
 
@@ -1117,7 +612,7 @@ EOF
         echo "✓ Vulkan 图形 API 支持"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
         echo "✓ 字体配置"
-        echo "✓ 应用了关键补丁（ntsync、gstreamer、sync）"
+        echo "✓ 应用了关键补丁"
         echo ""
         echo "多媒体支持:"
         echo "- GStreamer 核心插件"
@@ -1134,21 +629,11 @@ EOF
         echo "1. 安装 GStreamer 插件: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
         echo "2. 验证安装: ./test-media.sh"
         echo ""
-        echo "渲染模式选择:"
-        echo "- OpenGL (Zink): 设置环境变量: export MESA_LOADER_DRIVER_OVERRIDE=zink"
-        echo "- Vulkan (Freedreno): 默认启用"
-        echo ""
         echo "下一步:"
         echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
         echo "2. 初始化 Wine: wine wineboot"
         echo "3. 配置 Wine: winecfg"
         echo "4. 测试多媒体支持: ./test-media.sh"
-        echo ""
-        echo "故障排除:"
-        echo "- 运行: DEBUG_MEDIA=1 wine --version 查看多媒体环境"
-        echo "- 运行: ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 运行: ./test-media.sh 诊断多媒体问题"
-        echo "=========================================="
         EOF
         
         chmod +x wine-package/install.sh
@@ -1178,14 +663,6 @@ EOF
         echo "4. 检查 Wine GStreamer 支持"
         echo "查找 Wine 中的 GStreamer 相关文件..."
         find /data/data/com.termux/files/usr/opt/wine -name "*gst*" 2>/dev/null | head -10
-        
-        echo ""
-        echo "5. 测试 GStreamer 功能（需要安装 GStreamer 包）"
-        echo "安装 GStreamer: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo ""
-        echo "6. 测试 FFmpeg 解码器"
-        echo "安装 FFmpeg: pkg install ffmpeg"
-        echo "测试命令: ffmpeg -decoders | grep -E 'h264|hevc|vp8|vp9|aac|mp3'"
         EOF
         
         chmod +x wine-package/test-media.sh
@@ -1219,10 +696,6 @@ EOF
         echo "4. 检查 Wine Vulkan 支持"
         echo "查找 winevulkan.dll..."
         find /data/data/com.termux/files/usr/opt/wine -name "*vulkan*" 2>/dev/null | head -10
-        
-        echo ""
-        echo "5. 测试 Vulkan 应用（如果有）"
-        echo "注意: 需要安装 vulkan-tools 包来测试: pkg install vulkan-tools"
         EOF
         
         chmod +x wine-package/test-vulkan.sh
@@ -1267,44 +740,13 @@ EOF
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
-        echo "应用补丁: ntsync-fix-32-bit-processes.patch, gstreamer-patch*.patch, sync-unix-staging.patch"
+        echo "应用补丁: wine_fixed_mfplat_patch.patch, fix_return_value.patch, wine_final_fix.patch"
         echo ""
         echo "修复的问题:"
-        echo "✓ 无法运行 EXE 文件"
+        echo "✓ CLSID_MPEG4ByteStreamHandlerPlugin 未声明问题"
+        echo "✓ 函数返回值问题"
+        echo "✓ DXGI 设备管理器语法错误"
+        echo "✓ Termux 路径问题"
         echo "✓ 中文环境支持"
-        echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
-        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
-        echo "✓ 字体配置"
-        echo "✓ 应用了关键补丁，提升兼容性"
-        echo ""
-        echo "GStreamer 插件包含:"
-        echo "- 核心插件 (base, good, bad, ugly)"
-        echo "- FFmpeg 插件 (libav)"
-        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
-        echo "- 音频输出 (ALSA、PulseAudio)"
-        echo ""
-        echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-unity-wow64-bin-gstreamer-termux.tar.gz"
-        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
-        echo "3. 进入目录: cd wine-package"
-        echo "4. 运行安装: ./install.sh"
-        echo "5. 重新加载环境: source ~/.bashrc"
-        echo "6. 初始化: wine wineboot"
-        echo "7. 测试多媒体: ./test-media.sh"
-        echo "8. 测试 Vulkan: ./test-vulkan.sh"
-        echo ""
-        echo "GStreamer 插件安装:"
-        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
-        echo ""
-        echo "Vulkan 驱动安装:"
-        echo "pkg install mesa-vulkan-driver"
-        echo ""
-        echo "渲染模式切换:"
-        echo "- Vulkan: 默认模式"
-        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
-        echo ""
-        echo "故障排除:"
-        echo "- 运行 ./test-media.sh 诊断多媒体问题"
-        echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
-        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
-        echo "- 检查设备多媒体和 Vulkan 支持"
+        echo "✓ Vulkan 支持"
+        echo "✓ 完整的 GStreamer 支持"
