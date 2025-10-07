@@ -1,0 +1,138 @@
+diff -uraN wine-src/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+--- wine-src/dlls/ntdll/unix/esync.c	2024-01-15 04:26:12.000000000 -0500
++++ b/dlls/ntdll/unix/esync.c	2024-01-15 06:27:30.967565423 -0500
+@@ -97,7 +97,8 @@
+ };
+ C_ASSERT(sizeof(struct event) == 8);
+ 
+-static char shm_name[29];
++static char shm_name[200];
++static int termux_esync;
+ static int shm_fd;
+ static void **shm_addrs;
+ static int shm_addrs_size;  /* length of the allocated shm_addrs array */
+@@ -1332,13 +1332,25 @@
+ 
+     if (stat( config_dir, &st ) == -1)
+         ERR("Cannot stat %s\n", config_dir);
+-
+-    if (st.st_ino != (unsigned long)st.st_ino)
+-        sprintf( shm_name, "/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++	
++	termux_esync = getenv("WINEESYNC_TERMUX") && atoi(getenv("WINEESYNC_TERMUX"));
++	
++	if (termux_esync)
++	{
++    	if (st.st_ino != (unsigned long)st.st_ino)
++        	sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++    	else
++        	sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );
++    }
+     else
+-        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );
++    {
++    	if (st.st_ino != (unsigned long)st.st_ino)
++        	sprintf( shm_name, "/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++    	else
++        	sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );
++    }
+ 
+-    if ((shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1)
++    if ((termux_esync && (shm_fd = open( shm_name, O_RDWR, 0644 )) == -1) || (!termux_esync && (shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1))
+     {
+         /* probably the server isn't running with WINEESYNC, tell the user and bail */
+         if (errno == ENOENT)
+diff -uraN wine-src/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+diff -uraN wine-src/programs/winebrowser/main.c b/programs/winebrowser/main.c
+--- wine-src/programs/winebrowser/main.c	2024-01-15 04:26:14.000000000 -0500
++++ b/programs/winebrowser/main.c	2024-01-15 05:58:50.272054376 -0500
+@@ -116,7 +116,7 @@
+ {
+     static const WCHAR defaultbrowsers[] =
+         L"xdg-open\0"
+-        "/usr/bin/open\0"
++        "/data/data/com.termux/files/usr/glibc/bin/open\0"
+         "firefox\0"
+         "konqueror\0"
+         "mozilla\0"
+@@ -141,7 +141,7 @@
+ static int open_mailto_url( const WCHAR *url )
+ {
+     static const WCHAR defaultmailers[] =
+-        L"/usr/bin/open\0"
++        L"/data/data/com.termux/files/usr/glibc/bin/open\0"
+         "xdg-email\0"
+         "mozilla-thunderbird\0"
+         "thunderbird\0"
+diff -uraN wine-src/server/esync.c b/server/esync.c
+--- wine-src/server/esync.c	2024-01-15 04:26:14.000000000 -0500
++++ b/server/esync.c	2024-01-15 06:27:55.759726857 -0500
+@@ -59,17 +59,18 @@
+ #endif
+ }
+ 
+-static char shm_name[29];
++static char shm_name[200];
+ static int shm_fd;
+ static off_t shm_size;
+ static void **shm_addrs;
+ static int shm_addrs_size;  /* length of the allocated shm_addrs array */
+ static long pagesize;
++static int termux_esync;
+ 
+ static void shm_cleanup(void)
+ {
+     close( shm_fd );
+-    if (shm_unlink( shm_name ) == -1)
++    if ((termux_esync && unlink( shm_name ) == -1) || (!termux_esync && shm_unlink( shm_name ) == -1))
+         perror( "shm_unlink" );
+ }
+ 
+@@ -79,15 +80,27 @@
+ 
+     if (fstat( config_dir_fd, &st ) == -1)
+         fatal_error( "cannot stat config dir\n" );
++    
++    termux_esync = getenv("WINEESYNC_TERMUX") && atoi(getenv("WINEESYNC_TERMUX"));
+ 
+-    if (st.st_ino != (unsigned long)st.st_ino)
+-        sprintf( shm_name, "/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++    if (termux_esync)
++	{
++    	if (st.st_ino != (unsigned long)st.st_ino)
++        	sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++    	else
++        	sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );
++        unlink( shm_name );
++        shm_fd = open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );
++    }
+     else
+-        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );
+-
+-    shm_unlink( shm_name );
+-
+-    shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );
++    {
++    	if (st.st_ino != (unsigned long)st.st_ino)
++        	sprintf( shm_name, "/wine-%lx%08lx-esync", (unsigned long)((unsigned long long)st.st_ino >> 32), (unsigned long)st.st_ino );
++    	else
++        	sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );
++        shm_unlink( shm_name );
++        shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );
++    }
+     if (shm_fd == -1)
+         perror( "shm_open" );
+ 
+diff --git a/server/unicode.c b/server/unicode.c
+index b486431..d5c556d 100644
+--- a/server/unicode.c
++++ b/server/unicode.c
+@@ -313,7 +313,7 @@ static char *get_nls_dir(void)
+ /* load the case mapping table */
+ struct fd *load_intl_file(void)
+ {
+-    static const char *nls_dirs[] = { NULL, DATADIR "/wine/nls", "/usr/local/share/wine/nls", "/usr/share/wine/nls" };
++    static const char *nls_dirs[] = { NULL, DATADIR "/data/data/com.termux/files/usr/glibc/wine/nls", "/data/data/com.termux/files/usr/glibc/local/share/wine/nls", "/data/data/com.termux/files/usr/glibc/share/wine/nls" };
+     static const WCHAR nt_pathW[] = {'C',':','\\','w','i','n','d','o','w','s','\\',
+         's','y','s','t','e','m','3','2','\\','l','_','i','n','t','l','.','n','l','s',0};
+     static const struct unicode_str nt_name = { nt_pathW, sizeof(nt_pathW) };
