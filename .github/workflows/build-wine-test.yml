@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build YesWine (True WOW64 for Termux with Vulkan and Full GStreamer)
+name: Build TestWine (True WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:  # 只保留手动触发
