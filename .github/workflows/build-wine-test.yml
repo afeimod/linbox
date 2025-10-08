@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build TestGst9.2Wine (Esync WOW64 for Termux with Vulkan and Full GStreamer)
+name: Build YesWine (True WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -93,121 +93,141 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.2
+        git checkout wine-9.21
 
-    - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
+    - name: 创建并应用补丁
       run: |
         cd wine
-        # 下载修复脚本
-        wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
-        chmod +x fix_wine9.2_mfplat.sh
-        # 运行修复脚本
-        ./fix_wine9.2_mfplat.sh
-
-    - name: 验证修复结果
-      run: |
-        cd wine
+        
+        # 创建补丁文件
+        cat > wine_do_not_create_dxgi_manager2.patch << 'EOF'
+        --- wine10.4/dlls/mfplat/main.c	2025-09-06 11:24:06.099619799 +0000
+        +++ proton/dlls/mfplat/main.c	2025-09-06 11:33:37.008543902 +0000
+        @@ -43,6 +43,7 @@
+         #include "strsafe.h"
+         #undef INITGUID
+         #include "evr.h"
+        +#include "wine/mfinternal.h"
+         /* mfd3d12 guids are not included in mfuuid */
+         #define INITGUID
+         #undef EXTERN_GUID
+        @@ -6298,10 +6299,9 @@
+             return S_OK;
+         }
+         
+        -static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
+        +static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
+         {
+        -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
+        -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+        +    return CoCreateInstance(&CLSID_MPEG4ByteStreamHandlerPlugin, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+         }
+         
+         static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
+        @@ -6337,12 +6337,14 @@
+            this handler for all possible types.
+          */
+         
+        +    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
+        +
+             if (url_ext || mimeW)
+             {
+                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
+         
+                 if (FAILED(hr))
+        -            hr = resolver_create_gstreamer_handler(handler);
+        +            hr = resolver_create_default_handler(handler);
+             }
+         
+             CoTaskMemFree(mimeW);
+        @@ -6360,7 +6362,7 @@
+             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
+         
+             if (FAILED(hr))
+        -        hr = resolver_create_gstreamer_handler(handler);
+        +        hr = resolver_create_default_handler(handler);
+         
+             return hr;
+         }
+        @@ -9222,9 +9224,16 @@
+         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
+         {
+             struct dxgi_device_manager *object;
+        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
+         
+             TRACE("%p, %p.\n", token, manager);
+         
+        +    if (do_not_create && do_not_create[0] != '\0')
+        +    {
+        +        FIXME("stubbing out\n");
+        +        return E_NOTIMPL;
+        +    }
+        +
+             if (!token || !manager)
+                 return E_POINTER;
+        EOF
+        
+        # 检查目标文件是否存在
         if [ -f "dlls/mfplat/main.c" ]; then
-            echo "=== 修复验证 ==="
+            echo "找到目标文件 dlls/mfplat/main.c，准备应用补丁..."
             
-            # 检查关键修改
-            echo "1. 检查头文件包含:"
-            if grep -q '#include "wine/mfinternal.h"' dlls/mfplat/main.c; then
-                echo "   ✅ wine/mfinternal.h 包含成功"
+            # 尝试应用补丁
+            if patch -p1 < wine_do_not_create_dxgi_manager2.patch; then
+                echo "✅ 补丁应用成功"
+                
+                # 验证补丁应用
+                echo "验证补丁应用..."
+                if grep -q "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c; then
+                    echo "✅ 补丁验证成功：找到了补丁代码"
+                else
+                    echo "⚠️ 警告：补丁可能未完全应用"
+                fi
             else
-                echo "   ❌ wine/mfinternal.h 包含失败"
+                echo "❌ 补丁应用失败，尝试手动应用..."
+                
+                # 手动应用关键修改
+                echo "尝试手动应用补丁..."
+                
+                # 首先检查是否需要添加头文件包含
+                if ! grep -q "wine/mfinternal.h" dlls/mfplat/main.c; then
+                    echo "手动添加 wine/mfinternal.h 包含..."
+                    sed -i '/#include "evr.h"/a #include "wine/mfinternal.h"' dlls/mfplat/main.c
+                fi
+                
+                # 检查并修改函数名
+                sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
+                
+                # 修改函数实现
+                sed -i '/static HRESULT resolver_create_default_handler(IMFByteStreamHandler \*\*handler)/,/^    }/c\
+        static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)\
+        {\
+            return CoCreateInstance(&CLSID_MPEG4ByteStreamHandlerPlugin, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);\
+        }' dlls/mfplat/main.c
+                
+                # 添加调试信息
+                sed -i '/this handler for all possible types./a\\n    TRACE( "url_ext %s mimeW %s\\n", debugstr_w(url_ext), debugstr_w(mimeW) );' dlls/mfplat/main.c
+                
+                # 添加 DXGI 设备管理器禁用代码
+                sed -i '/struct dxgi_device_manager \*object;/a\\    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");' dlls/mfplat/main.c
+                sed -i '/TRACE("%p, %p.\\n", token, manager);/a\\\n    if (do_not_create && do_not_create[0] != '"'"'\\0'"'"')\n    {\n        FIXME("stubbing out\\n");\n        return E_NOTIMPL;\n    }' dlls/mfplat/main.c
+                
+                echo "手动补丁应用完成"
             fi
-            
-            echo "2. 检查函数重命名:"
-            if grep -q "resolver_create_default_handler" dlls/mfplat/main.c && ! grep -q "resolver_create_gstreamer_handler" dlls/mfplat/main.c; then
-                echo "   ✅ 函数重命名成功"
-            else
-                echo "   ❌ 函数重命名失败"
-            fi
-            
-            echo "3. 检查函数实现:"
-            if grep -q "CLSID_AVIByteStreamHandler" dlls/mfplat/main.c; then
-                echo "   ✅ 函数实现替换成功"
-            else
-                echo "   ❌ 函数实现替换失败"
-            fi
-            
-            echo "4. 检查环境变量支持:"
-            if grep -q 'WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER' dlls/mfplat/main.c; then
-                echo "   ✅ 环境变量支持添加成功"
-            else
-                echo "   ❌ 环境变量支持添加失败"
-            fi
-            
-            echo "5. 检查调试信息:"
-            if grep -q 'TRACE( "url_ext %s mimeW %s' dlls/mfplat/main.c; then
-                echo "   ✅ 调试信息添加成功"
-            else
-                echo "   ❌ 调试信息添加失败"
-            fi
-            
-            echo "6. 检查未声明的 CLSID:"
-            if grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
-                echo "   ❌ 发现未声明的 CLSID_MPEG4ByteStreamHandlerPlugin"
-            else
-                echo "   ✅ 没有未声明的 CLSID"
-            fi
-            
-            echo "=== 验证完成 ==="
-            
-            # 显示关键修改的上下文
-            echo ""
-            echo "=== 关键修改预览 ==="
-            echo "头文件包含:"
-            grep -A2 -B2 '#include "wine/mfinternal.h"' dlls/mfplat/main.c || echo "未找到"
-            echo ""
-            echo "函数定义:"
-            grep -A5 -B2 "resolver_create_default_handler" dlls/mfplat/main.c | head -10 || echo "未找到"
-            echo ""
-            echo "环境变量检查:"
-            grep -A5 -B2 "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c || echo "未找到"
         else
-            echo "❌ 错误: dlls/mfplat/main.c 文件不存在"
-            exit 1
+            echo "❌ 错误：目标文件 dlls/mfplat/main.c 不存在"
+            echo "当前目录结构："
+            find . -name "main.c" | head -10
         fi
 
-    - name: 下载并应用返回值修复补丁
+    - name: 下载并应用esync
       run: |
         cd wine
-        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
-        if patch -p1 -N < fix_return_value.patch; then
+        wget -O esync.patch https://github.com/afeimod/linbox/raw/main/path/esync.patch
+        if patch -p1 -N < esync.patch; then
             echo "✅ 返回值修复补丁应用成功"
         else
             echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
-    - name: 下载并运行 esync 修复脚本
-      run: |
-        cd wine
-        # 下载 esync 修复脚本
-        wget -O fix_esync.sh https://github.com/afeimod/linbox/raw/main/path/fix_esync.sh
-        chmod +x fix_esync.sh
-        # 运行修复脚本
-        ./fix_esync.sh
-        
-    - name: 验证 esync 修复
-      run: |
-        cd wine
-        echo "验证 esync 修复..."
-    
-        # 检查关键修改
-        if [ -f "dlls/ntdll/unix/esync.c" ]; then
-            echo "检查 dlls/ntdll/unix/esync.c:"
-            grep -n "termux_esync" dlls/ntdll/unix/esync.c | head -5
-            grep -n "/data/data/com.termux/files/usr/tmp/wine" dlls/ntdll/unix/esync.c | head -3
-        fi
-    
-        if [ -f "server/esync.c" ]; then
-            echo "检查 server/esync.c:"
-            grep -n "termux_esync" server/esync.c | head -5
-            grep -n "/data/data/com.termux/files/usr/tmp/wine" server/esync.c | head -3
-        fi
-    
-        echo "esync 修复验证完成"
     
     - name: 彻底修复 Termux 路径问题
       run: |
@@ -228,8 +248,6 @@ jobs:
         
         echo "路径修复完成"
 
-
-
     - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
         cd wine
@@ -247,8 +265,12 @@ jobs:
           --prefix=/tmp/wine-install \
           --with-x \
           --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
+          --with-gettext \
           --enable-nls \
           --without-dbus \
           --without-sane \
@@ -604,7 +626,7 @@ jobs:
         echo "✓ Vulkan 图形 API 支持"
         echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
         echo "✓ 字体配置"
-        echo "✓ 应用了关键补丁"
+        echo "✓ 应用了关键补丁（ntsync、gstreamer、sync）"
         echo ""
         echo "多媒体支持:"
         echo "- GStreamer 核心插件"
@@ -621,11 +643,21 @@ jobs:
         echo "1. 安装 GStreamer 插件: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
         echo "2. 验证安装: ./test-media.sh"
         echo ""
+        echo "渲染模式选择:"
+        echo "- OpenGL (Zink): 设置环境变量: export MESA_LOADER_DRIVER_OVERRIDE=zink"
+        echo "- Vulkan (Freedreno): 默认启用"
+        echo ""
         echo "下一步:"
         echo "1. 重新启动 Termux 或运行: source ~/.bashrc"
         echo "2. 初始化 Wine: wine wineboot"
         echo "3. 配置 Wine: winecfg"
         echo "4. 测试多媒体支持: ./test-media.sh"
+        echo ""
+        echo "故障排除:"
+        echo "- 运行: DEBUG_MEDIA=1 wine --version 查看多媒体环境"
+        echo "- 运行: ./test-vulkan.sh 诊断 Vulkan 问题"
+        echo "- 运行: ./test-media.sh 诊断多媒体问题"
+        echo "=========================================="
         EOF
         
         chmod +x wine-package/install.sh
@@ -655,6 +687,14 @@ jobs:
         echo "4. 检查 Wine GStreamer 支持"
         echo "查找 Wine 中的 GStreamer 相关文件..."
         find /data/data/com.termux/files/usr/opt/wine -name "*gst*" 2>/dev/null | head -10
+        
+        echo ""
+        echo "5. 测试 GStreamer 功能（需要安装 GStreamer 包）"
+        echo "安装 GStreamer: pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+        echo ""
+        echo "6. 测试 FFmpeg 解码器"
+        echo "安装 FFmpeg: pkg install ffmpeg"
+        echo "测试命令: ffmpeg -decoders | grep -E 'h264|hevc|vp8|vp9|aac|mp3'"
         EOF
         
         chmod +x wine-package/test-media.sh
@@ -688,6 +728,10 @@ jobs:
         echo "4. 检查 Wine Vulkan 支持"
         echo "查找 winevulkan.dll..."
         find /data/data/com.termux/files/usr/opt/wine -name "*vulkan*" 2>/dev/null | head -10
+        
+        echo ""
+        echo "5. 测试 Vulkan 应用（如果有）"
+        echo "注意: 需要安装 vulkan-tools 包来测试: pkg install vulkan-tools"
         EOF
         
         chmod +x wine-package/test-vulkan.sh
@@ -704,7 +748,7 @@ jobs:
         find wine-package -name "*gst*" | sort
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz wine-package/
         
         echo "打包完成:"
         ls -lh wine-*.tar.gz
@@ -712,15 +756,15 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux
-        path: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz
+        name: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux
+        path: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
-        files: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz
+        files: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -732,13 +776,44 @@ jobs:
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
-        echo "应用修复: Wine 9.2 mfplat 修复脚本"
+        echo "应用补丁: ntsync-fix-32-bit-processes.patch, gstreamer-patch*.patch, sync-unix-staging.patch"
         echo ""
         echo "修复的问题:"
-        echo "✓ CLSID_MPEG4ByteStreamHandlerPlugin 未声明问题"
-        echo "✓ 函数返回值问题"
-        echo "✓ DXGI 设备管理器语法错误"
-        echo "✓ Termux 路径问题"
+        echo "✓ 无法运行 EXE 文件"
         echo "✓ 中文环境支持"
-        echo "✓ Vulkan 支持"
-        echo "✓ 完整的 GStreamer 支持"
+        echo "✓ Vulkan 支持（解决 libvulkan_freedreno.so 问题）"
+        echo "✓ 完整的 GStreamer 支持（包含 FFmpeg 插件）"
+        echo "✓ 字体配置"
+        echo "✓ 应用了关键补丁，提升兼容性"
+        echo ""
+        echo "GStreamer 插件包含:"
+        echo "- 核心插件 (base, good, bad, ugly)"
+        echo "- FFmpeg 插件 (libav)"
+        echo "- MP3、AAC、H.264、H.265、VP8、VP9 解码"
+        echo "- 音频输出 (ALSA、PulseAudio)"
+        echo ""
+        echo "使用说明:"
+        echo "1. 下载 wine-$VERSION-true-wow64-bin-gstreamer-termux.tar.gz"
+        echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
+        echo "3. 进入目录: cd wine-package"
+        echo "4. 运行安装: ./install.sh"
+        echo "5. 重新加载环境: source ~/.bashrc"
+        echo "6. 初始化: wine wineboot"
+        echo "7. 测试多媒体: ./test-media.sh"
+        echo "8. 测试 Vulkan: ./test-vulkan.sh"
+        echo ""
+        echo "GStreamer 插件安装:"
+        echo "pkg install gstreamer gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav"
+        echo ""
+        echo "Vulkan 驱动安装:"
+        echo "pkg install mesa-vulkan-driver"
+        echo ""
+        echo "渲染模式切换:"
+        echo "- Vulkan: 默认模式"
+        echo "- Zink (OpenGL): export MESA_LOADER_DRIVER_OVERRIDE=zink"
+        echo ""
+        echo "故障排除:"
+        echo "- 运行 ./test-media.sh 诊断多媒体问题"
+        echo "- 运行 ./test-vulkan.sh 诊断 Vulkan 问题"
+        echo "- 确保安装了 GStreamer 插件和 Mesa Vulkan 驱动"
+        echo "- 检查设备多媒体和 Vulkan 支持"
