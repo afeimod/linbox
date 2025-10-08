@@ -95,7 +95,7 @@ jobs:
         cd wine
         git checkout wine-9.2
 
-    - name: 下载并运行 Wine 9.2 mfplat 修复脚本
+    - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
       run: |
         cd wine
         # 下载修复脚本
