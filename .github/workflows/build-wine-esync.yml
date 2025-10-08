@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Gst9.2Wine (True WOW64 for Termux with Vulkan and Full GStreamer)
+name: Build Gst9.2Wine (Esync WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -180,7 +180,15 @@ jobs:
         else
             echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
-
+    - name: 下载并应用 esync 补丁
+      run: |
+        cd wine
+        wget -O esync9.2.patch https://github.com/afeimod/linbox/raw/main/path/esync9.2.patch
+        if patch -p1 -N < esync.patch; then
+            echo "✅ esync 补丁应用成功"
+        else
+            echo "⚠️ esync 补丁应用失败，继续构建"
+        fi
     - name: 彻底修复 Termux 路径问题
       run: |
         cd wine
@@ -678,7 +686,7 @@ jobs:
         find wine-package -name "*gst*" | sort
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-unity-wow64-bin-gstreamer-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz wine-package/
         
         echo "打包完成:"
         ls -lh wine-*.tar.gz
@@ -686,15 +694,15 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-unity-wow64-bin-gstreamer-termux
-        path: wine-${{ env.VERSION }}-unity-wow64-bin-gstreamer-termux.tar.gz
+        name: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux
+        path: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
-        files: wine-${{ env.VERSION }}-unity-wow64-bin-gstreamer-termux.tar.gz
+        files: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
