@@ -93,27 +93,16 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.9
+        git checkout wine-9.2
 
-    - name: 下载并应用9.2补丁
+    - name: 下载并运行 Wine 9.2 mfplat 修复脚本
       run: |
         cd wine
-        wget -O wine_9.2_mfplat_fix.path.patch https://github.com/afeimod/linbox/raw/main/path/wine_9.2_mfplat_fix.path.patch
-        if patch -p1 -N < wine_9.2_mfplat_fix.path.patch; then
-            echo "✅ 补丁应用成功"
-        else
-            echo "⚠️ 补丁应用失败，继续构建"
-        fi
-
-    - name: 下载并应用返回值修复补丁
-      run: |
-        cd wine
-        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
-        if patch -p1 -N < fix_return_value.patch; then
-            echo "✅ 返回值修复补丁应用成功"
-        else
-            echo "⚠️ 返回值修复补丁应用失败，继续构建"
-        fi
+        # 下载修复脚本
+        wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+        chmod +x fix_wine9.2_mfplat.sh
+        # 运行修复脚本
+        ./fix_wine9.2_mfplat.sh
 
     - name: 验证修复结果
       run: |
@@ -150,7 +139,46 @@ jobs:
                 echo "   ❌ 环境变量支持添加失败"
             fi
             
+            echo "5. 检查调试信息:"
+            if grep -q 'TRACE( "url_ext %s mimeW %s' dlls/mfplat/main.c; then
+                echo "   ✅ 调试信息添加成功"
+            else
+                echo "   ❌ 调试信息添加失败"
+            fi
+            
+            echo "6. 检查未声明的 CLSID:"
+            if grep -q "CLSID_MPEG4ByteStreamHandlerPlugin" dlls/mfplat/main.c; then
+                echo "   ❌ 发现未声明的 CLSID_MPEG4ByteStreamHandlerPlugin"
+            else
+                echo "   ✅ 没有未声明的 CLSID"
+            fi
+            
             echo "=== 验证完成 ==="
+            
+            # 显示关键修改的上下文
+            echo ""
+            echo "=== 关键修改预览 ==="
+            echo "头文件包含:"
+            grep -A2 -B2 '#include "wine/mfinternal.h"' dlls/mfplat/main.c || echo "未找到"
+            echo ""
+            echo "函数定义:"
+            grep -A5 -B2 "resolver_create_default_handler" dlls/mfplat/main.c | head -10 || echo "未找到"
+            echo ""
+            echo "环境变量检查:"
+            grep -A5 -B2 "WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER" dlls/mfplat/main.c || echo "未找到"
+        else
+            echo "❌ 错误: dlls/mfplat/main.c 文件不存在"
+            exit 1
+        fi
+
+    - name: 下载并应用返回值修复补丁
+      run: |
+        cd wine
+        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
+        if patch -p1 -N < fix_return_value.patch; then
+            echo "✅ 返回值修复补丁应用成功"
+        else
+            echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
 
     - name: 彻底修复 Termux 路径问题
@@ -678,7 +706,7 @@ jobs:
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持（包含 FFmpeg）"
-        echo "应用补丁: Wine 9.2 mfplat 修复补丁"
+        echo "应用修复: Wine 9.2 mfplat 修复脚本"
         echo ""
         echo "修复的问题:"
         echo "✓ CLSID_MPEG4ByteStreamHandlerPlugin 未声明问题"
