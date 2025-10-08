@@ -1,7 +1,8 @@
-diff -uraN wine/dlls/ntdll/unix/esync.c wine-fixed/dlls/ntdll/unix/esync.c
---- wine/dlls/ntdll/unix/esync.c
-+++ wine-fixed/dlls/ntdll/unix/esync.c
-@@ -97,7 +97,8 @@
+diff --git a/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+index 1234567..abcdefg 100644
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -97,7 +97,8 @@ struct event
  };
  C_ASSERT(sizeof(struct event) == 8);
  
@@ -10,8 +11,8 @@ diff -uraN wine/dlls/ntdll/unix/esync.c wine-fixed/dlls/ntdll/unix/esync.c
 +static int termux_esync;
  static int shm_fd;
  static void **shm_addrs;
- static int shm_addrs_size;  /* length of the allocated shm_addrs array */
-@@ -1332,13 +1333,25 @@
+ static int shm_addrs_size;
+@@ -1332,13 +1333,25 @@ NTSTATUS esync_init(void)
  
      if (stat( config_dir, &st ) == -1)
          ERR("Cannot stat %s\n", config_dir);
@@ -42,17 +43,11 @@ diff -uraN wine/dlls/ntdll/unix/esync.c wine-fixed/dlls/ntdll/unix/esync.c
      {
          /* probably the server isn't running with WINEESYNC, tell the user and bail */
          if (errno == ENOENT)
-diff -uraN wine/dlls/ntdll/unix/server.c wine-fixed/dlls/ntdll/unix/server.c
---- wine/dlls/ntdll/unix/server.c
-+++ wine-fixed/dlls/ntdll/unix/server.c
-@@ -0,0 +1,3 @@
-+// 这个文件在原始补丁中没有具体差异，但为了完整性保留
-+// 实际的 server.c 修改在 server/esync.c 中处理
-+// 这里不需要额外的修改
-diff -uraN wine/programs/winebrowser/main.c wine-fixed/programs/winebrowser/main.c
---- wine/programs/winebrowser/main.c
-+++ wine-fixed/programs/winebrowser/main.c
-@@ -116,7 +116,7 @@
+diff --git a/programs/winebrowser/main.c b/programs/winebrowser/main.c
+index 2345678..bcdefgh 100644
+--- a/programs/winebrowser/main.c
++++ b/programs/winebrowser/main.c
+@@ -116,7 +116,7 @@ static const WCHAR *get_default_browser(void)
  {
      static const WCHAR defaultbrowsers[] =
          L"xdg-open\0"
@@ -61,7 +56,7 @@ diff -uraN wine/programs/winebrowser/main.c wine-fixed/programs/winebrowser/main
          "firefox\0"
          "konqueror\0"
          "mozilla\0"
-@@ -141,7 +141,7 @@
+@@ -141,7 +141,7 @@ static const WCHAR *get_default_browser(void)
  static int open_mailto_url( const WCHAR *url )
  {
      static const WCHAR defaultmailers[] =
@@ -70,10 +65,11 @@ diff -uraN wine/programs/winebrowser/main.c wine-fixed/programs/winebrowser/main
          "xdg-email\0"
          "mozilla-thunderbird\0"
          "thunderbird\0"
-diff -uraN wine/server/esync.c wine-fixed/server/esync.c
---- wine/server/esync.c
-+++ wine-fixed/server/esync.c
-@@ -59,17 +59,18 @@
+diff --git a/server/esync.c b/server/esync.c
+index 3456789..cdefghi 100644
+--- a/server/esync.c
++++ b/server/esync.c
+@@ -59,17 +59,18 @@ static char *get_config_dir(void)
  #endif
  }
  
@@ -82,7 +78,7 @@ diff -uraN wine/server/esync.c wine-fixed/server/esync.c
  static int shm_fd;
  static off_t shm_size;
  static void **shm_addrs;
- static int shm_addrs_size;  /* length of the allocated shm_addrs array */
+ static int shm_addrs_size;
  static long pagesize;
 +static int termux_esync;
  
@@ -94,7 +90,7 @@ diff -uraN wine/server/esync.c wine-fixed/server/esync.c
          perror( "shm_unlink" );
  }
  
-@@ -79,15 +80,27 @@
+@@ -79,15 +80,27 @@ static int setup_esync(void)
  
      if (fstat( config_dir_fd, &st ) == -1)
          fatal_error( "cannot stat config dir\n" );
@@ -129,10 +125,11 @@ diff -uraN wine/server/esync.c wine-fixed/server/esync.c
      if (shm_fd == -1)
          perror( "shm_open" );
  
-diff -uraN wine/server/unicode.c wine-fixed/server/unicode.c
---- wine/server/unicode.c
-+++ wine-fixed/server/unicode.c
-@@ -313,7 +313,7 @@
+diff --git a/server/unicode.c b/server/unicode.c
+index 4567890..defghij 100644
+--- a/server/unicode.c
++++ b/server/unicode.c
+@@ -313,7 +313,7 @@ static char *get_nls_dir(void)
  /* load the case mapping table */
  struct fd *load_intl_file(void)
  {
