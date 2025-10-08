@@ -180,15 +180,35 @@ jobs:
         else
             echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
-    - name: 下载并应用 esync 补丁
+    - name: 下载并运行 esync 修复脚本
       run: |
         cd wine
-        wget -O esync9.2.patch https://github.com/afeimod/linbox/raw/main/path/esync9.2.patch
-        if patch -p1 -N < esync9.2.patch; then
-            echo "✅ esync 补丁应用成功"
-        else
-            echo "⚠️ esync 补丁应用失败，继续构建"
+        # 下载 esync 修复脚本
+        wget -O fix_esync.sh https://github.com/afeimod/linbox/raw/main/path/fix_esync.sh
+        chmod +x fix_esync.sh
+        # 运行修复脚本
+        ./fix_esync.sh
+        
+    - name: 验证 esync 修复
+      run: |
+        cd wine
+        echo "验证 esync 修复..."
+    
+        # 检查关键修改
+        if [ -f "dlls/ntdll/unix/esync.c" ]; then
+            echo "检查 dlls/ntdll/unix/esync.c:"
+            grep -n "termux_esync" dlls/ntdll/unix/esync.c | head -5
+            grep -n "/data/data/com.termux/files/usr/tmp/wine" dlls/ntdll/unix/esync.c | head -3
         fi
+    
+        if [ -f "server/esync.c" ]; then
+            echo "检查 server/esync.c:"
+            grep -n "termux_esync" server/esync.c | head -5
+            grep -n "/data/data/com.termux/files/usr/tmp/wine" server/esync.c | head -3
+        fi
+    
+        echo "esync 修复验证完成"
+    
     - name: 彻底修复 Termux 路径问题
       run: |
         cd wine
@@ -207,6 +227,8 @@ jobs:
         find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
         
         echo "路径修复完成"
+
+
 
     - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
