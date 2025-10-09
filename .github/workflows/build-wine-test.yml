@@ -16,6 +16,11 @@ jobs:
       run: |
         sudo apt update
         sudo apt --fix-broken install -y
+        
+        # 添加 32 位架构支持
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        
         sudo apt install -y \
           git wget xz-utils autoconf flex bison \
           gcc-multilib g++-multilib \
@@ -33,6 +38,22 @@ jobs:
           locales language-pack-zh-hans \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
           libmpg123-dev libopenal-dev ccache
+        
+        # 安装 32 位开发库
+        sudo apt install -y \
+          libx11-dev:i386 libxext-dev:i386 libxi-dev:i386 \
+          libxrandr-dev:i386 libxcursor-dev:i386 \
+          libxcomposite-dev:i386 libxdamage-dev:i386 \
+          libxfixes-dev:i386 libxxf86vm-dev:i386 \
+          libxrender-dev:i386 libxinerama-dev:i386 \
+          libfreetype6-dev:i386 libfontconfig1-dev:i386 \
+          libpcap-dev:i386 libdbus-1-dev:i386 \
+          libasound2-dev:i386 libpulse-dev:i386 \
+          libcups2-dev:i386 libjpeg-dev:i386 \
+          libpng-dev:i386 libtiff-dev:i386 \
+          libxml2-dev:i386 libvulkan-dev:i386 \
+          libgstreamer1.0-dev:i386 libgstreamer-plugins-base1.0-dev:i386 \
+          libmpg123-dev:i386 libopenal-dev:i386
 
     - name: 设置中文语言环境
       run: |
@@ -227,8 +248,10 @@ jobs:
         mkdir -p build32-tools
         cd build32-tools
         
-        # 配置 32 位工具
-        PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig \
+        # 配置 32 位工具，设置正确的 pkg-config 路径
+        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        
         ../configure \
           --prefix=/tmp/wine-tools \
           --without-ldap --without-oss \
@@ -244,7 +267,9 @@ jobs:
         cd build32
         
         # 配置 32 位 Wine，链接到 64 位构建
-        PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig \
+        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        
         ../configure \
           --with-wine64=../build-wow64 \
           --with-wine-tools=../build32-tools \
