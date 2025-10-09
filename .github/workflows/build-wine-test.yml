@@ -41,15 +41,11 @@ jobs:
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
 
-    - name: 克隆 Wine Staging 源码
+    - name: 克隆 Wine 源码
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        # 克隆 wine-staging
-        git clone https://github.com/wine-staging/wine-staging
-        cd wine-staging
-        ./patches/gitappy.sh DESTDIR=../wine --all
-        cd ..
+        #git checkout wine-9.2
 
     - name: 应用关键补丁
       run: |
@@ -401,7 +397,7 @@ jobs:
             export PATH="$PATH:$TERMUX_PREFIX/opt/wine/bin"
             export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TERMUX_PREFIX/opt/wine/lib:$TERMUX_PREFIX/opt/wine/lib64"
             export WINEDLLPATH="$TERMUX_PREFIX/opt/wine/lib/wine:$TERMUX_PREFIX/opt/wine/lib64/wine"
-            export TMPDIR="$TERMUX_PREFIX/tmp"
+        export TMPDIR="$TERMUX_PREFIX/tmp"
             export LANG="zh_CN.UTF-8"
             export FONTCONFIG_PATH="$TERMUX_PREFIX/opt/wine/etc/fonts"
             EOL
@@ -449,7 +445,6 @@ jobs:
         echo "版本: ${{ env.WINE_VERSION }}"
         echo "架构: x86_64 WOW64 (支持 32/64 位应用)"
         echo "特性:"
-        echo "✓ Wine Staging 补丁"
         echo "✓ wine_do_not_create_dxgi_manager2 补丁"
         echo "✓ esync 补丁"
         echo "✓ Proton OpenCL 补丁" 
