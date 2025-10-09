@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.21
+        #git checkout wine-9.2
 
     - name: 创建并应用补丁
       run: |
@@ -265,12 +265,12 @@ jobs:
           --prefix=/tmp/wine-install \
           --with-x \
           --with-vulkan \
-          --with-alsa \
-          --with-pulse \
-          --with-freetype \
+          --without-alsa \
+          --without-pulse \
+          --without-freetype \
           --with-fontconfig \
           --with-gstreamer \
-          --with-gettext \
+          --without-gettext \
           --enable-nls \
           --without-dbus \
           --without-sane \
@@ -280,20 +280,8 @@ jobs:
           --disable-win16 \
           --disable-debug \
           --disable-tests \
-          --without-piper \
-          --without-xinerama \
           --without-cups \
-          --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
-          --without-wayland
-
+          --without-capi
         # 构建真正的 WOW64 Wine
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
         make -j$(nproc)
