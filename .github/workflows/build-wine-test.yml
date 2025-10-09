@@ -21,13 +21,14 @@ jobs:
         sudo dpkg --add-architecture i386
         sudo apt update
         
-        # 先安装基础构建工具
+        # 先安装基础构建工具和缺失的依赖
         sudo apt install -y \
           git wget xz-utils autoconf flex bison \
           gcc-multilib g++-multilib \
           build-essential pkg-config \
           mingw-w64 gettext libgettextpo-dev \
-          locales language-pack-zh-hans ccache
+          locales language-pack-zh-hans ccache \
+          libunwind-dev libunwind-dev:i386  # 添加缺失的依赖
 
         # 安装完整的 64 位开发库
         sudo apt install -y \
@@ -61,11 +62,16 @@ jobs:
           libpng-dev:i386 libtiff-dev:i386 \
           libxml2-dev:i386 libvulkan-dev:i386 \
           libgstreamer1.0-dev:i386 libgstreamer-plugins-base1.0-dev:i386 \
-          libgstreamer-plugins-good1.0-dev:i386 libgstreamer-plugins-bad1.0-dev:i386 \
           libmpg123-dev:i386 libopenal-dev:i386
 
         # 修复任何可能的依赖问题
         sudo apt --fix-broken install -y || true
+
+        # 如果上面的安装失败，尝试逐个安装 GStreamer 相关包
+        sudo apt install -y libgstreamer1.0-dev || echo "跳过 libgstreamer1.0-dev"
+        sudo apt install -y libgstreamer-plugins-base1.0-dev || echo "跳过 libgstreamer-plugins-base1.0-dev"
+        sudo apt install -y libgstreamer1.0-dev:i386 || echo "跳过 libgstreamer1.0-dev:i386"
+        sudo apt install -y libgstreamer-plugins-base1.0-dev:i386 || echo "跳过 libgstreamer-plugins-base1.0-dev:i386"
 
     - name: 设置中文语言环境
       run: |
