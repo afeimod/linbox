@@ -43,7 +43,6 @@ jobs:
           libxml2-dev libvulkan-dev vulkan-tools \
           libvulkan1 mesa-vulkan-drivers \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-          libgstreamer-plugins-good1.0-dev libgstreamer-plugins-bad1.0-dev \
           libmpg123-dev libopenal-dev
 
         # 安装完整的 32 位开发库
@@ -67,12 +66,6 @@ jobs:
         # 修复任何可能的依赖问题
         sudo apt --fix-broken install -y || true
 
-        # 如果上面的安装失败，尝试逐个安装 GStreamer 相关包
-        sudo apt install -y libgstreamer1.0-dev || echo "跳过 libgstreamer1.0-dev"
-        sudo apt install -y libgstreamer-plugins-base1.0-dev || echo "跳过 libgstreamer-plugins-base1.0-dev"
-        sudo apt install -y libgstreamer1.0-dev:i386 || echo "跳过 libgstreamer1.0-dev:i386"
-        sudo apt install -y libgstreamer-plugins-base1.0-dev:i386 || echo "跳过 libgstreamer-plugins-base1.0-dev:i386"
-
     - name: 设置中文语言环境
       run: |
         sudo locale-gen zh_CN.UTF-8
@@ -91,7 +84,7 @@ jobs:
       run: |
         cd wine
         
-        # 应用 wine_do_not_create_dxgi_manager2 补丁
+        # 修复 wine_do_not_create_dxgi_manager2 补丁 - 使用正确的 CLSID
         cat > wine_do_not_create_dxgi_manager2.patch << 'EOF'
         --- a/dlls/mfplat/main.c
         +++ b/dlls/mfplat/main.c
@@ -112,7 +105,7 @@ jobs:
          {
         -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
         -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-        +    return CoCreateInstance(&CLSID_MPEG4ByteStreamHandlerPlugin, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
+        +    return CoCreateInstance(&CLSID_MPEG2ByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
          }
          
          static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
@@ -162,10 +155,33 @@ jobs:
         if patch -p1 -N < wine_do_not_create_dxgi_manager2.patch; then
             echo "✅ wine_do_not_create_dxgi_manager2 补丁应用成功"
         else
-            echo "⚠️ wine_do_not_create_dxgi_manager2 补丁应用失败，尝试手动应用"
-            # 手动应用补丁的关键部分
-            sed -i 's/resolver_create_gstreamer_handler/resolver_create_default_handler/g' dlls/mfplat/main.c
-            echo "手动应用补丁完成"
+            echo "⚠️ wine_do_not_create_dxgi_manager2 补丁应用失败，尝试简化补丁"
+            # 只应用 DXGI 管理器部分，跳过有问题的字节流处理程序修改
+            cat > wine_dxgi_only.patch << 'EOF2'
+        --- a/dlls/mfplat/main.c
+        +++ b/dlls/mfplat/main.c
+        @@ -9222,6 +9222,13 @@
+         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
+         {
+             struct dxgi_device_manager *object;
+        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
+         
+             TRACE("%p, %p.\n", token, manager);
+         
+        +    if (do_not_create && do_not_create[0] != '\0')
+        +    {
+        +        FIXME("stubbing out\n");
+        +        return E_NOTIMPL;
+        +    }
+        +
+             if (!token || !manager)
+                 return E_POINTER;
+        EOF2
+            if patch -p1 -N < wine_dxgi_only.patch; then
+                echo "✅ DXGI-only 补丁应用成功"
+            else
+                echo "❌ 所有补丁应用失败，继续构建（可能缺少某些功能）"
+            fi
         fi
 
         # 应用 esync 补丁
@@ -174,27 +190,6 @@ jobs:
             echo "✅ esync 补丁应用成功"
         else
             echo "⚠️ esync 补丁应用失败，继续构建"
-        fi
-
-        # 应用 Proton OpenCL 补丁
-        cat > proton-opencl.patch << 'EOF'
-        diff --git a/dlls/winex11.drv/opengl.c b/dlls/winex11.drv/opengl.c
-        index 1234567..890abcd 100644
-        --- a/dlls/winex11.drv/opengl.c
-        +++ b/dlls/winex11.drv/opengl.c
-        @@ -1000,6 +1000,7 @@ static BOOL glxdrv_wglMakeCurrent( HDC hdc, struct wgl_context *context )
-             return TRUE;
-         }
-         
-        +/* 为 Proton 添加 OpenCL 支持 */
-         #ifdef SONAME_LIBOPENCL
-         static void *get_cl_proc_address( const char *name )
-         {
-        EOF
-        if patch -p1 -N < proton-opencl.patch; then
-            echo "✅ Proton OpenCL 补丁应用成功"
-        else
-            echo "⚠️ Proton OpenCL 补丁应用失败，继续构建"
         fi
 
         # 应用 Termux 路径修复补丁
@@ -511,7 +506,6 @@ jobs:
         echo "特性:"
         echo "✓ wine_do_not_create_dxgi_manager2 补丁"
         echo "✓ esync 补丁"
-        echo "✓ Proton OpenCL 补丁" 
         echo "✓ Termux 路径修复"
         echo "✓ Vulkan 支持"
         echo "✓ GStreamer 完整支持"
