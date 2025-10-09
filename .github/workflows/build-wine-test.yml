@@ -78,7 +78,7 @@ jobs:
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
         # 使用稳定版本
-        git checkout wine-9.0  # 使用已知稳定的版本
+        git checkout wine-9.2  # 使用已知稳定的版本
 
     - name: 应用关键补丁
       run: |
@@ -177,14 +177,8 @@ jobs:
         ../configure \
           --enable-win64 \
           --prefix=/tmp/wine-install \
-          --with-x \
           --with-vulkan \
           --with-gstreamer \
-          --with-alsa \
-          --with-pulse \
-          --with-dbus \
-          --with-cups \
-          --with-freetype \
           --with-fontconfig \
           --without-ldap --without-oss \
           --disable-winemenubuilder --disable-win16 --disable-tests
@@ -204,11 +198,6 @@ jobs:
         
         ../configure \
           --prefix=/tmp/wine-tools \
-          --with-x \
-          --with-alsa \
-          --with-pulse \
-          --with-dbus \
-          --with-cups \
           --with-freetype \
           --with-fontconfig \
           --without-ldap --without-oss \
@@ -231,11 +220,6 @@ jobs:
           --with-wine64=../build64 \
           --with-wine-tools=../build32-tools \
           --prefix=/tmp/wine-install \
-          --with-x \
-          --with-alsa \
-          --with-pulse \
-          --with-dbus \
-          --with-cups \
           --with-freetype \
           --with-fontconfig \
           --without-ldap --without-oss \
