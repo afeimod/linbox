@@ -183,16 +183,35 @@ jobs:
       run: |
         cd wine
         # 生成必要的文件
-        dlls/winevulkan/make_vulkan
-        tools/make_requests
-        tools/make_specfiles
-        autoreconf -f
-
-        # 创建构建目录
-        mkdir -p "${HOME}/build_wine"
-        export BUILD_DIR="${HOME}/build_wine"
-        rm -rf "${BUILD_DIR}"
-        mkdir -p "${BUILD_DIR}"
+        if [ -f "dlls/winevulkan/make_vulkan" ]; then
+            dlls/winevulkan/make_vulkan
+        fi
+        if [ -f "tools/make_requests" ]; then
+            tools/make_requests
+        fi
+        if [ -f "tools/make_specfiles" ]; then
+            tools/make_specfiles
+        fi
+        
+        # 运行 autoconf 生成 configure 脚本
+        if [ -f "autogen.sh" ]; then
+            ./autogen.sh
+        else
+            autoreconf -f
+        fi
+        
+        # 检查 configure 脚本是否生成
+        if [ ! -f "configure" ]; then
+            echo "❌ configure 脚本未生成，尝试备用方法"
+            aclocal
+            autoconf
+            automake --add-missing
+        fi
+        
+        # 创建构建目录（使用绝对路径避免相对路径问题）
+        export WINE_SRC="$PWD"
+        export BUILD_DIR="$HOME/build_wine"
+        mkdir -p "$BUILD_DIR"
 
     - name: 配置编译器环境变量
       run: |
@@ -201,18 +220,29 @@ jobs:
         echo "CFLAGS_X32=-march=i686 -msse2 -mfpmath=sse -O2 -ftree-vectorize" >> $GITHUB_ENV
         echo "CFLAGS_X64=-march=x86-64 -msse3 -mfpmath=sse -O2 -ftree-vectorize" >> $GITHUB_ENV
         echo "LDFLAGS=-Wl,-O1,--sort-common,--as-needed" >> $GITHUB_ENV
+        echo "WINE_SRC=$HOME/wine" >> $GITHUB_ENV
+        echo "BUILD_DIR=$HOME/build_wine" >> $GITHUB_ENV
 
     - name: 构建 64 位 Wine
       run: |
-        cd wine
-        export BUILD_DIR="${HOME}/build_wine"
-        mkdir -p "${BUILD_DIR}"/build64
-        cd "${BUILD_DIR}"/build64
+        export BUILD_DIR="$HOME/build_wine"
+        export WINE_SRC="$HOME/wine"
         
-        # 配置 64 位 Wine
-        ../../wine/configure \
+        mkdir -p "$BUILD_DIR/build64"
+        cd "$BUILD_DIR/build64"
+        
+        # 检查 configure 脚本是否存在
+        if [ ! -f "$WINE_SRC/configure" ]; then
+            echo "❌ configure 脚本不存在，尝试重新生成"
+            cd "$WINE_SRC"
+            autoreconf -f
+            cd "$BUILD_DIR/build64"
+        fi
+        
+        # 配置 64 位 Wine（使用绝对路径）
+        "$WINE_SRC/configure" \
           --enable-win64 \
-          --prefix="${BUILD_DIR}"/wine-wow64-amd64 \
+          --prefix="$BUILD_DIR/wine-wow64-amd64" \
           --without-ldap --without-oss \
           --disable-winemenubuilder --disable-win16 --disable-tests \
           --with-vulkan --with-gstreamer
@@ -222,15 +252,22 @@ jobs:
 
     - name: 构建 32 位工具
       run: |
-        cd wine
-        export BUILD_DIR="${HOME}/build_wine"
-        mkdir -p "${BUILD_DIR}"/build32-tools
-        cd "${BUILD_DIR}"/build32-tools
+        export BUILD_DIR="$HOME/build_wine"
+        export WINE_SRC="$HOME/wine"
+        
+        mkdir -p "$BUILD_DIR/build32-tools"
+        cd "$BUILD_DIR/build32-tools"
+        
+        # 检查 configure 脚本是否存在
+        if [ ! -f "$WINE_SRC/configure" ]; then
+            echo "❌ configure 脚本不存在"
+            exit 1
+        fi
         
         # 配置 32 位工具
         PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig \
-        ../../wine/configure \
-          --prefix="${BUILD_DIR}"/wine-wow64-x86 \
+        "$WINE_SRC/configure" \
+          --prefix="$BUILD_DIR/wine-wow64-x86" \
           --without-ldap --without-oss \
           --disable-winemenubuilder --disable-win16 --disable-tests
         
@@ -239,17 +276,24 @@ jobs:
 
     - name: 构建 32 位 Wine (WOW64)
       run: |
-        cd wine
-        export BUILD_DIR="${HOME}/build_wine"
-        mkdir -p "${BUILD_DIR}"/build32
-        cd "${BUILD_DIR}"/build32
+        export BUILD_DIR="$HOME/build_wine"
+        export WINE_SRC="$HOME/wine"
+        
+        mkdir -p "$BUILD_DIR/build32"
+        cd "$BUILD_DIR/build32"
+        
+        # 检查 configure 脚本是否存在
+        if [ ! -f "$WINE_SRC/configure" ]; then
+            echo "❌ configure 脚本不存在"
+            exit 1
+        fi
         
         # 配置 32 位 Wine，链接到 64 位构建
         PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig \
-        ../../wine/configure \
-          --with-wine64="${BUILD_DIR}"/build64 \
-          --with-wine-tools="${BUILD_DIR}"/build32-tools \
-          --prefix="${BUILD_DIR}"/wine-wow64-amd64 \
+        "$WINE_SRC/configure" \
+          --with-wine64="$BUILD_DIR/build64" \
+          --with-wine-tools="$BUILD_DIR/build32-tools" \
+          --prefix="$BUILD_DIR/wine-wow64-amd64" \
           --without-ldap --without-oss \
           --disable-winemenubuilder --disable-win16 --disable-tests
         
@@ -258,13 +302,13 @@ jobs:
 
     - name: 准备 Termux 包
       run: |
-        export BUILD_DIR="${HOME}/build_wine"
+        export BUILD_DIR="$HOME/build_wine"
         mkdir -p wine-package/opt/wine
         mkdir -p wine-package/bin
         mkdir -p wine-package/share/fonts
         
         # 复制 Wine 安装文件
-        cp -r "${BUILD_DIR}"/wine-wow64-amd64/* wine-package/opt/wine/
+        cp -r "$BUILD_DIR"/wine-wow64-amd64/* wine-package/opt/wine/
         
         # 下载中文字体
         cd wine-package/share/fonts
