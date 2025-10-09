@@ -263,14 +263,12 @@ jobs:
           --enable-win64 \
           --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install \
-          --with-x \
           --with-vulkan \
           --with-fontconfig \
           --with-gstreamer \
           --without-ldap \
           --without-oss \
           --disable-winemenubuilder \
-          --disable-win16 \
           --disable-debug \
           --disable-tests
 
