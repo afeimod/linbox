@@ -1,5 +1,5 @@
 # build-wine-test.yml
-name: Build Wine WOW64 for Termux
+name: Build TestWine WOW64 for Termux
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -48,7 +48,7 @@ jobs:
         # 克隆 wine-staging
         git clone https://github.com/wine-staging/wine-staging
         cd wine-staging
-        ./patches/patchinstall.sh DESTDIR=../wine --all
+        ./patches/gitappy.sh DESTDIR=../wine --all
         cd ..
 
     - name: 应用关键补丁
