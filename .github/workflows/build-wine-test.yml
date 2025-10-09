@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        #git checkout wine-9.2
+        #git checkout wine-9.21
 
     - name: 创建并应用补丁
       run: |
@@ -260,28 +260,19 @@ jobs:
 
         # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
         ../configure \
-          --enable-win64 \
-          --enable-archs=i386,x86_64 \
+          --with-wine64 \
           --prefix=/tmp/wine-install \
           --with-x \
           --with-vulkan \
-          --without-alsa \
-          --without-pulse \
-          --without-freetype \
           --with-fontconfig \
           --with-gstreamer \
-          --without-gettext \
-          --enable-nls \
-          --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
+          --without-ldap \
+          --without-oss \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-debug \
-          --disable-tests \
-          --without-cups \
-          --without-capi
+          --disable-tests
+
         # 构建真正的 WOW64 Wine
         echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
         make -j$(nproc)
@@ -736,7 +727,7 @@ jobs:
         find wine-package -name "*gst*" | sort
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-test-wow64-gstreamer-termux.tar.gz wine-package/
         
         echo "打包完成:"
         ls -lh wine-*.tar.gz
@@ -744,15 +735,15 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux
-        path: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+        name: wine-${{ env.VERSION }}-test-wow64-gstreamer-termux
+        path: wine-${{ env.VERSION }}-test-wow64-gstreamer-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
-        files: wine-${{ env.VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+        files: wine-${{ env.VERSION }}-test-wow64-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -781,7 +772,7 @@ jobs:
         echo "- 音频输出 (ALSA、PulseAudio)"
         echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-$VERSION-true-wow64-bin-gstreamer-termux.tar.gz"
+        echo "1. 下载 wine-$VERSION-test-wow64-gstreamer-termux.tar.gz"
         echo "2. 解压: tar -xzf wine-$VERSION-*.tar.gz"
         echo "3. 进入目录: cd wine-package"
         echo "4. 运行安装: ./install.sh"
