@@ -84,80 +84,8 @@ jobs:
       run: |
         cd wine
         
-        # 修复 wine_do_not_create_dxgi_manager2 补丁 - 使用正确的 CLSID
-        cat > wine_do_not_create_dxgi_manager2.patch << 'EOF'
-        --- a/dlls/mfplat/main.c
-        +++ b/dlls/mfplat/main.c
-        @@ -43,6 +43,7 @@
-         #include "strsafe.h"
-         #undef INITGUID
-         #include "evr.h"
-        +#include "wine/mfinternal.h"
-         /* mfd3d12 guids are not included in mfuuid */
-         #define INITGUID
-         #undef EXTERN_GUID
-        @@ -6298,10 +6299,9 @@
-             return S_OK;
-         }
-         
-        -static HRESULT resolver_create_gstreamer_handler(IMFByteStreamHandler **handler)
-        +static HRESULT resolver_create_default_handler(IMFByteStreamHandler **handler)
-         {
-        -    static const GUID CLSID_GStreamerByteStreamHandler = {0x317df618, 0x5e5a, 0x468a, {0x9f, 0x15, 0xd8, 0x27, 0xa9, 0xa0, 0x81, 0x62}};
-        -    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-        +    return CoCreateInstance(&CLSID_MPEG2ByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, &IID_IMFByteStreamHandler, (void **)handler);
-         }
-         
-         static HRESULT resolver_get_bytestream_handler(IMFByteStream *stream, const WCHAR *url, DWORD flags,
-        @@ -6337,12 +6337,14 @@
-            this handler for all possible types.
-          */
-         
-        +    TRACE( "url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW) );
-        +
-             if (url_ext || mimeW)
-             {
-                 hr = resolver_create_bytestream_handler(stream, flags, mimeW, url_ext, handler);
-         
-                 if (FAILED(hr))
-        -            hr = resolver_create_gstreamer_handler(handler);
-        +            hr = resolver_create_default_handler(handler);
-             }
-         
-             CoTaskMemFree(mimeW);
-        @@ -6360,7 +6362,7 @@
-             hr = resolver_create_bytestream_handler(stream, flags, NULL, url_ext, handler);
-         
-             if (FAILED(hr))
-        -        hr = resolver_create_gstreamer_handler(handler);
-        +        hr = resolver_create_default_handler(handler);
-         
-             return hr;
-         }
-        @@ -9222,9 +9224,16 @@
-         HRESULT WINAPI MFCreateDXGIDeviceManager(UINT *token, IMFDXGIDeviceManager **manager)
-         {
-             struct dxgi_device_manager *object;
-        +    const char *do_not_create = getenv("WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER");
-         
-             TRACE("%p, %p.\n", token, manager);
-         
-        +    if (do_not_create && do_not_create[0] != '\0')
-        +    {
-        +        FIXME("stubbing out\n");
-        +        return E_NOTIMPL;
-        +    }
-        +
-             if (!token || !manager)
-                 return E_POINTER;
-        EOF
-        
-        if patch -p1 -N < wine_do_not_create_dxgi_manager2.patch; then
-            echo "✅ wine_do_not_create_dxgi_manager2 补丁应用成功"
-        else
-            echo "⚠️ wine_do_not_create_dxgi_manager2 补丁应用失败，尝试简化补丁"
-            # 只应用 DXGI 管理器部分，跳过有问题的字节流处理程序修改
-            cat > wine_dxgi_only.patch << 'EOF2'
+        # 只应用 DXGI 管理器补丁，移除有问题的字节流处理程序修改
+        cat > wine_dxgi_only.patch << 'EOF'
         --- a/dlls/mfplat/main.c
         +++ b/dlls/mfplat/main.c
         @@ -9222,6 +9222,13 @@
@@ -176,12 +104,12 @@ jobs:
         +
              if (!token || !manager)
                  return E_POINTER;
-        EOF2
-            if patch -p1 -N < wine_dxgi_only.patch; then
-                echo "✅ DXGI-only 补丁应用成功"
-            else
-                echo "❌ 所有补丁应用失败，继续构建（可能缺少某些功能）"
-            fi
+        EOF
+        
+        if patch -p1 -N < wine_dxgi_only.patch; then
+            echo "✅ DXGI-only 补丁应用成功"
+        else
+            echo "⚠️ DXGI-only 补丁应用失败，继续构建"
         fi
 
         # 应用 esync 补丁
@@ -504,7 +432,7 @@ jobs:
         echo "版本: ${{ env.WINE_VERSION }}"
         echo "架构: x86_64 WOW64 (支持 32/64 位应用)"
         echo "特性:"
-        echo "✓ wine_do_not_create_dxgi_manager2 补丁"
+        echo "✓ DXGI 管理器补丁 (通过环境变量控制)"
         echo "✓ esync 补丁"
         echo "✓ Termux 路径修复"
         echo "✓ Vulkan 支持"
@@ -522,3 +450,6 @@ jobs:
         echo "4. 运行安装: ./install.sh"
         echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
+        echo ""
+        echo "注意: 如需禁用 DXGI 设备管理器，请设置环境变量:"
+        echo "export WINE_DO_NOT_CREATE_DXGI_DEVICE_MANAGER=1"
