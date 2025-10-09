@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04  # 使用更稳定的 Ubuntu 22.04
 
     steps:
     - name: 安装构建依赖
@@ -29,7 +29,7 @@ jobs:
           mingw-w64 gettext libgettextpo-dev \
           locales language-pack-zh-hans ccache
 
-        # 安装 64 位开发库
+        # 安装完整的 64 位开发库
         sudo apt install -y \
           libx11-dev libxext-dev libxi-dev libxrandr-dev \
           libxcursor-dev libxcomposite-dev libxdamage-dev \
@@ -42,31 +42,30 @@ jobs:
           libxml2-dev libvulkan-dev vulkan-tools \
           libvulkan1 mesa-vulkan-drivers \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          libgstreamer-plugins-good1.0-dev libgstreamer-plugins-bad1.0-dev \
           libmpg123-dev libopenal-dev
 
-        # 安装 32 位开发库 - 分开安装以避免依赖冲突
-        sudo apt install -y libx11-dev:i386 libxext-dev:i386
-        sudo apt install -y libxi-dev:i386 libxrandr-dev:i386
-        sudo apt install -y libxcursor-dev:i386 libxcomposite-dev:i386
-        sudo apt install -y libxdamage-dev:i386 libxfixes-dev:i386
-        sudo apt install -y libxxf86vm-dev:i386 libxrender-dev:i386
-        sudo apt install -y libxinerama-dev:i386
-        sudo apt install -y libfreetype6-dev:i386 libfontconfig1-dev:i386
-        sudo apt install -y libjpeg-dev:i386 libpng-dev:i386
-        sudo apt install -y libtiff-dev:i386 libxml2-dev:i386
-        sudo apt install -y libasound2-dev:i386 libpulse-dev:i386
-        sudo apt install -y libcups2-dev:i386
-        sudo apt install -y libgstreamer1.0-dev:i386 libgstreamer-plugins-base1.0-dev:i386
-        sudo apt install -y libmpg123-dev:i386 libopenal-dev:i386
-
-        # 尝试安装有问题的包（如果失败则跳过）
-        sudo apt install -y libpcap-dev:i386 || echo "跳过 libpcap-dev:i386"
-        sudo apt install -y libdbus-1-dev:i386 || echo "跳过 libdbus-1-dev:i386"
-        sudo apt install -y libudev-dev:i386 || echo "跳过 libudev-dev:i386"
-        sudo apt install -y libvulkan-dev:i386 || echo "跳过 libvulkan-dev:i386"
+        # 安装完整的 32 位开发库
+        sudo apt install -y \
+          libc6-dev-i386 \
+          libx11-dev:i386 libxext-dev:i386 libxi-dev:i386 \
+          libxrandr-dev:i386 libxcursor-dev:i386 \
+          libxcomposite-dev:i386 libxdamage-dev:i386 \
+          libxfixes-dev:i386 libxxf86vm-dev:i386 \
+          libxrender-dev:i386 libxinerama-dev:i386 \
+          libgl-dev:i386 libglu-dev:i386 \
+          libfreetype6-dev:i386 libfontconfig1-dev:i386 \
+          libpcap-dev:i386 libdbus-1-dev:i386 \
+          libasound2-dev:i386 libpulse-dev:i386 \
+          libcups2-dev:i386 libjpeg-dev:i386 \
+          libpng-dev:i386 libtiff-dev:i386 \
+          libxml2-dev:i386 libvulkan-dev:i386 \
+          libgstreamer1.0-dev:i386 libgstreamer-plugins-base1.0-dev:i386 \
+          libgstreamer-plugins-good1.0-dev:i386 libgstreamer-plugins-bad1.0-dev:i386 \
+          libmpg123-dev:i386 libopenal-dev:i386
 
         # 修复任何可能的依赖问题
-        sudo apt --fix-broken install -y
+        sudo apt --fix-broken install -y || true
 
     - name: 设置中文语言环境
       run: |
@@ -79,7 +78,8 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        #git checkout wine-9.2
+        # 使用稳定版本
+        git checkout wine-9.0  # 使用已知稳定的版本
 
     - name: 应用关键补丁
       run: |
@@ -234,83 +234,83 @@ jobs:
             autoreconf -f
         fi
 
-    - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
+    - name: 配置和构建 64 位 Wine（完整功能）
       run: |
         cd wine
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
 
         # 创建构建目录
-        mkdir -p build-wow64
-        cd build-wow64
+        mkdir -p build64
+        cd build64
 
-        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
+        # 配置 64 位 Wine，启用所有功能
         ../configure \
           --enable-win64 \
           --prefix=/tmp/wine-install \
+          --with-x \
+          --with-vulkan \
+          --with-gstreamer \
+          --with-alsa \
+          --with-pulse \
+          --with-dbus \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
           --without-ldap --without-oss \
-          --disable-winemenubuilder --disable-win16 --disable-tests \
-          --with-vulkan --with-gstreamer
+          --disable-winemenubuilder --disable-win16 --disable-tests
         
         # 构建并安装
         make -j$(nproc) install
 
-    - name: 构建 32 位工具（跳过 X 支持如果必要）
+    - name: 构建 32 位工具（完整功能）
       run: |
         cd wine
         mkdir -p build32-tools
         cd build32-tools
         
-        # 配置 32 位工具，设置正确的 pkg-config 路径
-        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
-        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        # 配置 32 位工具，启用所有功能
+        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
+        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
         
-        # 尝试配置，如果失败则跳过 X 支持
-        if ../configure \
+        ../configure \
           --prefix=/tmp/wine-tools \
+          --with-x \
+          --with-alsa \
+          --with-pulse \
+          --with-dbus \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
           --without-ldap --without-oss \
-          --disable-winemenubuilder --disable-win16 --disable-tests; then
-            echo "✅ 32 位工具配置成功"
-        else
-            echo "⚠️ 32 位工具配置失败，尝试禁用 X 支持"
-            ../configure \
-              --prefix=/tmp/wine-tools \
-              --without-x \
-              --without-ldap --without-oss \
-              --disable-winemenubuilder --disable-win16 --disable-tests
-        fi
+          --disable-winemenubuilder --disable-win16 --disable-tests
         
         # 构建并安装
         make -j$(nproc) install
 
-    - name: 构建 32 位 Wine (WOW64)
+    - name: 构建 32 位 Wine (WOW64，完整功能)
       run: |
         cd wine
         mkdir -p build32
         cd build32
         
-        # 配置 32 位 Wine，链接到 64 位构建
-        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
-        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/pkgconfig
+        # 配置 32 位 Wine，链接到 64 位构建，启用所有功能
+        export PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
+        export PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
         
-        # 尝试配置，如果失败则跳过 X 支持
-        if ../configure \
-          --with-wine64=../build-wow64 \
+        ../configure \
+          --with-wine64=../build64 \
           --with-wine-tools=../build32-tools \
           --prefix=/tmp/wine-install \
+          --with-x \
+          --with-alsa \
+          --with-pulse \
+          --with-dbus \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
           --without-ldap --without-oss \
-          --disable-winemenubuilder --disable-win16 --disable-tests; then
-            echo "✅ 32 位 WOW64 配置成功"
-        else
-            echo "⚠️ 32 位 WOW64 配置失败，尝试禁用 X 支持"
-            ../configure \
-              --with-wine64=../build-wow64 \
-              --with-wine-tools=../build32-tools \
-              --prefix=/tmp/wine-install \
-              --without-x \
-              --without-ldap --without-oss \
-              --disable-winemenubuilder --disable-win16 --disable-tests
-        fi
+          --disable-winemenubuilder --disable-win16 --disable-tests
         
         # 构建并安装到 64 位目录（创建 WOW64）
         make -j$(nproc) install
@@ -508,7 +508,11 @@ jobs:
         echo "✓ Proton OpenCL 补丁" 
         echo "✓ Termux 路径修复"
         echo "✓ Vulkan 支持"
-        echo "✓ GStreamer 支持"
+        echo "✓ GStreamer 完整支持"
+        echo "✓ X11 图形支持"
+        echo "✓ ALSA/PulseAudio 音频支持"
+        echo "✓ CUPS 打印支持"
+        echo "✓ DBus 支持"
         echo "✓ 中文环境和字体"
         echo ""
         echo "使用说明:"
