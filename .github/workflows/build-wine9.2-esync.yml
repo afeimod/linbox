@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build Gst9.2Wine (Esync WOW64 for Termux with Vulkan and Full GStreamer)
+name: Build Gst9.xWine (Esync WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:  # 只保留手动触发
