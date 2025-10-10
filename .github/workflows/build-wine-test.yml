@@ -101,11 +101,15 @@ jobs:
         # 下载 staging 补丁集
         wget -O wine-staging-9.2.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.2.tar.gz
         tar -xzf wine-staging-9.2.tar.gz
-        
-        # 应用 staging 补丁
+    
+        # 应用 staging 补丁 - 使用 patchinstall.py 而不是 gitapply.sh
         cd wine-staging-9.2
-        ./patches/gitapply.sh DESTDIR=../ --all
-        
+        # 确保脚本有执行权限
+        chmod +x patchinstall.py
+    
+        # 正确应用补丁的命令
+        python3 patchinstall.py --all --backend=apply ../patches/
+    
         echo "✅ Staging 补丁应用完成"
 
     - name: 验证 staging 补丁应用
