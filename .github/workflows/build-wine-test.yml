@@ -105,10 +105,10 @@ jobs:
         # 应用 staging 补丁 - 使用 patchinstall.py 而不是 gitapply.sh
         cd wine-staging-9.2
         # 确保脚本有执行权限
-        chmod +x patchinstall.py
+        chmod +x ./staging/patchinstall.py
     
         # 正确应用补丁的命令
-        python3 patchinstall.py --all --backend=apply ../patches/
+        python3 ./staging/patchinstall.py --all --backend=apply ../patches/
     
         echo "✅ Staging 补丁应用完成"
 
