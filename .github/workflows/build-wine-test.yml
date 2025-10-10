@@ -112,16 +112,31 @@ jobs:
         echo "✅ Staging 补丁应用完成"
 
     - name: 验证 staging 补丁应用
+      id: check_esync
       run: |
         cd wine
         echo "检查 staging 补丁应用情况..."
         if [ -f "dlls/ntdll/unix/esync.c" ]; then
             echo "✅ esync 支持已通过 staging 补丁添加"
+            echo "ESYNC_FOUND=true" >> $GITHUB_ENV
         else
             echo "❌ esync 支持未找到"
+            echo "ESYNC_FOUND=false" >> $GITHUB_ENV
         fi
 
-    - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
+    - name: 下载并应用 esync 补丁
+      if: env.ESYNC_FOUND == 'false'
+      run: |
+        cd wine
+        echo "正在下载并应用 esync 补丁..."
+        wget -O esync.patch https://github.com/afeimod/linbox/raw/main/path/esync.patch
+        if patch -p1 -N < esync.patch; then
+            echo "✅ esync 补丁应用成功"
+        else
+            echo "⚠️ esync 补丁应用失败，继续构建"
+        fi
+
+    - name: 下载并运行修复后的 Wine mfplat 修复脚本
       run: |
         cd wine
         # 下载修复脚本
