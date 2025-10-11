@@ -93,7 +93,7 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-10.16
+        #git checkout wine-10.16
 
     - name: 下载并应用 staging 补丁
       run: |
