@@ -127,15 +127,56 @@ jobs:
       if: env.ESYNC_FOUND == 'false'
       run: |
         cd wine
+    
+        # 定义修复函数
+        apply_esync_fix() {
+            echo "使用备用方案手动修复 esync..."
+        
+            # 修复 dlls/ntdll/unix/esync.c
+            if [ -f "dlls/ntdll/unix/esync.c" ]; then
+                echo "修复 dlls/ntdll/unix/esync.c..."
+                sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' dlls/ntdll/unix/esync.c
+            
+                # 修复 esync.c 中的其他部分
+                sed -i 's|sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );|if (getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX"))) {\n        sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );\n    } else {\n        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );\n    }|' dlls/ntdll/unix/esync.c
+            
+                sed -i 's|if ((shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1)|if ((getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX")) \&\& (shm_fd = open( shm_name, O_RDWR, 0644 )) == -1) || (!getenv("WINEESYNC_TERMUX") \&\& (shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1))|' dlls/ntdll/unix/esync.c
+            fi
+        
+            # 修复 server/esync.c
+            if [ -f "server/esync.c" ]; then
+                echo "修复 server/esync.c..."
+                sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' server/esync.c
+            
+                # 添加 termux_esync 变量初始化
+                sed -i 's|static off_t shm_size;|static off_t shm_size;\nstatic int termux_esync;|' server/esync.c
+            
+                # 修复 shm_cleanup 函数
+                sed -i 's|if (shm_unlink( shm_name ) == -1)|if ((termux_esync \&\& unlink( shm_name ) == -1) || (!termux_esync \&\& shm_unlink( shm_name ) == -1))|' server/esync.c
+            
+                # 修复 shm_name 生成逻辑
+                sed -i '/sprintf( shm_name, "\/wine-%lx-esync", (unsigned long)st.st_ino );/c\\    termux_esync = getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX"));\n    if (termux_esync) {\n        sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );\n        unlink( shm_name );\n        shm_fd = open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );\n    } else {\n        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );\n        shm_unlink( shm_name );\n        shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );\n    }' server/esync.c
+            fi
+        
+            echo "✅ 手动修复完成"
+        }
+    
         echo "正在下载并应用 esync 补丁..."
         wget -O esync.patch https://github.com/afeimod/linbox/raw/main/path/esync.patch
-        if patch -p1 -N < esync.patch; then
+    
+        # 尝试应用补丁
+        echo "尝试应用补丁..."
+        if patch -p1 -N --ignore-whitespace < esync.patch 2>&1 | tee patch.log; then
             echo "✅ esync 补丁应用成功"
         else
-            echo "⚠️ esync 补丁应用失败，继续构建"
-            # 如果补丁失败，使用sed直接修改文件
-            sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' dlls/ntdll/unix/esync.c 2>/dev/null || true
-            sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' server/esync.c 2>/dev/null || true
+            echo "尝试使用 -p0 选项..."
+            if patch -p0 -N --ignore-whitespace < esync.patch 2>&1 | tee patch.log; then
+                echo "✅ esync 补丁应用成功 (使用 -p0)"
+            else
+                echo "⚠️ esync 补丁应用失败，使用备用方案"
+                cat patch.log
+                apply_esync_fix
+            fi
         fi
 
     - name: 下载并运行修复后的 Wine mfplat 修复脚本
