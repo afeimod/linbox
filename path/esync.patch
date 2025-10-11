@@ -1,6 +1,5 @@
-diff -uraN wine/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
---- wine/dlls/ntdll/unix/esync.c
-+++ b/dlls/ntdll/unix/esync.c
+--- dlls/ntdll/unix/esync.c
++++ dlls/ntdll/unix/esync.c
 @@ -97,7 +97,8 @@
  };
  C_ASSERT(sizeof(struct event) == 8);
@@ -42,9 +41,8 @@ diff -uraN wine/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
      {
          /* probably the server isn't running with WINEESYNC, tell the user and bail */
          if (errno == ENOENT)
-diff -uraN wine/server/esync.c b/server/esync.c
---- wine/server/esync.c
-+++ b/server/esync.c
+--- server/esync.c
++++ server/esync.c
 @@ -59,17 +59,18 @@
  #endif
  }
@@ -101,9 +99,8 @@ diff -uraN wine/server/esync.c b/server/esync.c
      if (shm_fd == -1)
          perror( "shm_open" );
  
-diff -uraN wine/server/unicode.c b/server/unicode.c
---- wine/server/unicode.c
-+++ b/server/unicode.c
+--- server/unicode.c
++++ server/unicode.c
 @@ -313,7 +313,7 @@
  /* load the case mapping table */
  struct fd *load_intl_file(void)
