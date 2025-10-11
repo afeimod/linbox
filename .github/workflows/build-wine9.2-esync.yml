@@ -93,17 +93,17 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.2
+        git checkout wine-9.9
 
     - name: 下载并应用 staging 补丁
       run: |
         cd wine
         # 下载 staging 补丁集
-        wget -O wine-staging-9.2.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.2.tar.gz
-        tar -xzf wine-staging-9.2.tar.gz
+        wget -O wine-staging-9.9.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.9.tar.gz
+        tar -xzf wine-staging-9.9.tar.gz
     
         # 应用 staging 补丁 - 使用正确的路径
-        cd wine-staging-9.2/staging
+        cd wine-staging-9.9/staging
         chmod +x patchinstall.py
     
         # 应用所有补丁到 Wine 源码目录（上级的上级目录）
