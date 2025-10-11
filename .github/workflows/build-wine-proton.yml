@@ -114,7 +114,7 @@ jobs:
         cd wine
         
         # 切换到 Proton 10.0 分支
-        git checkout proton_10.0
+        git checkout proton_9.0-4
         
         # 修复 Termux 路径问题
         echo "修复 Termux 路径问题..."
