@@ -133,6 +133,9 @@ jobs:
             echo "✅ esync 补丁应用成功"
         else
             echo "⚠️ esync 补丁应用失败，继续构建"
+            # 如果补丁失败，使用sed直接修改文件
+            sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' dlls/ntdll/unix/esync.c 2>/dev/null || true
+            sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' server/esync.c 2>/dev/null || true
         fi
 
     - name: 下载并运行修复后的 Wine mfplat 修复脚本
