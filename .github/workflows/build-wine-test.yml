@@ -173,7 +173,7 @@ jobs:
     - name: 应用 GStreamer 修复补丁
       run: |
         cd wine
-        wget -O gstreamer-fix.patch https://raw.githubusercontent.com/your-repo/gstreamer-fix.patch
+        wget -O gstreamer-fix.patch httpshttps://github.com/afeimod/linbox/raw/main/path/gstreamer-fix.patch
         if patch -p1 < gstreamer-fix.patch; then
             echo "✅ gst修复补丁应用成功"
         else
