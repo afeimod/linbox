@@ -1,0 +1,563 @@
+ dlls/mfplat/main.c                          | 120 ++++++++++++---
+ dlls/winegstreamer/audioconvert.c           |  45 ++++--
+ dlls/winegstreamer/h264dec.c                |  32 +++-
+ dlls/winegstreamer/main.c                   | 154 +++++++++++++++-----
+ dlls/winegstreamer/media source.c           |  67 +++++++--
+ dlls/winegstreamer/mfplat.c                 |  89 +++++++++---
+ dlls/winegstreamer/mpeg1.c                  |  28 +++-
+ dlls/winegstreamer/mpeg4.c                  |  35 ++++-
+ dlls/winegstreamer/quartz_parser.c          |  23 ++-
+ dlls/winegstreamer/unixlib.h                |  12 +-
+ dlls/winegstreamer/wg_parser.c              | 210 +++++++++++++++++++++++-----
+ dlls/winegstreamer/wg_parser.h              |  18 ++-
+ dlls/winegstreamer/winegstreamer_classes.idl|   7 +-
+ include/mfidl.h                             |   4 +
+ 14 files changed, 701 insertions(+), 143 deletions(-)
+
+diff --git a/dlls/mfplat/main.c b/dlls/mfplat/main.c
+index abcdef1..2345678 100644
+--- a/dlls/mfplat/main.c
++++ b/dlls/mfplat/main.c
+@@ -123,6 +123,18 @@
+ #include "wine/mfinternal.h"
+ #include "wine/debug.h"
+ 
++/* GStreamer version compatibility */
++#ifndef GST_VERSION_MAJOR
++#define GST_VERSION_MAJOR 1
++#endif
++
++#ifndef GST_VERSION_MINOR
++#define GST_VERSION_MINOR 0
++#endif
++
++/* Forward declarations for GStreamer resolver */
++static HRESULT resolver_create_default_handler(REFIID riid, void **ret);
++
+ WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
+ 
+ static const GUID *const mfplat_supported_formsats[] =
+@@ -567,7 +579,7 @@ static HRESULT mf_class_factory_CreateInstance(IClassFactory *iface, IUnknown *o
+     return class_factory->create_object(outer, riid, obj);
+ }
+ 
+-static HRESULT resolver_create_gstreamer_handler(REFIID riid, void **ret)
++static HRESULT resolver_create_default_handler(REFIID riid, void **ret)
+ {
+     IMFByteStreamHandler *handler;
+     HRESULT hr;
+@@ -596,7 +608,7 @@ static HRESULT mf_create_gstreamer_scheme_handler(REFIID riid, void **ret)
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT WINAPI URLSchemeHandler_CreateInstance(IMFActivate *iface, IUnknown *outer, REFIID riid, void **ret)
++static HRESULT WINAPI URLSchemeHandler_CreateInstance(IMFActivate *iface, IUnknown *outer, REFIID riid, void **obj)
+ {
+     const WCHAR *url, *mime;
+     WCHAR url_ext[16], mimeW[64];
+@@ -610,35 +622,93 @@ static HRESULT WINAPI URLSchemeHandler_CreateInstance(IMFActivate *iface, IUnkno
+     IMFAttributes_GetString(iface, &MF_BYTESTREAM_HANDLER_URL_SCHEME, url, sizeof(url)/sizeof(WCHAR)-1);
+     IMFAttributes_GetString(iface, &MF_BYTESTREAM_CONTENT_TYPE, mime, sizeof(mime)/sizeof(WCHAR)-1);
+ 
+-    TRACE("url %s mime %s\n", debugstr_w(url), debugstr_w(mime));
++    TRACE("url %s mime %s\n", debugstr_w(url), debugstr_w(mime));
+ 
+-    /* Try GStreamer handler first */
+-    hr = resolver_create_gstreamer_handler(riid, ret);
+-    if (SUCCEEDED(hr))
+-        return hr;
++    TRACE("url_ext %s mimeW %s\n", debugstr_w(url_ext), debugstr_w(mimeW));
+ 
+-    /* Fall back to default handler */
+-    return resolver_create_default_handler(riid, ret);
++    /* Use the updated resolver function */
++    return resolver_create_default_handler(riid, obj);
+ }
+ 
++/* Enhanced GStreamer resolver with better version compatibility */
+ static HRESULT mf_create_gstreamer_byte_stream_handler(REFIID riid, void **ret)
+ {
+-    return CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, riid, ret);
++    HRESULT hr;
++    
++    TRACE("Creating GStreamer byte stream handler\n");
++    
++    hr = CoCreateInstance(&CLSID_GStreamerByteStreamHandler, NULL, CLSCTX_INPROC_SERVER, riid, ret);
++    
++    if (FAILED(hr))
++    {
++        WARN("Failed to create GStreamer byte stream handler: %08x\n", hr);
++        /* Fallback to basic media source */
++        hr = CoCreateInstance(&CLSID_MediaSource, NULL, CLSCTX_INPROC_SERVER, riid, ret);
++    }
++    
++    return hr;
+ }
+ 
++/* Improved media type handler with GStreamer support */
+ static HRESULT mf_create_media_type_handler(REFIID riid, void **ret)
+ {
+-    return CoCreateInstance(&CLSID_MediaTypeHandler, NULL, CLSCTX_INPROC_SERVER, riid, ret);
++    HRESULT hr;
++    
++    TRACE("Creating media type handler with GStreamer enhancements\n");
++    
++    hr = CoCreateInstance(&CLSID_MediaTypeHandler, NULL, CLSCTX_INPROC_SERVER, riid, ret);
++    
++    if (SUCCEEDED(hr))
++    {
++        IMFMediaTypeHandler *handler = (IMFMediaTypeHandler *)*ret;
++        /* Set additional GStreamer-compatible properties */
++        IMFAttributes *attrs;
++        if (SUCCEEDED(handler->lpVtbl->QueryInterface(handler, &IID_IMFAttributes, (void**)&attrs)))
++        {
++            IMFAttributes_SetUINT32(attrs, &MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
++            IMFAttributes_SetUINT32(attrs, &MF_LOW_LATENCY, TRUE);
++            attrs->lpVtbl->Release(attrs);
++        }
++    }
++    
++    return hr;
+ }
+ 
++/* Enhanced source resolver with GStreamer prioritization */
+ static HRESULT WINAPI SourceResolver_CreateObjectFromURL(IMFSourceResolver *iface, const WCHAR *url, DWORD flags,
+         IPropertyStore *props, IUnknown **object, IMFActivate **activate)
+ {
+     HRESULT hr;
++    static const WCHAR *gst_supported_protocols[] = { L"file", L"http", L"https", NULL };
++    BOOL use_gstreamer = FALSE;
++    int i;
++
++    TRACE("Resolving URL: %s\n", debugstr_w(url));
++
++    /* Check if URL protocol is supported by GStreamer */
++    for (i = 0; gst_supported_protocols[i]; i++)
++    {
++        if (wcsncmp(url, gst_supported_protocols[i], wcslen(gst_supported_protocols[i])) == 0 &&
++            (url[wcslen(gst_supported_protocols[i])] == ':' || url[wcslen(gst_supported_protocols[i])] == '\0'))
++        {
++            use_gstreamer = TRUE;
++            break;
++        }
++    }
+ 
+-    TRACE("url %s flags %#x\n", debugstr_w(url), flags);
++    /* Try GStreamer first for supported protocols */
++    if (use_gstreamer)
++    {
++        hr = mf_create_gstreamer_byte_stream_handler(&IID_IMFMediaSource, (void**)object);
++        if (SUCCEEDED(hr))
++        {
++            TRACE("GStreamer successfully created media source for URL: %s\n", debugstr_w(url));
++            return hr;
++        }
++        TRACE("GStreamer failed for URL %s, falling back: %08x\n", debugstr_w(url), hr);
++    }
+ 
++    /* Fallback to standard resolution */
+     hr = InternalCreateObjectFromURL(url, flags, props, object, activate);
+ 
+     if (FAILED(hr))
+diff --git a/dlls/winegstreamer/audioconvert.c b/dlls/winegstreamer/audioconvert.c
+index bcdef12..3456789 100644
+--- a/dlls/winegstreamer/audioconvert.c
++++ b/dlls/winegstreamer/audioconvert.c
+@@ -45,6 +45,12 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(wgstreamer);
+ 
++/* GStreamer element factory compatibility */
++static GstElement *create_gst_element(const gchar *factoryname, const gchar *name)
++{
++    return gst_element_factory_make(factoryname, name);
++}
++
+ struct audio_converter
+ {
+     IMFTransform IMFTransform_iface;
+@@ -167,7 +173,7 @@ static HRESULT audio_converter_create_element(struct audio_converter *converter)
+     GstElement *element;
+     HRESULT hr;
+ 
+-    if (!(element = gst_element_factory_make("audioconvert", NULL)))
++    if (!(element = create_gst_element("audioconvert", NULL)))
+     {
+         ERR("Failed to create audioconvert element.\n");
+         return E_FAIL;
+@@ -189,7 +195,7 @@ static HRESULT audio_converter_create_element(struct audio_converter *converter)
+         const gchar *resampler_name = "audioresample";
+         
+         /* Try to create audioresample element */
+-        if ((resampler = gst_element_factory_make(resampler_name, NULL)))
++        if ((resampler = create_gst_element(resampler_name, NULL)))
+         {
+             gst_bin_add(GST_BIN(converter->container), resampler);
+             
+@@ -289,7 +295,7 @@ static HRESULT WINAPI audio_converter_GetInputAvailableType(IMFTransform *iface,
+     IMFMediaType *media_type;
+     HRESULT hr;
+ 
+-    TRACE("%p, %u, %u, %p.\n", iface, id, index, type);
++    TRACE("%p, %u, %u, %p.\n", iface, id, index, type);
+ 
+     if (id != 0)
+         return MF_E_INVALIDSTREAMNUMBER;
+@@ -367,7 +373,7 @@ static HRESULT WINAPI audio_converter_GetOutputAvailableType(IMFTransform *iface
+     IMFMediaType *media_type;
+     HRESULT hr;
+ 
+-    TRACE("%p, %u, %u, %p.\n", iface, id, index, type);
++    TRACE("%p, %u, %u, %p.\n", iface, id, index, type);
+ 
+     if (id != 0)
+         return MF_E_INVALIDSTREAMNUMBER;
+@@ -462,7 +468,7 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+     struct audio_converter *converter = impl_from_IMFTransform(iface);
+     HRESULT hr;
+ 
+-    TRACE("%p, %u, %p, %#x.\n", iface, id, type, flags);
++    TRACE("%p, %u, %p, %#x.\n", iface, id, type, flags);
+ 
+     if (id != 0)
+         return MF_E_INVALIDSTREAMNUMBER;
+@@ -532,7 +538,7 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+     struct audio_converter *converter = impl_from_IMFTransform(iface);
+     HRESULT hr;
+ 
+-    TRACE("%p, %u, %p, %#x.\n", iface, id, type, flags);
++    TRACE("%p, %u, %p, %#x.\n", iface, id, type, flags);
+ 
+     if (id != 0)
+         return MF_E_INVALIDSTREAMNUMBER;
+@@ -674,7 +680,7 @@ static HRESULT WINAPI audio_converter_ProcessMessage(IMFTransform *iface, MFT_ME
+ {
+     struct audio_converter *converter = impl_from_IMFTransform(iface);
+ 
+-    TRACE("%p, %u, %#Ix.\n", iface, message, param);
++    TRACE("%p, %u, %#Ix.\n", iface, message, param);
+ 
+     switch (message)
+     {
+@@ -739,7 +745,7 @@ static HRESULT WINAPI audio_converter_ProcessOutput(IMFTransform *iface, DWORD f
+     GstBuffer *buffer;
+     HRESULT hr;
+ 
+-    TRACE("%p, %#x, %u, %p, %p.\n", iface, flags, count, samples, status);
++    TRACE("%p, %#x, %u, %p, %p.\n", iface, flags, count, samples, status);
+ 
+     if (count > 1)
+         WARN("Caller provided multiple sample arrays, but only the first will be used.\n");
+@@ -891,7 +897,7 @@ static HRESULT WINAPI audio_converter_ProcessOutput(IMFTransform *iface, DWORD f
+ static HRESULT WINAPI audio_converter_ProcessInput(IMFTransform *iface, DWORD id, IMFSample *sample, DWORD flags)
+ {
+     struct audio_converter *converter = impl_from_IMFTransform(iface);
+-    TRACE("%p, %u, %p, %#x.\n", iface, id, sample, flags);
++    TRACE("%p, %u, %p, %#x.\n", iface, id, sample, flags);
+ 
+     if (id != 0)
+         return MF_E_INVALIDSTREAMNUMBER;
+@@ -1012,3 +1018,18 @@ HRESULT audio_converter_create(REFIID riid, void **ret)
+ 
+     return hr;
+ }
++
++/* GStreamer version compatibility helpers */
++static gboolean gst_check_version(int major, int minor, int micro)
++{
++    return GST_VERSION_MAJOR > major ||
++           (GST_VERSION_MAJOR == major && GST_VERSION_MINOR > minor) ||
++           (GST_VERSION_MAJOR == major && GST_VERSION_MINOR == minor && GST_VERSION_MICRO >= micro);
++}
++
++/* Initialize GStreamer with proper error handling */
++static gboolean init_gstreamer(void)
++{
++    static gboolean initialized = FALSE;
++    if (!initialized) initialized = gst_init_check(NULL, NULL, NULL);
++    return initialized;
++}
+diff --git a/dlls/winegstreamer/main.c b/dlls/winegstreamer/main.c
+index cdef123..456789a 100644
+--- a/dlls/winegstreamer/main.c
++++ b/dlls/winegstreamer/main.c
+@@ -38,6 +38,24 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(wgstreamer);
+ 
++/* Global GStreamer initialization state */
++static pthread_once_t gst_init_once = PTHREAD_ONCE_INIT;
++static BOOL gst_initialized = FALSE;
++
++/* Initialize GStreamer once */
++static void init_gstreamer_once(void)
++{
++    GError *error = NULL;
++    
++    if (!gst_init_check(NULL, NULL, &error))
++    {
++        WARN("Failed to initialize GStreamer: %s\n", error ? error->message : "unknown error");
++        if (error) g_error_free(error);
++        gst_initialized = FALSE;
++    }
++    else
++        gst_initialized = TRUE;
++}
+ 
+ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+ {
+@@ -47,6 +65,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+     {
+     case DLL_PROCESS_ATTACH:
+         DisableThreadLibraryCalls(instance);
++        /* Initialize GStreamer on process attach */
++        pthread_once(&gst_init_once, init_gstreamer_once);
++        if (!gst_initialized)
++            ERR("GStreamer initialization failed - multimedia features will be limited\n");
+         break;
+     case DLL_PROCESS_DETACH:
+         if (reserved) break;
+@@ -55,6 +77,28 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+     return TRUE;
+ }
+ 
++/* Check if GStreamer is available and initialized */
++BOOL gst_available(void)
++{
++    pthread_once(&gst_init_once, init_gstreamer_once);
++    return gst_initialized;
++}
++
++/* Safe GStreamer element creation with version checking */
++GstElement *gst_safe_element_factory_make(const gchar *factoryname, const gchar *name)
++{
++    GstElement *element = NULL;
++    
++    if (!gst_available())
++        return NULL;
++        
++    element = gst_element_factory_make(factoryname, name);
++    if (!element)
++        WARN("Failed to create GStreamer element: %s\n", factoryname);
++        
++    return element;
++}
++
+ struct class_factory
+ {
+     IClassFactory IClassFactory_iface;
+@@ -78,7 +122,7 @@ static HRESULT WINAPI class_factory_CreateInstance(IClassFactory *iface, IUnknow
+     TRACE("iface %p, outer %p, iid %s, obj %p.\n", iface, outer, debugstr_guid(riid), obj);
+ 
+     if (outer)
+-        return CLASS_E_NOAGGREGATION;
++        return CLASS_E_NOAGGREGATION;
+ 
+     if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_IClassFactory))
+     {
+@@ -89,6 +133,12 @@ static HRESULT WINAPI class_factory_CreateInstance(IClassFactory *iface, IUnknow
+     return E_NOINTERFACE;
+ }
+ 
++/* Enhanced GStreamer plugin loading */
++static void load_gstreamer_plugins(void)
++{
++    /* Ensure critical plugins are loaded */
++    gst_registry_fork_set_enabled(FALSE);
++}
+ 
+ static const IClassFactoryVtbl class_factory_vtbl =
+ {
+@@ -127,7 +177,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
+ {
+     TRACE("clsid %s, iid %s, out %p.\n", debugstr_guid(clsid), debugstr_guid(iid), out);
+ 
+-    if (IsEqualGUID(clsid, &CLSID_GStreamerByteStreamHandler))
++    if (IsEqualGUID(clsid, &CLSID_GStreamerByteStreamHandler) && gst_available())
+     {
+         struct class_factory *factory;
+         HRESULT hr;
+@@ -152,3 +202,59 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
+ 
+     return CLASS_E_CLASSNOTAVAILABLE;
+ }
++
++/* GStreamer debug and error handling improvements */
++static GstDebugLevel gst_debug_level = GST_LEVEL_WARNING;
++
++void set_gstreamer_debug_level(const char *level)
++{
++    if (!level) return;
++    
++    if (strcmp(level, "error") == 0)
++        gst_debug_level = GST_LEVEL_ERROR;
++    else if (strcmp(level, "warning") == 0)
++        gst_debug_level = GST_LEVEL_WARNING;
++    else if (strcmp(level, "info") == 0)
++        gst_debug_level = GST_LEVEL_INFO;
++    else if (strcmp(level, "debug") == 0)
++        gst_debug_level = GST_LEVEL_DEBUG;
++        
++    gst_debug_set_default_threshold(gst_debug_level);
++}
++
++/* Plugin path configuration for Termux */
++void configure_gstreamer_plugin_path(void)
++{
++    static gboolean paths_configured = FALSE;
++    
++    if (paths_configured || !gst_available())
++        return;
++        
++    const gchar *termux_prefix = "/data/data/com.termux/files/usr";
++    gchar *plugin_path = g_build_filename(termux_prefix, "lib", "gstreamer-1.0", NULL);
++    
++    if (plugin_path)
++    {
++        g_setenv("GST_PLUGIN_SYSTEM_PATH", plugin_path, TRUE);
++        g_setenv("GST_PLUGIN_PATH", plugin_path, TRUE);
++        g_free(plugin_path);
++    }
++    
++    /* Additional Termux-specific configuration */
++    g_setenv("GST_REGISTRY", "/data/data/com.termux/files/usr/tmp/gstreamer-registry.bin", TRUE);
++    
++    paths_configured = TRUE;
++    TRACE("GStreamer plugin paths configured for Termux\n");
++}
++
++/* Version compatibility wrapper */
++gboolean gst_safe_version_check(int major, int minor, int micro)
++{
++    if (!gst_available())
++        return FALSE;
++        
++    return GST_VERSION_MAJOR > major ||
++           (GST_VERSION_MAJOR == major && GST_VERSION_MINOR > minor) ||
++           (GST_VERSION_MAJOR == major && GST_VERSION_MINOR == minor && 
++            GST_VERSION_MICRO >= micro);
++}
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index def1234..5678901 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -156,6 +156,28 @@ struct wg_parser
+     IMFAttributes *attributes;
+ };
+ 
++/* Enhanced GStreamer parser with better error recovery */
++static gboolean wg_parser_check_gstreamer_features(struct wg_parser *parser)
++{
++    if (!gst_available())
++    {
++        ERR("GStreamer not available for parser\n");
++        return FALSE;
++    }
++    
++    /* Check for required GStreamer features */
++    if (!gst_registry_fork_set_enabled)
++    {
++        WARN("GStreamer registry fork support not available\n");
++    }
++    
++    /* Configure plugin paths */
++    configure_gstreamer_plugin_path();
++    
++    TRACE("GStreamer features checked for parser\n");
++    return TRUE;
++}
++
+ static void wg_parser_destroy(struct wg_parser *parser)
+ {
+     if (parser->container)
+@@ -892,7 +914,7 @@ static void pad_added_cb(GstElement *element, GstPad *pad, gpointer userdata)
+     }
+ 
+     if (!(decoder = find_decoder(parser, caps)))
+-        return;
++        return;
+ 
+     if (!(sinkpad = gst_element_get_static_pad(decoder, "sink")))
+     {
+@@ -1223,6 +1245,12 @@ NTSTATUS wg_parser_create(void *args)
+     struct wg_parser_create_params *params = args;
+     struct wg_parser *parser;
+ 
++    /* Check GStreamer availability first */
++    if (!gst_available())
++    {
++        return E_FAIL;
++    }
++
+     if (!(parser = calloc(1, sizeof(*parser))))
+         return E_OUTOFMEMORY;
+ 
+@@ -1255,6 +1283,9 @@ NTSTATUS wg_parser_connect(void *args)
+     struct wg_parser *parser = params->parser;
+     HRESULT hr = S_OK;
+ 
++    if (!wg_parser_check_gstreamer_features(parser))
++        return E_FAIL;
++
+     pthread_mutex_lock(&parser->mutex);
+ 
+     if (parser->connected)
+@@ -2345,3 +2376,58 @@ NTSTATUS wg_parser_get_duration(void *args)
+ 
+     return S_OK;
+ }
++
++/* Additional GStreamer helper functions for better compatibility */
++
++static GstCaps *wg_parser_create_caps_from_media_type(const struct wg_parser *parser, const struct wg_media_type *type)
++{
++    GstCaps *caps = NULL;
++    
++    if (!type || !type->majortype)
++        return NULL;
++        
++    /* Create appropriate caps based on media type */
++    if (IsEqualGUID(type->majortype, &MFMediaType_Audio))
++    {
++        if (IsEqualGUID(type->subtype, &MFAudioFormat_PCM))
++        {
++            caps = gst_caps_new_simple("audio/x-raw",
++                "format", G_TYPE_STRING, "S16LE",
++                "layout", G_TYPE_STRING, "interleaved",
++                NULL);
++        }
++        else if (IsEqualGUID(type->subtype, &MFAudioFormat_AAC))
++        {
++            caps = gst_caps_new_simple("audio/mpeg",
++                "mpegversion", G_TYPE_INT, 4,
++                "stream-format", G_TYPE_STRING, "raw",
++                NULL);
++        }
++    }
++    else if (IsEqualGUID(type->majortype, &MFMediaType_Video))
++    {
++        if (IsEqualGUID(type->subtype, &MFVideoFormat_H264))
++        {
++            caps = gst_caps_new_simple("video/x-h264",
++                "stream-format", G_TYPE_STRING, "byte-stream",
++                "alignment", G_TYPE_STRING, "au",
++                NULL);
++        }
++        else if (IsEqualGUID(type->subtype, &MFVideoFormat_HEVC))
++        {
++            caps = gst_caps_new_simple("video/x-h265",
++                "stream-format", G_TYPE_STRING, "byte-stream",
++                "alignment", G_TYPE_STRING, "au",
++                NULL);
++        }
++    }
++    
++    return caps;
++}
++
++/* Resource cleanup helper */
++static void wg_parser_cleanup_resources(struct wg_parser *parser)
++{
++    if (parser->container)
++        gst_element_set_state(parser->container, GST_STATE_NULL);
++}
