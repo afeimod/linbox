@@ -5,7 +5,7 @@
 # linbox
 本仓库是安卓手机利用termux和x11实现debian运行mobox！起名字只是为了区分mobox！感谢mobox的所有开发人员！请支持原版mobox！并感谢所有大佬的帮助！
 # 感谢*咔咔龙 *小白一枚 *云起云落 *Asia *Deemo *123 *等*以及mobox的所有开发人员！
-
+# wine编译补丁参考https://github.com/Waim908/wine-termux
 <p align="center">
 	<img src="linbox.jpg" width="376" height="190" alt="Linbox test" />  
 </p>
