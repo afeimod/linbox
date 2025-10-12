@@ -46,4 +46,47 @@
     apt reinstall sudo -y
     exit
 
+### 来源链接
 
+* https://dl.winehq.org/wine/source
+* https://github.com/olegos2/mobox
+* https://github.com/Waim908/wine-termux
+* https://github.com/wine-staging/wine-staging
+* https://github.com/Frogging-Family/wine-tkg-git
+* https://github.com/Kron4ek/wine-tkg
+* https://github.com/ValveSoftware/wine
+* https://github.com/varmd/wine-wayland
+* https://github.com/Kron4ek/wine-wayland
+* https://gitlab.collabora.com/alf/wine/-/tree/wayland
+
+## 第三方应用程序
+
+[glibc-packages](https://github.com/termux-pacman/glibc-packages)
+
+[Box64](https://github.com/ptitSeb/box64)
+
+[Box86](https://github.com/ptitSeb/box86)
+
+[DXVK](https://github.com/doitsujin/dxvk)
+
+[DXVK-ASYNC](https://github.com/Sporif/dxvk-async)
+
+[DXVK-GPLASYNC](https://gitlab.com/Ph42oN/dxvk-gplasync)
+
+[VKD3D](https://github.com/lutris/vkd3d)
+
+[D8VK](https://github.com/AlpyneDreams/d8vk)
+
+[Termux-app](https://github.com/termux/termux-app)
+
+[Termux-x11](https://github.com/termux/termux-x11)
+
+[Wine](https://wiki.winehq.org/Licensing)
+
+[wine-ge-custom](https://github.com/GloriousEggroll/wine-ge-custom)
+
+[Mesa](https://docs.mesa3d.org/license.html)
+
+[mesa-zink-11.06.22](https://github.com/alexvorxx/mesa-zink-11.06.22)
+
+[Mesa-VirGL](https://github.com/alexvorxx/Mesa-VirGL)
