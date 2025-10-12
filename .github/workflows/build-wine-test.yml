@@ -1,5 +1,5 @@
 # build-wine.yml
-name: Build TestWine (Esync WOW64 GStreamer)
+name: Build Gst9.2Wine (Esync WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:  # 只保留手动触发
@@ -93,94 +93,9 @@ jobs:
       run: |
         git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
-        git checkout wine-9.9
+        git checkout wine-9.2
 
-    - name: 下载并应用 staging 补丁
-      run: |
-        cd wine
-        # 下载 staging 补丁集
-        wget -O wine-staging-9.9.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.9.tar.gz
-        tar -xzf wine-staging-9.9.tar.gz
-    
-        # 应用 staging 补丁 - 使用正确的路径
-        cd wine-staging-9.9/staging
-        chmod +x patchinstall.py
-    
-        # 应用所有补丁到 Wine 源码目录（上级的上级目录）
-        ./patchinstall.py --all --destdir=../../
-    
-        echo "✅ Staging 补丁应用完成"
-
-    - name: 验证 staging 补丁应用
-      id: check_esync
-      run: |
-        cd wine
-        echo "检查 staging 补丁应用情况..."
-        if [ -f "dlls/ntdll/unix/esync.c" ]; then
-            echo "✅ esync 支持已通过 staging 补丁添加"
-            echo "ESYNC_FOUND=true" >> $GITHUB_ENV
-        else
-            echo "❌ esync 支持未找到"
-            echo "ESYNC_FOUND=false" >> $GITHUB_ENV
-        fi
-
-    - name: 下载并应用 esync 补丁
-      if: env.ESYNC_FOUND == 'false'
-      run: |
-        cd wine
-    
-        # 定义修复函数
-        apply_esync_fix() {
-            echo "使用备用方案手动修复 esync..."
-        
-            # 修复 dlls/ntdll/unix/esync.c
-            if [ -f "dlls/ntdll/unix/esync.c" ]; then
-                echo "修复 dlls/ntdll/unix/esync.c..."
-                sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' dlls/ntdll/unix/esync.c
-            
-                # 修复 esync.c 中的其他部分
-                sed -i 's|sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );|if (getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX"))) {\n        sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );\n    } else {\n        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );\n    }|' dlls/ntdll/unix/esync.c
-            
-                sed -i 's|if ((shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1)|if ((getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX")) \&\& (shm_fd = open( shm_name, O_RDWR, 0644 )) == -1) || (!getenv("WINEESYNC_TERMUX") \&\& (shm_fd = shm_open( shm_name, O_RDWR, 0644 )) == -1))|' dlls/ntdll/unix/esync.c
-            fi
-        
-            # 修复 server/esync.c
-            if [ -f "server/esync.c" ]; then
-                echo "修复 server/esync.c..."
-                sed -i 's|static char shm_name\[29\];|static char shm_name[200];\nstatic int termux_esync;|' server/esync.c
-            
-                # 添加 termux_esync 变量初始化
-                sed -i 's|static off_t shm_size;|static off_t shm_size;\nstatic int termux_esync;|' server/esync.c
-            
-                # 修复 shm_cleanup 函数
-                sed -i 's|if (shm_unlink( shm_name ) == -1)|if ((termux_esync \&\& unlink( shm_name ) == -1) || (!termux_esync \&\& shm_unlink( shm_name ) == -1))|' server/esync.c
-            
-                # 修复 shm_name 生成逻辑
-                sed -i '/sprintf( shm_name, "\/wine-%lx-esync", (unsigned long)st.st_ino );/c\\    termux_esync = getenv("WINEESYNC_TERMUX") \&\& atoi(getenv("WINEESYNC_TERMUX"));\n    if (termux_esync) {\n        sprintf( shm_name, "/data/data/com.termux/files/usr/tmp/wine-%lx-esync", (unsigned long)st.st_ino );\n        unlink( shm_name );\n        shm_fd = open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );\n    } else {\n        sprintf( shm_name, "/wine-%lx-esync", (unsigned long)st.st_ino );\n        shm_unlink( shm_name );\n        shm_fd = shm_open( shm_name, O_RDWR | O_CREAT | O_EXCL, 0644 );\n    }' server/esync.c
-            fi
-        
-            echo "✅ 手动修复完成"
-        }
-    
-        echo "正在下载并应用 esync 补丁..."
-        wget -O esync.patch https://github.com/afeimod/linbox/raw/main/path/esync.patch
-    
-        # 尝试应用补丁
-        echo "尝试应用补丁..."
-        if patch -p1 -N --ignore-whitespace < esync.patch 2>&1 | tee patch.log; then
-            echo "✅ esync 补丁应用成功"
-        else
-            echo "尝试使用 -p0 选项..."
-            if patch -p0 -N --ignore-whitespace < esync.patch 2>&1 | tee patch.log; then
-                echo "✅ esync 补丁应用成功 (使用 -p0)"
-            else
-                echo "⚠️ esync 补丁应用失败，使用备用方案"
-                cat patch.log
-                apply_esync_fix
-            fi
-        fi
-
-    - name: 下载并运行修复后的 Wine mfplat 修复脚本
+    - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
       run: |
         cd wine
         # 下载修复脚本
@@ -255,7 +170,16 @@ jobs:
             echo "❌ 错误: dlls/mfplat/main.c 文件不存在"
             exit 1
         fi
-
+    - name: 应用 GStreamer 修复补丁
+      run: |
+        cd wine
+        wget -O gstreamer-fix.patch https://raw.githubusercontent.com/your-repo/gstreamer-fix.patch
+        if patch -p1 < gstreamer-fix.patch; then
+            echo "✅ gst修复补丁应用成功"
+        else
+            echo "⚠️ gst修复补丁应用失败，继续构建"
+        fi
+        
     - name: 下载并应用返回值修复补丁
       run: |
         cd wine
@@ -265,7 +189,14 @@ jobs:
         else
             echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
-
+    - name: 下载并运行 esync 修复脚本
+      run: |
+        cd wine
+        # 下载 esync 修复脚本
+        wget -O fix_esync.sh https://github.com/afeimod/linbox/raw/main/path/fix_esync.sh
+        chmod +x fix_esync.sh
+        # 运行修复脚本
+        ./fix_esync.sh
         
     - name: 验证 esync 修复
       run: |
@@ -286,7 +217,7 @@ jobs:
         fi
     
         echo "esync 修复验证完成"
-
+    
     - name: 彻底修复 Termux 路径问题
       run: |
         cd wine
@@ -306,7 +237,8 @@ jobs:
         
         echo "路径修复完成"
 
-    # 其余步骤保持不变...
+
+
     - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
         cd wine
@@ -324,12 +256,8 @@ jobs:
           --prefix=/tmp/wine-install \
           --with-x \
           --with-vulkan \
-          --with-alsa \
-          --with-pulse \
-          --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
-          --with-gettext \
           --enable-nls \
           --without-dbus \
           --without-sane \
@@ -785,7 +713,7 @@ jobs:
         find wine-package -name "*gst*" | sort
         
         # 打包
-        tar -czf wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz wine-package/
         
         echo "打包完成:"
         ls -lh wine-*.tar.gz
@@ -793,15 +721,15 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux
-        path: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz
+        name: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux
+        path: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ env.VERSION }}
+        tag_name: ${{ github.ref_name }}
         name: Wine ${{ env.VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
-        files: wine-${{ env.VERSION }}-unity-wow64-esync-gstreamer-termux.tar.gz
+        files: wine-${{ env.VERSION }}-test-wow64-esync-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
