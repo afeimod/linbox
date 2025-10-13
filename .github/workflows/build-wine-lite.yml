@@ -129,12 +129,6 @@ jobs:
             echo "⚠️ 返回值修复补丁应用失败，继续构建"
         fi
 
-    - name: 下载并运行 esync 修复脚本
-      run: |
-        cd wine
-        wget -O fix_esync.sh https://github.com/afeimod/linbox/raw/main/path/fix_esync.sh
-        chmod +x fix_esync.sh
-        ./fix_esync.sh
 
     - name: 彻底修复 Termux 路径问题
       run: |
