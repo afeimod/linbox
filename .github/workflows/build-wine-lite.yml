@@ -87,6 +87,31 @@ jobs:
         cd wine
         git checkout wine-9.2
 
+    - name: 下载并应用 staging 补丁
+      run: |
+        cd wine
+        # 下载 staging 补丁集
+        wget -O wine-staging-9.2.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.2.tar.gz
+        tar -xzf wine-staging-9.2.tar.gz
+    
+        # 应用 staging 补丁 - 使用正确的路径
+        cd wine-staging-9.2/staging
+        chmod +x patchinstall.py
+    
+        # 应用所有补丁到 Wine 源码目录（上级的上级目录）
+        ./patchinstall.py --all --destdir=../../
+    
+        echo "✅ Staging 补丁应用完成"
+
+    - name: 验证 staging 补丁应用
+      run: |
+        cd wine
+        echo "检查 staging 补丁应用情况..."
+        if [ -f "dlls/ntdll/unix/esync.c" ]; then
+            echo "✅ esync 支持已通过 staging 补丁添加"
+        else
+            echo "❌ esync 支持未找到"
+        fi
     - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
       run: |
         cd wine
@@ -134,28 +159,38 @@ jobs:
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
-          --prefix=/tmp/wine-install \
+          --prefix=/tmp/wine-install-proton \
           --with-x \
           --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
+          --with-gettext \
+          --with-sdl \
           --enable-nls \
-          --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
-          --disable-debug \
           --disable-tests \
-          --without-piper \
-          --without-xinerama \
-          --without-cups \
+          --disable-winemsibuilder \
+          --disable-winemsiinstaller \
+          --disable-winedbg \
+          --disable-winemaker \
+          --disable-wmc \
+          --disable-wrc \
+          --disable-widl \
+          --without-ldap \
           --without-capi \
+          --without-oss \
+          --without-cups \
+          --without-dbus \
           --without-coreaudio \
           --without-gphoto \
           --without-osmesa \
-          --without-oss \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
           --without-udev \
           --without-unwind \
           --without-usb \
