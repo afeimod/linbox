@@ -153,33 +153,20 @@ jobs:
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
-          --prefix=/tmp/wine-install-proton \
-          --with-x \
-          --with-vulkan \
-          --with-alsa \
-          --with-pulse \
-          --with-freetype \
-          --with-fontconfig \
-          --with-gstreamer \
-          --with-gettext \
-          --enable-nls \
+          --prefix=/tmp/wine-install \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
           --disable-winemsibuilder \
-          --disable-winemsiinstaller \
-          --disable-winedbg \
-          --disable-winemaker \
-          --disable-wmc \
-          --without-ldap \
+          --without-xinerama \
           --without-capi \
           --without-oss \
           --without-cups \
-          --without-dbus \
           --without-coreaudio \
           --without-gphoto \
           --without-osmesa \
           --without-sane \
+          --without-piper \
           --without-pcap \
           --without-pcsclite \
           --without-udev \
