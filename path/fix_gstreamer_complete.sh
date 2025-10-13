@@ -5,7 +5,11 @@ echo "修复 Wine 9.2 GStreamer 支持 - 最终版本..."
 
 cd wine
 
-# 1. 修复 mfplat/main.c - 添加必要的头文件和函数
+# 1. 首先恢复被破坏的 mfplat.c 文件
+echo "恢复 mfplat.c 文件..."
+git checkout -- dlls/winegstreamer/mfplat.c
+
+# 2. 修复 mfplat/main.c - 添加必要的头文件和函数
 echo "修复 mfplat/main.c..."
 
 if [ -f "dlls/mfplat/main.c" ]; then
@@ -46,7 +50,7 @@ EOF
     fi
 fi
 
-# 2. 完全修复 winegstreamer/main.c
+# 3. 完全修复 winegstreamer/main.c
 echo "修复 winegstreamer/main.c..."
 
 if [ -f "dlls/winegstreamer/main.c" ]; then
@@ -68,24 +72,16 @@ if [ -f "dlls/winegstreamer/main.c" ]; then
     sed -i 's/if (IsEqualGUID(clsid, \&CLSID_GStreamerByteStreamHandler))/if (IsEqualGUID(clsid, \&CLSID_GStreamerByteStreamHandler) \&\& gst_available())/' dlls/winegstreamer/main.c
 fi
 
-# 3. 修复 winegstreamer/audioconvert.c - 只添加被使用的函数
+# 4. 修复 winegstreamer/audioconvert.c - 只添加被使用的函数
 echo "修复 winegstreamer/audioconvert.c..."
 
 if [ -f "dlls/winegstreamer/audioconvert.c" ]; then
-    # 添加 GStreamer 可用性检查到音频转换器
-    if ! grep -q "gst_available" dlls/winegstreamer/audioconvert.c; then
-        # 在 create_element 函数开始处添加检查
-        sed -i '/static HRESULT audio_converter_create_element(struct audio_converter \*converter)/a {\n    /* 检查 GStreamer 是否可用 */\n    if (!gst_available())\n    {\n        ERR(\"GStreamer not available for audio converter\\n\");\n        return E_FAIL;\n    }' dlls/winegstreamer/audioconvert.c
-        
-        # 在函数结尾添加匹配的括号
-        sed -i '/gst_object_unref(converter->src);/a }' dlls/winegstreamer/audioconvert.c
-    fi
-
-    # 添加安全的元素创建函数 - 这个函数会被使用
+    # 添加安全的元素创建函数
     if ! grep -q "create_gst_element_safe" dlls/winegstreamer/audioconvert.c; then
+        # 在文件末尾添加函数定义
         cat >> dlls/winegstreamer/audioconvert.c << 'EOF'
 
-/* 安全的 GStreamer 元素创建函数 - 会被实际使用 */
+/* 安全的 GStreamer 元素创建函数 */
 static GstElement *create_gst_element_safe(const gchar *factoryname, const gchar *name)
 {
     GstElement *element = NULL;
@@ -101,53 +97,23 @@ static GstElement *create_gst_element_safe(const gchar *factoryname, const gchar
 }
 EOF
 
-        # 替换原有的元素创建调用 - 确保函数被使用
+        # 替换原有的元素创建调用
         sed -i 's/gst_element_factory_make("audioconvert", NULL)/create_gst_element_safe("audioconvert", NULL)/g' dlls/winegstreamer/audioconvert.c
         sed -i 's/gst_element_factory_make("audioresample", NULL)/create_gst_element_safe("audioresample", NULL)/g' dlls/winegstreamer/audioconvert.c
     fi
 fi
 
-# 4. 修复 winegstreamer/wg_parser.c - 只添加被使用的函数
+# 5. 修复 winegstreamer/wg_parser.c - 只添加被使用的函数
 echo "修复 winegstreamer/wg_parser.c..."
 
 if [ -f "dlls/winegstreamer/wg_parser.c" ]; then
     # 在 parser_create 函数中添加 GStreamer 检查
     if ! grep -q "gst_available" dlls/winegstreamer/wg_parser.c; then
-        sed -i '/struct wg_parser_create_params \*params = args;/a \\n    /* 检查 GStreamer 可用性 */\n    if (!gst_available())\n    {\n        ERR(\"GStreamer not available for parser creation\\n\");\n        return E_FAIL;\n    }' dlls/winegstreamer/wg_parser.c
-    fi
-
-    # 只添加被实际使用的资源清理函数
-    if ! grep -q "wg_parser_cleanup_resources" dlls/winegstreamer/wg_parser.c; then
-        cat >> dlls/winegstreamer/wg_parser.c << 'EOF'
-
-/* 资源清理助手 - 这个函数会被实际使用 */
-static void wg_parser_cleanup_resources(struct wg_parser *parser)
-{
-    if (parser->container)
-    {
-        gst_element_set_state(parser->container, GST_STATE_NULL);
-        TRACE("GStreamer parser resources cleaned up\n");
-    }
-}
-EOF
-
-        # 在 parser_destroy 函数中调用资源清理函数，确保它被使用
-        if grep -q "static void parser_destroy(struct wg_parser \*parser)" dlls/winegstreamer/wg_parser.c; then
-            sed -i '/static void parser_destroy(struct wg_parser \*parser)/,/^}/ { /pthread_mutex_destroy(/i \\    wg_parser_cleanup_resources(parser);' dlls/winegstreamer/wg_parser.c
+        # 找到 parser_create 函数的开始
+        if grep -q "HRESULT parser_create.*struct wg_parser \*\*out" dlls/winegstreamer/wg_parser.c; then
+            # 在函数开始处添加检查
+            sed -i '/    struct wg_parser_create_params \*params = args;/a\\n    /* 检查 GStreamer 可用性 */\n    if (!gst_available())\n    {\n        ERR(\"GStreamer not available for parser creation\\n\");\n        return E_FAIL;\n    }' dlls/winegstreamer/wg_parser.c
         fi
-    fi
-fi
-
-# 5. 修复 winegstreamer/mfplat.c
-echo "修复 winegstreamer/mfplat.c..."
-
-if [ -f "dlls/winegstreamer/mfplat.c" ]; then
-    # 添加 GStreamer 可用性检查到媒体基础函数
-    if ! grep -q "gst_available" dlls/winegstreamer/mfplat.c; then
-        sed -i '/HRESULT WINAPI MFStartup(ULONG version, DWORD flags)/a {\n    /* 初始化 GStreamer */\n    if (!gst_available())\n    {\n        WARN(\"GStreamer not available, multimedia features will be limited\\n\");\n    }\n    \n    TRACE(\"version %#x, flags %#x.\\n\", version, flags);' dlls/winegstreamer/mfplat.c
-    
-        # 在函数结尾添加匹配的括号
-        sed -i '/return S_OK;/a }' dlls/winegstreamer/mfplat.c
     fi
 fi
 
@@ -187,21 +153,6 @@ if [ -f "dlls/winegstreamer/wg_parser.c" ]; then
             fi
         fi
     fi
-
-    # 删除 wg_parser_create_caps_from_media_type 函数（如果存在且未使用）
-    if grep -q "wg_parser_create_caps_from_media_type" dlls/winegstreamer/wg_parser.c && ! grep -q "wg_parser_create_caps_from_media_type.*(" dlls/winegstreamer/wg_parser.c | grep -v "static.*wg_parser_create_caps_from_media_type" | head -1; then
-        # 找到函数开始和结束的行号
-        start_line=$(grep -n "static GstCaps \*wg_parser_create_caps_from_media_type" dlls/winegstreamer/wg_parser.c | cut -d: -f1)
-        if [ ! -z "$start_line" ]; then
-            # 找到匹配的结束大括号
-            end_line=$(awk -v start="$start_line" 'NR >= start && /^}/ {print NR; exit}' dlls/winegstreamer/wg_parser.c)
-            if [ ! -z "$end_line" ]; then
-                # 删除这个函数
-                sed -i "${start_line},${end_line}d" dlls/winegstreamer/wg_parser.c
-                echo "已删除未使用的函数: wg_parser_create_caps_from_media_type"
-            fi
-        fi
-    fi
 fi
 
 # 从 audioconvert.c 中删除未使用的 gst_check_version_safe 函数
@@ -221,13 +172,7 @@ if [ -f "dlls/winegstreamer/audioconvert.c" ]; then
     fi
 fi
 
-# 8. 创建简单的 GStreamer 调试功能（可选）
-echo "创建调试功能..."
-
-# 删除之前可能创建的未使用的调试文件
-rm -f dlls/winegstreamer/gst_debug.c
-
-# 9. 更新 Makefile 以确保没有未使用的源文件
+# 8. 更新 Makefile 以确保没有未使用的源文件
 if [ -f "dlls/winegstreamer/Makefile.in" ]; then
     # 确保没有引用不存在的 gst_debug.c
     sed -i '/gst_debug.c/d' dlls/winegstreamer/Makefile.in
@@ -236,11 +181,11 @@ fi
 echo "✅ Wine 9.2 GStreamer 最终修复完成！"
 echo ""
 echo "修复总结："
+echo "✓ 恢复了被破坏的 mfplat.c 文件"
 echo "✓ mfplat/main.c - 媒体基础解析器修复"
 echo "✓ winegstreamer/main.c - GStreamer 初始化和路径配置"
-echo "✓ winegstreamer/audioconvert.c - 音频转换器可用性检查"
-echo "✓ winegstreamer/wg_parser.c - 解析器功能和资源管理"
-echo "✓ winegstreamer/mfplat.c - 媒体基础初始化"
+echo "✓ winegstreamer/audioconvert.c - 音频转换器安全函数"
+echo "✓ winegstreamer/wg_parser.c - 解析器可用性检查"
 echo "✓ winegstreamer/unixlib.h - 函数声明"
 echo "✓ 清理了所有未使用的函数"
 echo ""
