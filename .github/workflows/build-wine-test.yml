@@ -170,15 +170,51 @@ jobs:
             echo "❌ 错误: dlls/mfplat/main.c 文件不存在"
             exit 1
         fi
-    - name: 应用 GStreamer 修复补丁
+    - name: 下载并运行完整的 GStreamer 修复脚本
       run: |
         cd wine
-        wget -O gstreamer-fix.patch https://github.com/afeimod/linbox/raw/main/path/gstreamer-fix.patch
-        if patch -p1 < gstreamer-fix.patch; then
-            echo "✅ gst修复补丁应用成功"
+        # 下载完整修复脚本
+        wget -O fix_gstreamer_complete.sh https://raw.githubusercontent.com/afeimod/linbox/main/path/fix_gstreamer_complete.sh
+        chmod +x fix_gstreamer_complete.sh
+        # 运行完整修复
+        ./fix_gstreamer_complete.sh
+
+    - name: 验证 GStreamer 修复结果
+      run: |
+        cd wine
+        echo "=== GStreamer 修复验证 ==="
+    
+        echo "1. 检查 mfplat 修复:"
+        grep -n "resolver_create_default_handler" dlls/mfplat/main.c | head -3
+        echo ""
+    
+        echo "2. 检查 winegstreamer 初始化:"
+        grep -n "gst_available" dlls/winegstreamer/main.c | head -3
+        echo ""
+    
+        echo "3. 检查 Termux 路径配置:"
+        grep -n "configure_gstreamer_plugin_path" dlls/winegstreamer/main.c | head -3
+        echo ""
+    
+        echo "4. 检查音频转换器修复:"
+        grep -n "create_gst_element_safe" dlls/winegstreamer/audioconvert.c | head -3
+        echo ""
+    
+        echo "5. 检查新增的调试功能:"
+        if [ -f "dlls/winegstreamer/gst_debug.c" ]; then
+            echo "✅ gst_debug.c 已创建"
+            wc -l dlls/winegstreamer/gst_debug.c
         else
-            echo "⚠️ gst修复补丁应用失败，继续构建"
+            echo "❌ gst_debug.c 未创建"
         fi
+        echo ""
+    
+        echo "=== 修复文件统计 ==="
+        echo "修改的文件:"
+        find dlls/mfplat dlls/winegstreamer -name "*.c" -o -name "*.h" | xargs grep -l "gst_available" 2>/dev/null || echo "未找到相关文件"
+        echo ""
+    
+        echo "=== GStreamer 修复验证完成 ==="
         
     - name: 下载并应用返回值修复补丁
       run: |
