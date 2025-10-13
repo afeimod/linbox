@@ -37,9 +37,7 @@ jobs:
         sudo apt install -y libunwind-dev
         sudo apt install -y \
           libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libmpg123-dev \
-          libopenal-dev
+          libgstreamer-plugins-base1.0-dev
     - name: 克隆 Wine 源码
       run: |
         git clone --depth=1 --branch wine-9.2 https://gitlab.winehq.org/wine/wine.git
@@ -146,23 +144,35 @@ jobs:
         wget -q https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SourceHanSansSC-Regular.otf || echo "字体下载失败，继续..."
         cd ../../..
 
-    - name: 创建精简包
+    - name: 创建打包文件
       run: |
-        tar -czf wine-${{ env.VERSION }}-wow64-lite-termux.tar.gz wine-package/
-        echo "最终包大小:"
+        tar -czf wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz wine-package/
+        echo "打包完成:"
         ls -lh wine-*.tar.gz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-wow64-lite-termux
-        path: wine-${{ env.VERSION }}-wow64-lite-termux.tar.gz
+        name: wine-${{ env.VERSION }}-wow64-esync-termux
+        path: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ env.VERSION }}
-        name: Wine ${{ env.VERSION }} (WOW64 Lite for Termux)
-        files: wine-${{ env.VERSION }}-wow64-lite-termux.tar.gz
+        name: Wine ${{ env.VERSION }} (WOW64 with Esync for Termux)
+        files: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息
+      run: |
+        echo "✅ Wine WOW64 with Esync 构建完成"
+        echo "版本号: $VERSION"
+        echo "架构: x86_64 WOW64"
+        echo "环境: Termux"
+        echo "应用修复:"
+        echo "✓ Wine 9.2 mfplat 修复"
+        echo "✓ 返回值修复"
+        echo "✓ Esync 修复"
+        echo "✓ Termux 路径修复"
