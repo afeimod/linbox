@@ -177,7 +177,6 @@ jobs:
           --disable-winedbg \
           --disable-winemaker \
           --disable-wmc \
-          --disable-wrc \
           --without-ldap \
           --without-capi \
           --without-oss \
