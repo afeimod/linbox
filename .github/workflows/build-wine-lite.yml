@@ -1,0 +1,223 @@
+# build-wine-bin.yml
+name: Build LiteWine Esync WOW64 for Termux
+
+on:
+  workflow_dispatch:  # 只保留手动触发
+
+permissions:
+  contents: write  # 允许 GITHUB_TOKEN 创建 Release
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: 安装构建依赖
+      run: |
+        sudo apt update
+        sudo apt --fix-broken install -y
+        sudo apt install -y \
+          debootstrap \
+          perl \
+          git \
+          wget \
+          xz-utils \
+          bubblewrap \
+          autoconf \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          libx11-dev \
+          libxext-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxfixes-dev \
+          libxxf86vm-dev \
+          libxrender-dev \
+          libxinerama-dev \
+          libgl-dev \
+          libglu-dev \
+          libosmesa6-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libssl-dev \
+          libasound2-dev \
+          libpulse-dev \
+          libudev-dev \
+          libcups2-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxml2-dev \
+          libvulkan-dev \
+          vulkan-tools \
+          libvulkan1 \
+          mesa-vulkan-drivers \
+          mingw-w64 \
+          gettext \
+          libgettextpo-dev \
+          locales \
+          language-pack-zh-hans
+
+    - name: 安装多媒体和音频依赖
+      run: |
+        sudo apt install -y libunwind-dev
+        sudo apt install -y \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev
+
+    - name: 设置中文语言环境
+      run: |
+        sudo locale-gen zh_CN.UTF-8
+        sudo update-locale LANG=zh_CN.UTF-8
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+
+    - name: 克隆 Wine 源码
+      run: |
+        git clone https://gitlab.winehq.org/wine/wine.git
+        cd wine
+        git checkout wine-9.2
+
+    - name: 下载并运行修复后的 Wine 9.2 mfplat 修复脚本
+      run: |
+        cd wine
+        wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
+        chmod +x fix_wine9.2_mfplat.sh
+        ./fix_wine9.2_mfplat.sh
+
+    - name: 下载并应用返回值修复补丁
+      run: |
+        cd wine
+        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
+        if patch -p1 -N < fix_return_value.patch; then
+            echo "✅ 返回值修复补丁应用成功"
+        else
+            echo "⚠️ 返回值修复补丁应用失败，继续构建"
+        fi
+
+    - name: 下载并运行 esync 修复脚本
+      run: |
+        cd wine
+        wget -O fix_esync.sh https://github.com/afeimod/linbox/raw/main/path/fix_esync.sh
+        chmod +x fix_esync.sh
+        ./fix_esync.sh
+
+    - name: 彻底修复 Termux 路径问题
+      run: |
+        cd wine
+        echo "彻底修复 Termux 路径问题..."
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        echo "路径修复完成"
+
+    - name: 配置和构建 WOW64 Wine
+      run: |
+        cd wine
+        mkdir -p /tmp/wine-install
+        sudo chmod 777 -R /tmp/wine-install
+
+        mkdir -p build-wow64
+        cd build-wow64
+
+        ../configure \
+          --enable-win64 \
+          --enable-archs=i386,x86_64 \
+          --prefix=/tmp/wine-install \
+          --with-x \
+          --with-vulkan \
+          --with-fontconfig \
+          --with-gstreamer \
+          --enable-nls \
+          --without-dbus \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-debug \
+          --disable-tests \
+          --without-piper \
+          --without-xinerama \
+          --without-cups \
+          --without-capi \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-oss \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
+
+        echo "开始构建 WOW64 Wine..."
+        make -j$(nproc)
+
+    - name: 安装 Wine 并获取版本信息
+      run: |
+        cd wine/build-wow64
+        make install
+
+        cd ..
+        VERSION=$(git describe --tags --abbrev=0)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Wine 版本: $VERSION - WOW64 构建"
+
+    - name: 准备打包文件
+      run: |
+        mkdir -p wine-package/opt/wine
+        mkdir -p wine-package/share/fonts
+        
+        echo "复制 Wine 文件..."
+        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        
+        echo "下载中文字体..."
+        cd wine-package/share/fonts
+        wget -q https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SourceHanSansSC-Regular.otf || echo "字体下载失败，继续..."
+        wget -q https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SourceHanSerifSC-Regular.otf || echo "字体下载失败，继续..."
+        cd ../../..
+
+    - name: 创建打包文件
+      run: |
+        tar -czf wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz wine-package/
+        echo "打包完成:"
+        ls -lh wine-*.tar.gz
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: wine-${{ env.VERSION }}-wow64-esync-termux
+        path: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.VERSION }}
+        name: Wine ${{ env.VERSION }} (WOW64 with Esync for Termux)
+        files: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息
+      run: |
+        echo "✅ Wine WOW64 with Esync 构建完成"
+        echo "版本号: $VERSION"
+        echo "架构: x86_64 WOW64"
+        echo "环境: Termux"
+        echo "应用修复:"
+        echo "✓ Wine 9.2 mfplat 修复"
+        echo "✓ 返回值修复"
+        echo "✓ Esync 修复"
+        echo "✓ Termux 路径修复"
