@@ -168,20 +168,50 @@ jobs:
     - name: 应用必要修复补丁
       run: |
         cd wine
-        # 根据版本选择修复补丁
+        # 提取 Wine 版本号
         WINE_BASE_VERSION=${WINE_VERSION#wine-}
         echo "Wine 基础版本: $WINE_BASE_VERSION"
-        
-        # mfplat 修复 - 尝试下载对应版本的修复补丁
-        if wget -O fix_wine_mfplat.sh "https://github.com/afeimod/linbox/raw/main/path/fix_wine${WINE_BASE_VERSION}_mfplat.sh"; then
-          chmod +x fix_wine_mfplat.sh
-          ./fix_wine_mfplat.sh
-          echo "✅ Wine $WINE_BASE_VERSION mfplat 修复应用成功"
+    
+        # 将版本号转换为可比较的数字格式（如 9.2 -> 902, 9.10 -> 910）
+        if [[ "$WINE_BASE_VERSION" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR=${BASH_REMATCH[1]}
+            MINOR=${BASH_REMATCH[2]}
+            VERSION_NUM=$((MAJOR * 100 + MINOR))
+            echo "版本数字: $VERSION_NUM"
         else
-          echo "⚠️ 未找到 Wine $WINE_BASE_VERSION 的 mfplat 修复补丁，跳过"
+            # 如果不是标准版本号格式（如main、master等），视为最新版本
+            echo "非标准版本号，视为最新版本"
+            VERSION_NUM=9999
         fi
-        
-        # 返回值修复 - 通用补丁
+    
+        # mfplat 修复 - 根据版本选择不同的修复方式
+        if [ $VERSION_NUM -ge 900 ] && [ $VERSION_NUM -le 905 ]; then
+            # Wine 9.0 - 9.5 使用 fix_wine9.2_mfplat.sh
+            echo "🔧 检测到 Wine 9.0-9.5 版本，使用 9.2 mfplat 修复"
+            if wget -O fix_wine_mfplat.sh "https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh"; then
+              chmod +x fix_wine_mfplat.sh
+              ./fix_wine_mfplat.sh
+              echo "✅ Wine $WINE_BASE_VERSION mfplat 修复应用成功"
+            else
+              echo "⚠️ Wine 9.2 mfplat 修复脚本下载失败，跳过"
+            fi
+        elif [ $VERSION_NUM -ge 906 ] || [ "$WINE_VERSION" = "main" ] || [ "$WINE_VERSION" = "master" ]; then
+            # Wine 9.6+ 或 main/master 分支使用 patch 方式
+            echo "🔧 检测到 Wine 9.6+ 或最新版本，使用 dxgi manager2 补丁"
+            if wget -O wine_do_not_create_dxgi_manager2.patch "https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch"; then
+              if patch -p1 -N < wine_do_not_create_dxgi_manager2.patch; then
+                echo "✅ dxgi manager2 补丁应用成功"
+              else
+                echo "⚠️ dxgi manager2 补丁应用失败，跳过"
+              fi
+            else
+              echo "⚠️ dxgi manager2 补丁下载失败，跳过"
+            fi
+        else
+            echo "ℹ️  Wine 版本 $WINE_BASE_VERSION 不在特定修复范围内，跳过 mfplat 修复"
+        fi
+    
+        # 返回值修复 - 通用补丁（保持原样）
         if wget -O fix_return_value.patch "https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch"; then
           if patch -p1 -N < fix_return_value.patch; then
             echo "✅ 返回值修复补丁应用成功"
