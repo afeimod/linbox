@@ -308,8 +308,8 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux
-        path: wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz
+        name: wine-${{ env.WINE_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux
+        path: wine-${{ env.WINE_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz
 
     - name: 创建发布标签
       id: create_tag
