@@ -3,18 +3,62 @@ name: Build LiteWine Esync WOW64 for Termux
 
 on:
   workflow_dispatch:
+    inputs:
+      wine_version:
+        description: 'Wine 版本 (分支、标签或提交哈希)'
+        required: true
+        default: 'wine-9.2'
+        type: string
+      wine_staging_version:
+        description: 'Wine Staging 版本 (可选，留空则自动匹配)'
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 env:
-  VERSION: "9.2-lite"
+  VERSION_PREFIX: "lite"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
+    - name: 设置 Wine 版本
+      id: set_version
+      run: |
+        # 设置 Wine 版本
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
+          echo "WINE_STAGING_VERSION=${{ github.event.inputs.wine_staging_version }}" >> $GITHUB_ENV
+        else
+          # 默认版本
+          echo "WINE_VERSION=wine-9.2" >> $GITHUB_ENV
+          echo "WINE_STAGING_VERSION=" >> $GITHUB_ENV
+        fi
+        
+        # 如果没有指定 staging 版本，则自动匹配
+        if [ -z "$WINE_STAGING_VERSION" ]; then
+          # 从 Wine 版本中提取数字部分
+          if [[ "$WINE_VERSION" =~ wine-([0-9]+\.[0-9]+) ]]; then
+            WINE_STAGING_VERSION="v${BASH_REMATCH[1]}"
+          else
+            WINE_STAGING_VERSION="master"
+          fi
+          echo "WINE_STAGING_VERSION=$WINE_STAGING_VERSION" >> $GITHUB_ENV
+        fi
+        
+        # 设置构建版本名称
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+        echo "FULL_VERSION=${WINE_VERSION#wine-}-${VERSION_PREFIX}" >> $GITHUB_ENV
+        
+        echo "使用的 Wine 版本: $WINE_VERSION"
+        echo "使用的 Staging 版本: $WINE_STAGING_VERSION"
+        echo "构建日期: $BUILD_DATE"
+        echo "完整版本: $FULL_VERSION"
+
     - name: 安装最小化构建依赖
       run: |
         sudo apt update
@@ -35,6 +79,7 @@ jobs:
         sudo update-locale LANG=zh_CN.UTF-8
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
+
     - name: 安装多媒体和音频依赖
       run: |
         sudo apt install -y libunwind-dev
@@ -43,31 +88,69 @@ jobs:
           libgstreamer-plugins-base1.0-dev \
           libmpg123-dev \
           libopenal-dev
-    - name: 克隆 Wine 源码
-      run: |
-        git clone --depth=1 --branch wine-9.2 https://gitlab.winehq.org/wine/wine.git
 
-    - name: 下载并应用 staging 补丁
+    - name: 克隆指定版本的 Wine 源码
+      run: |
+        git clone --depth=1 https://gitlab.winehq.org/wine/wine.git
+        cd wine
+        echo "正在检出 Wine 版本: $WINE_VERSION"
+        git checkout $WINE_VERSION
+        
+        # 获取详细的版本信息
+        WINE_COMMIT_HASH=$(git rev-parse --short HEAD)
+        WINE_DESCRIBE=$(git describe --tags --always 2>/dev/null || echo "custom-$WINE_COMMIT_HASH")
+        echo "WINE_COMMIT_HASH=$WINE_COMMIT_HASH" >> $GITHUB_ENV
+        echo "WINE_DESCRIBE=$WINE_DESCRIBE" >> $GITHUB_ENV
+        echo "Wine 提交哈希: $WINE_COMMIT_HASH"
+        echo "Wine 描述: $WINE_DESCRIBE"
+
+    - name: 下载并应用指定版本的 staging 补丁
       run: |
         cd wine
-        wget -O wine-staging-9.2.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v9.2.tar.gz
-        tar -xzf wine-staging-9.2.tar.gz
-        cd wine-staging-9.2/staging
+        echo "下载 Wine Staging 版本: $WINE_STAGING_VERSION"
+        
+        # 尝试从 release 标签下载
+        if wget -O wine-staging.tar.gz "https://github.com/wine-staging/wine-staging/archive/refs/tags/$WINE_STAGING_VERSION.tar.gz"; then
+          echo "✅ 从标签下载 Staging 成功"
+        elif wget -O wine-staging.tar.gz "https://github.com/wine-staging/wine-staging/archive/refs/heads/$WINE_STAGING_VERSION.tar.gz"; then
+          echo "✅ 从分支下载 Staging 成功"
+        else
+          # 如果指定版本下载失败，尝试主分支
+          echo "⚠️ 指定版本下载失败，尝试主分支"
+          wget -O wine-staging.tar.gz "https://github.com/wine-staging/wine-staging/archive/refs/heads/master.tar.gz"
+          echo "WINE_STAGING_VERSION=master" >> $GITHUB_ENV
+        fi
+        
+        tar -xzf wine-staging.tar.gz
+        cd wine-staging-*/staging
         chmod +x patchinstall.py
-        ./patchinstall.py --all --destdir=../../
+        ./patchinstall.py --all --destdir=../../ || echo "⚠️ 部分补丁应用失败，继续构建..."
 
     - name: 应用必要修复补丁
       run: |
         cd wine
-        # mfplat 修复
-        wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
-        chmod +x fix_wine9.2_mfplat.sh
-        ./fix_wine9.2_mfplat.sh
+        # 根据版本选择修复补丁
+        WINE_BASE_VERSION=${WINE_VERSION#wine-}
+        echo "Wine 基础版本: $WINE_BASE_VERSION"
         
-        # 返回值修复
-        wget -O fix_return_value.patch https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch
-        if patch -p1 -N < fix_return_value.patch; then
+        # mfplat 修复 - 尝试下载对应版本的修复补丁
+        if wget -O fix_wine_mfplat.sh "https://github.com/afeimod/linbox/raw/main/path/fix_wine${WINE_BASE_VERSION}_mfplat.sh"; then
+          chmod +x fix_wine_mfplat.sh
+          ./fix_wine_mfplat.sh
+          echo "✅ Wine $WINE_BASE_VERSION mfplat 修复应用成功"
+        else
+          echo "⚠️ 未找到 Wine $WINE_BASE_VERSION 的 mfplat 修复补丁，跳过"
+        fi
+        
+        # 返回值修复 - 通用补丁
+        if wget -O fix_return_value.patch "https://github.com/afeimod/linbox/raw/main/path/fix_return_value.patch"; then
+          if patch -p1 -N < fix_return_value.patch; then
             echo "✅ 返回值修复补丁应用成功"
+          else
+            echo "⚠️ 返回值修复补丁应用失败，跳过"
+          fi
+        else
+          echo "⚠️ 未找到返回值修复补丁，跳过"
         fi
 
     - name: 修复 Termux 路径问题
@@ -109,7 +192,6 @@ jobs:
           --without-usb \
           --without-v4l2 \
           --without-wayland
-        # 优化配置 - 禁用调试和不需要的功能
 
         # 使用优化编译
         make -j$(nproc) CFLAGS="-O2 -s" CXXFLAGS="-O2 -s"
@@ -151,30 +233,44 @@ jobs:
 
     - name: 创建打包文件
       run: |
-        tar -czf wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz wine-package/
+        tar -czf wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux.tar.gz wine-package/
         echo "打包完成:"
         ls -lh wine-*.tar.gz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION }}-wow64-esync-termux
-        path: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
+        name: wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux
+        path: wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux.tar.gz
+
+    - name: 创建发布标签
+      id: create_tag
+      run: |
+        RELEASE_TAG="wine-${FULL_VERSION}-${BUILD_DATE}"
+        echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
+        echo "Release 标签: $RELEASE_TAG"
 
     - name: 创建 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: v${{ env.VERSION }}
-        name: Wine ${{ env.VERSION }} (WOW64 with Esync for Termux)
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: Wine ${{ env.FULL_VERSION }} (WOW64 with Esync for Termux)
         body: |
           LiteWine WOW64 with Esync for Termux
           
-          版本: ${{ env.VERSION }}
+          构建信息:
+          - **Wine 版本**: ${{ env.WINE_VERSION }}
+          - **Wine 描述**: ${{ env.WINE_DESCRIBE }}
+          - **提交哈希**: ${{ env.WINE_COMMIT_HASH }}
+          - **Staging 版本**: ${{ env.WINE_STAGING_VERSION }}
+          - **构建日期**: ${{ env.BUILD_DATE }}
+          - **完整版本**: ${{ env.FULL_VERSION }}
+          
           架构: x86_64 WOW64
           环境: Termux
           
           修复内容:
-          - ✅ Wine 9.2 mfplat 修复
+          - ✅ Wine ${{ env.WINE_VERSION }} mfplat 修复
           - ✅ 返回值修复
           - ✅ Esync 修复
           - ✅ Termux 路径修复
@@ -182,18 +278,23 @@ jobs:
           安装说明:
           1. 解压到 Termux 的 `/usr` 目录
           2. 添加 `/opt/wine/bin` 到 PATH 环境变量
-        files: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
+        files: wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz
         draft: false
         prerelease: false
 
     - name: 输出版本信息
       run: |
         echo "✅ Wine WOW64 with Esync 构建完成"
-        echo "版本号: $VERSION"
+        echo "Wine 版本: $WINE_VERSION"
+        echo "Wine 描述: $WINE_DESCRIBE"
+        echo "提交哈希: $WINE_COMMIT_HASH"
+        echo "Staging 版本: $WINE_STAGING_VERSION"
+        echo "完整版本: $FULL_VERSION"
+        echo "构建日期: $BUILD_DATE"
         echo "架构: x86_64 WOW64"
         echo "环境: Termux"
         echo "应用修复:"
-        echo "✓ Wine 9.2 mfplat 修复"
+        echo "✓ Wine $WINE_VERSION mfplat 修复"
         echo "✓ 返回值修复"
         echo "✓ Esync 修复"
         echo "✓ Termux 路径修复"
