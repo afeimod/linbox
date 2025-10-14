@@ -63,14 +63,14 @@ jobs:
         # 如果指定了分支，先切换到分支
         if [ -n "$MESA_BRANCH" ]; then
           echo "切换到分支: $MESA_BRANCH"
-          git checkout $MESA_BRANCH
+          git checkout mesa-$MESA_BRANCH
           # 拉取最新更改
-          git pull origin $MESA_BRANCH
+          git pull origin mesa-$MESA_BRANCH
         fi
         
         # 检出版本
         echo "正在检出 Mesa 版本: $MESA_VERSION"
-        git checkout $MESA_VERSION
+        git checkout mesa-$MESA_VERSION
         
         # 获取详细的版本信息
         MESA_COMMIT_HASH=$(git rev-parse --short HEAD)
