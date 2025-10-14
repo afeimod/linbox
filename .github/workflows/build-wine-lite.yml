@@ -210,6 +210,14 @@ jobs:
           --enable-win64 \
           --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install \
+          --with-x \
+          --with-vulkan \
+          --with-cups \
+          --with-freetype \
+          --with-fontconfig \
+          --with-gstreamer \
+          --with-gettext \
+          --enable-nls \
           --disable-winemenubuilder \
           --disable-win16 \
           --disable-tests \
@@ -254,20 +262,29 @@ jobs:
 
     - name: 创建打包文件
       run: |
-        tar -czf wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux.tar.gz wine-package/
+        tar -czf wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz wine-package/
         echo "打包完成:"
         ls -lh wine-*.tar.gz
+
+    - name: 检查打包文件是否存在
+      run: |
+        echo "检查打包文件:"
+        ls -la wine-*.tar.gz
+        if [ ! -f "wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz" ]; then
+          echo "错误：打包文件不存在！"
+          exit 1
+        fi
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux
-        path: wine-${FULL_VERSION}-${BUILD_DATE}-wow64-esync-termux.tar.gz
+        name: wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux
+        path: wine-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}-wow64-esync-termux.tar.gz
 
     - name: 创建发布标签
       id: create_tag
       run: |
-        RELEASE_TAG="wine-${WINE_VERSION}-${FULL_VERSION}-${BUILD_DATE}"
+        RELEASE_TAG="wine-${{ env.WINE_VERSION }}-${{ env.FULL_VERSION }}-${{ env.BUILD_DATE }}"
         echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
         echo "Release 标签: $RELEASE_TAG"
 
@@ -306,16 +323,16 @@ jobs:
     - name: 输出版本信息
       run: |
         echo "✅ Wine WOW64 with Esync 构建完成"
-        echo "Wine 版本: $WINE_VERSION"
-        echo "Wine 描述: $WINE_DESCRIBE"
-        echo "提交哈希: $WINE_COMMIT_HASH"
-        echo "Staging 版本: $WINE_STAGING_VERSION"
-        echo "完整版本: $FULL_VERSION"
-        echo "构建日期: $BUILD_DATE"
+        echo "Wine 版本: ${{ env.WINE_VERSION }}"
+        echo "Wine 描述: ${{ env.WINE_DESCRIBE }}"
+        echo "提交哈希: ${{ env.WINE_COMMIT_HASH }}"
+        echo "Staging 版本: ${{ env.WINE_STAGING_VERSION }}"
+        echo "完整版本: ${{ env.FULL_VERSION }}"
+        echo "构建日期: ${{ env.BUILD_DATE }}"
         echo "架构: x86_64 WOW64"
         echo "环境: Termux"
         echo "应用修复:"
-        echo "✓ Wine $WINE_VERSION mfplat 修复"
+        echo "✓ Wine ${{ env.WINE_VERSION }} mfplat 修复"
         echo "✓ 返回值修复"
         echo "✓ Esync 修复"
         echo "✓ Termux 路径修复"
