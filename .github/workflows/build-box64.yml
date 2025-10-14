@@ -70,6 +70,12 @@ jobs:
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
         echo "BRANCH_OR_TAG=$BRANCH_OR_TAG" >> $GITHUB_ENV
         
+        # 同时设置为步骤输出，供后续步骤使用
+        echo "BOX64_VERSION=$BOX64_VERSION" >> $GITHUB_OUTPUT
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        echo "BRANCH_OR_TAG=$BRANCH_OR_TAG" >> $GITHUB_OUTPUT
+        
         echo "版本: $BOX64_VERSION"
         echo "日期: $BUILD_DATE"
         echo "提交: $COMMIT_HASH"
@@ -86,6 +92,7 @@ jobs:
           -DARM64=ON \
           -DNOLOADAD=ON \
           -DBAD_SIGN=ON \
+          -DSD845=ON \
           -DSAVE_MEM=ON \
           -DSD8G2=ON
 
@@ -104,8 +111,8 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: box64-${BOX64_VERSION}-${BUILD_DATE}
-        path: box64/build/box64-${BOX64_VERSION}-${BUILD_DATE}.tar.xz
+        name: box64-${{ env.BOX64_VERSION }}-${{ env.BUILD_DATE }}
+        path: box64/build/box64-${{ env.BOX64_VERSION }}-${{ env.BUILD_DATE }}.tar.xz
 
     - name: 创建 Release 标签
       id: create_tag
