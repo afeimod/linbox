@@ -91,7 +91,7 @@ jobs:
 
     - name: 克隆指定版本的 Wine 源码
       run: |
-        git clone --depth=1 https://gitlab.winehq.org/wine/wine.git
+        git clone https://gitlab.winehq.org/wine/wine.git
         cd wine
         echo "正在检出 Wine 版本: $WINE_VERSION"
         git checkout $WINE_VERSION
