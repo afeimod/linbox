@@ -97,6 +97,8 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DBAD_SIGNAL=ON \
                 -DARM64=ON \
+                -DSD845=ON \
+                -DSD8G2=ON \
                 -DNOLOADADDR=ON
 
         make -j4
