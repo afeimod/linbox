@@ -1,15 +1,15 @@
-# build-box64.yml
 name: Build Box64 (aarch64)
 
 on:
-  workflow_dispatch:  # 只保留手动触发
+  workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     steps:
     - name: 检出源码
@@ -20,50 +20,60 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           cmake build-essential \
-          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu git tar
+          gcc git patchelf xz-utils
 
     - name: 克隆 Box64
       run: |
         git clone https://github.com/ptitSeb/box64
 
+    - name: 获取版本和日期信息
+      id: version_info
+      run: |
+        cd box64
+        BOX64_VERSION=$(git describe --tags --always)
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BOX64_VERSION=$BOX64_VERSION" >> $GITHUB_ENV
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+        echo "版本: $BOX64_VERSION"
+        echo "日期: $BUILD_DATE"
+
     - name: 构建 Box64 (交叉编译)
       run: |
-        export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc
-
         cd box64
-        sed -i 's|/usr|/data/data/com.termux/files/usr/glibc|g' CMakeLists.txt
-        sed -i 's|/etc|/data/data/com.termux/files/usr/glibc/etc|g' CMakeLists.txt
-
         mkdir build && cd build
         cmake .. \
-          -DCMAKE_INSTALL_PREFIX=$GLIBC_PREFIX \
           -DARM_DYNAREC=ON \
           -DCMAKE_BUILD_TYPE=Release \
           -DARM64=ON \
+          -DNOLOADAD=ON \
+          -DBAD_SIGN=ON \
           -DBOX32=ON \
-          -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          -DSD845=ON \
+          -DSAVE_MEM=ON \
+          -DSD8G2=ON
 
-        make
+        make -j4
+        patchelf --set-interpreter /data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 box64
 
-        # 打包只包含可执行文件
-        tar -czvf ../../termux-glibc-box64.tar.gz box64
+        # 打包只包含可执行文件，使用 xz 压缩
+        tar -cJf ../../box64-${BOX64_VERSION}-${BUILD_DATE}.tar.xz box64
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: termux-glibc-box64
-        path: termux-glibc-box64.tar.gz
+        name: box64-${BOX64_VERSION}-${BUILD_DATE}
+        path: box64-${BOX64_VERSION}-${BUILD_DATE}.tar.xz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ github.ref_name }}
-        name: Box64 (aarch64, Termux glibc)
-        files: termux-glibc-box64.tar.gz
+        tag_name: ${{ env.BOX64_VERSION }}
+        name: Box64 ${{ env.BOX64_VERSION }} (aarch64, Termux glibc)
+        files: box64-${{ env.BOX64_VERSION }}-${{ env.BUILD_DATE }}.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出完成信息
       run: |
         echo "✅ Box64 构建完成并发布 Release"
+        echo "文件名: box64-$BOX64_VERSION-$BUILD_DATE.tar.xz"
