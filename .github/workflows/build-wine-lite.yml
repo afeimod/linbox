@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  VERSION: "9.2-lite"
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -37,7 +40,9 @@ jobs:
         sudo apt install -y libunwind-dev
         sudo apt install -y \
           libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev
     - name: 克隆 Wine 源码
       run: |
         git clone --depth=1 --branch wine-9.2 https://gitlab.winehq.org/wine/wine.git
@@ -156,14 +161,30 @@ jobs:
         name: wine-${{ env.VERSION }}-wow64-esync-termux
         path: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
 
-    - name: 发布到 GitHub Release
+    - name: 创建 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ env.VERSION }}
+        tag_name: v${{ env.VERSION }}
         name: Wine ${{ env.VERSION }} (WOW64 with Esync for Termux)
+        body: |
+          LiteWine WOW64 with Esync for Termux
+          
+          版本: ${{ env.VERSION }}
+          架构: x86_64 WOW64
+          环境: Termux
+          
+          修复内容:
+          - ✅ Wine 9.2 mfplat 修复
+          - ✅ 返回值修复
+          - ✅ Esync 修复
+          - ✅ Termux 路径修复
+          
+          安装说明:
+          1. 解压到 Termux 的 `/usr` 目录
+          2. 添加 `/opt/wine/bin` 到 PATH 环境变量
         files: wine-${{ env.VERSION }}-wow64-esync-termux.tar.gz
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        draft: false
+        prerelease: false
 
     - name: 输出版本信息
       run: |
