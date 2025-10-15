@@ -25,19 +25,21 @@ jobs:
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
 
-    - name: 创建 bootstraps（替代下载）
+    - name: 检出仓库
+      uses: actions/checkout@v4
+      with:
+        path: repo
+
+    - name: 创建 bootstraps
       run: |
+        cd repo
         sudo apt update
         sudo apt install -y debootstrap perl
-        mkdir -p /opt/chroots
-        
-        # 创建 64 位 bootstrap
-        sudo debootstrap --arch=amd64 jammy /opt/chroots/bionic64_chroot http://archive.ubuntu.com/ubuntu/
-        
-        # 创建 32 位 bootstrap  
-        sudo debootstrap --arch=i386 jammy /opt/chroots/bionic32_chroot http://archive.ubuntu.com/ubuntu/
-        
-        echo "Bootstraps 创建完成"
+        chmod +x create_ubuntu_bootstraps.sh
+        sudo ./create_ubuntu_bootstraps.sh
+        cd /opt
+        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroots
+        sha256sum bootstraps.tar.xz
 
     - name: 安装构建依赖
       run: |
@@ -235,6 +237,10 @@ jobs:
         export EXPERIMENTAL_WOW64="true"
         export USE_CCACHE="false"
         export BUILD_DIR="$HOME/build_wine"
+        
+        # 设置 bootstraps 路径
+        export BOOTSTRAP_X64=/opt/chroots/bionic64_chroot
+        export BOOTSTRAP_X32=/opt/chroots/bionic32_chroot
         
         # 设置自定义构建选项
         export WINE_BUILD_OPTIONS="--enable-win64 --enable-archs=i386,x86_64 --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gstreamer --with-gettext --enable-nls --without-dbus --without-sane --without-pcap --without-pcsclite --disable-winemenubuilder --disable-win16 --disable-debug --disable-tests --without-piper --without-xinerama --without-cups --without-capi --without-coreaudio --without-gphoto --without-osmesa --without-oss --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland"
