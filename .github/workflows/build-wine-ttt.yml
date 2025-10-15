@@ -30,22 +30,6 @@ jobs:
         sudo apt update
         sudo apt install -y debootstrap perl git wget xz-utils bubblewrap autoconf
 
-    - name: 创建 bootstraps
-      run: |
-        # 创建 bootstraps 目录
-        sudo mkdir -p /opt/chroots
-        
-        # 创建 64 位 bootstrap (Ubuntu 20.04 focal)
-        echo "创建 64 位 bootstrap..."
-        sudo debootstrap --arch=amd64 focal /opt/chroots/bionic64_chroot http://archive.ubuntu.com/ubuntu/
-        
-        # 创建 32 位 bootstrap
-        echo "创建 32 位 bootstrap..."
-        sudo debootstrap --arch=i386 focal /opt/chroots/bionic32_chroot http://archive.ubuntu.com/ubuntu/
-        
-        echo "Bootstraps 创建完成"
-        ls -la /opt/chroots/
-
     - name: 安装构建依赖
       run: |
         sudo apt update
