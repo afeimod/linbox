@@ -147,7 +147,7 @@ jobs:
         echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
         
         # 判断版本是否 >= 9.10
-        if [ $VERSION_MAJOR -gt 9 ] || [ $VERSION_MAJOR -eq 9 -a $VERSION_MINOR -ge 10 ]; then
+        if [ $VERSION_MAJOR -gt 9 ] || [ $VERSION_MAJOR -eq 9 -a $VERSION_MINOR -ge 30 ]; then
             echo "使用 9.10+ 版本的修复方式 (wine_do_not_create_dxgi_manager2.patch)"
             echo "PATCH_TYPE=wine_do_not_create_dxgi_manager2" >> $GITHUB_ENV
         else
