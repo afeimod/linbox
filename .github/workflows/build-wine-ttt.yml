@@ -25,21 +25,13 @@ jobs:
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
 
-    - name: 检出仓库
-      uses: actions/checkout@v4
+    - name: 下载 bootstraps
+      uses: dawidd6/action-download-artifact@v3
       with:
-        path: repo
-
-    - name: 创建 bootstraps
-      run: |
-        cd repo
-        sudo apt update
-        sudo apt install -y debootstrap perl
-        chmod +x create_ubuntu_bootstraps.sh
-        sudo ./create_ubuntu_bootstraps.sh
-        cd /opt
-        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroots
-        sha256sum bootstraps.tar.xz
+        workflow: bootstraps.yml
+        repo: ${{ github.repository }}
+        workflow_conclusion: success
+        path: /opt
 
     - name: 安装构建依赖
       run: |
@@ -112,6 +104,13 @@ jobs:
         sudo update-locale LANG=zh_CN.UTF-8
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
+
+    - name: 解压 bootstraps
+      run: |
+        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
+        echo "Bootstraps 解压完成"
+        echo "检查 bootstraps 是否存在:"
+        ls -la /opt/chroots/
 
     - name: 克隆 Wine 源码
       run: |
