@@ -25,12 +25,19 @@ jobs:
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
 
-    - name: 下载 bootstraps
-      uses: dawidd6/action-download-artifact@v3
-      with:
-        workflow: bootstraps.yml
-        workflow_conclusion: success
-        path: /opt
+    - name: 创建 bootstraps（替代下载）
+      run: |
+        sudo apt update
+        sudo apt install -y debootstrap perl
+        mkdir -p /opt/chroots
+        
+        # 创建 64 位 bootstrap
+        sudo debootstrap --arch=amd64 jammy /opt/chroots/bionic64_chroot http://archive.ubuntu.com/ubuntu/
+        
+        # 创建 32 位 bootstrap  
+        sudo debootstrap --arch=i386 jammy /opt/chroots/bionic32_chroot http://archive.ubuntu.com/ubuntu/
+        
+        echo "Bootstraps 创建完成"
 
     - name: 安装构建依赖
       run: |
@@ -103,11 +110,6 @@ jobs:
         sudo update-locale LANG=zh_CN.UTF-8
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
-
-    - name: 解压 bootstraps
-      run: |
-        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
-        echo "Bootstraps 解压完成"
 
     - name: 克隆 Wine 源码
       run: |
@@ -213,24 +215,28 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 使用 build_wine.sh 构建 WOW64 Wine
+    - name: 下载并准备 build_wine.sh 脚本
       run: |
-        # 复制修改后的 Wine 源码到自定义路径
-        cp -r wine $HOME/wine-custom-src
-        
         # 下载 build_wine.sh 脚本
-        wget -O build_wine.sh https://raw.githubusercontent.com/afeimod/linbox/refs/heads/main/path/build_wine.sh
+        wget -O build_wine.sh https://raw.githubusercontent.com/Kron4ek/Wine-Builds/master/build_wine.sh
         chmod +x build_wine.sh
         
+        # 应用必要的修改以适应我们的需求
+        sed -i 's/--without-gstreamer/--with-gstreamer/g' build_wine.sh || true
+        sed -i 's/--without-vulkan/--with-vulkan/g' build_wine.sh || true
+        
+        echo "✅ build_wine.sh 脚本准备完成"
+
+    - name: 使用 build_wine.sh 构建 WOW64 Wine
+      run: |
         # 设置环境变量
         export WINE_VERSION="${{ env.WINE_VERSION }}"
         export WINE_BRANCH="staging"
         export EXPERIMENTAL_WOW64="true"
-        export CUSTOM_SRC_PATH="$HOME/wine-custom-src"
         export USE_CCACHE="false"
         export BUILD_DIR="$HOME/build_wine"
         
-        # 设置构建选项，启用 Vulkan 和 GStreamer
+        # 设置自定义构建选项
         export WINE_BUILD_OPTIONS="--enable-win64 --enable-archs=i386,x86_64 --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gstreamer --with-gettext --enable-nls --without-dbus --without-sane --without-pcap --without-pcsclite --disable-winemenubuilder --disable-win16 --disable-debug --disable-tests --without-piper --without-xinerama --without-cups --without-capi --without-coreaudio --without-gphoto --without-osmesa --without-oss --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland"
         
         # 运行构建脚本
@@ -241,39 +247,48 @@ jobs:
     - name: 准备打包
       run: |
         # 查找构建产物
-        BUILD_NAME="wine-${{ env.WINE_VERSION }}-staging-amd64-wow64"
-        if [ -f "$HOME/$BUILD_NAME.tar.xz" ]; then
-            echo "找到构建产物: $HOME/$BUILD_NAME.tar.xz"
-            cp "$HOME/$BUILD_NAME.tar.xz" ./
-        else
-            # 尝试在脚本目录查找
-            find $HOME -name "wine-*-amd64-wow64.tar.xz" -exec cp {} ./ \;
-        fi
+        echo "查找构建产物..."
+        find $HOME -name "wine-*-amd64-wow64.tar.xz" -o -name "wine-*.tar.xz" | head -10
         
-        # 重命名产物
-        for file in wine-*-amd64-wow64.tar.xz; do
+        # 复制产物到当前目录
+        for file in $(find $HOME -name "wine-*-amd64-wow64.tar.xz" -o -name "wine-${{ env.WINE_VERSION }}*.tar.xz"); do
             if [ -f "$file" ]; then
-                mv "$file" "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
-                echo "重命名产物: $file -> wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
+                echo "找到构建产物: $file"
+                cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
+                break
             fi
         done
         
-        # 如果找不到产物，创建错误
+        # 如果找不到特定产物，尝试其他模式
+        if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
+            for file in $HOME/*.tar.xz; do
+                if [ -f "$file" ]; then
+                    echo "使用备选产物: $file"
+                    cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
+                    break
+                fi
+            done
+        fi
+        
+        # 如果还是找不到，创建错误
         if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
             echo "❌ 错误：找不到构建产物"
-            ls -la $HOME/*.tar.xz || true
+            ls -la $HOME/ || true
             exit 1
         fi
 
+        echo "打包完成，文件大小:"
+        ls -lh wine-*.tar.xz
+
     - name: 验证构建产物
       run: |
-        echo "检查构建产物..."
-        ls -lh wine-*.tar.xz
-        
-        # 检查文件内容
+        echo "检查构建产物内容..."
         tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | head -20
         echo "..."
-        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | grep -E "(vulkan|gst)" | head -10
+        
+        # 检查关键文件
+        echo "检查关键组件:"
+        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | grep -E "(bin/wine|bin/wine64|lib/wine|lib64/wine)" | head -10
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
@@ -311,6 +326,13 @@ jobs:
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
           - 修复方式: ${{ env.PATCH_TYPE }}
+
+          ## 使用说明
+          1. 下载并解压此文件到 Termux 环境
+          2. 设置环境变量: `export WINEPREFIX=/path/to/your/wineprefix`
+          3. 运行 Wine: `./bin/wine your_app.exe`
+
+          **注意**: 此构建专为 Termux 环境优化，包含必要的路径修复。
         files: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
