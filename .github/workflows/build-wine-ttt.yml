@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: 设置版本变量
@@ -24,6 +24,13 @@ jobs:
         echo "STAGING_VERSION=v${{ github.event.inputs.wine_version }}"
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
+
+    - name: 下载 bootstraps
+      uses: dawidd6/action-download-artifact@v3
+      with:
+        workflow: bootstraps.yml
+        workflow_conclusion: success
+        path: /opt
 
     - name: 安装构建依赖
       run: |
@@ -97,22 +104,46 @@ jobs:
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
 
-    - name: 检查工作目录
+    - name: 解压 bootstraps
       run: |
-        echo "当前工作目录: $(pwd)"
-        ls -la
-        echo "构建版本: ${{ env.WINE_VERSION }}"
-          
+        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
+        echo "Bootstraps 解压完成"
+
     - name: 克隆 Wine 源码
       run: |
-        git clone https://github.com/Kron4ek/wine-tkg.git
-        cd wine-tkg
-        git checkout ${{ env.WINE_VERSION }}
-     
+        git clone https://gitlab.winehq.org/wine/wine.git
+        cd wine
+        git checkout wine-${{ env.WINE_VERSION }}
+        
+    - name: 下载并应用 staging 补丁
+      run: |
+        cd wine
+        # 下载 staging 补丁集
+        wget -O wine-staging-${{ env.WINE_VERSION }}.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v${{ env.WINE_VERSION }}.tar.gz
+        tar -xzf wine-staging-${{ env.WINE_VERSION }}.tar.gz
+    
+        # 应用 staging 补丁 - 使用正确的路径
+        cd wine-staging-${{ env.WINE_VERSION }}/staging
+        chmod +x patchinstall.py
+    
+        # 应用所有补丁到 Wine 源码目录（上级的上级目录）
+        ./patchinstall.py --all --destdir=../../
+    
+        echo "✅ Staging 补丁应用完成"
+
+    - name: 验证 staging 补丁应用
+      run: |
+        cd wine
+        echo "检查 staging 补丁应用情况..."
+        if [ -f "dlls/ntdll/unix/esync.c" ]; then
+            echo "✅ esync 支持已通过 staging 补丁添加"
+        else
+            echo "❌ esync 支持未找到"
+        fi
 
     - name: 根据版本选择修复方式
       run: |
-        cd wine-tkg
+        cd wine
         
         # 解析版本号进行比较
         VERSION_MAJOR=$(echo ${{ env.WINE_VERSION }} | cut -d. -f1)
@@ -133,7 +164,7 @@ jobs:
     - name: 应用 9.10 以下版本修复
       if: env.PATCH_TYPE == 'fix_wine9_2_mfplat'
       run: |
-        cd wine-tkg
+        cd wine
         echo "下载并应用 fix_wine9.2_mfplat.sh..."
         wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
         chmod +x fix_wine9.2_mfplat.sh
@@ -143,7 +174,7 @@ jobs:
     - name: 应用 9.10 及以上版本修复
       if: env.PATCH_TYPE == 'wine_do_not_create_dxgi_manager2'
       run: |
-        cd wine-tkg
+        cd wine
         echo "下载并应用 wine_do_not_create_dxgi_manager2.patch..."
         wget https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
         
@@ -165,7 +196,7 @@ jobs:
 
     - name: 彻底修复 Termux 路径问题
       run: |
-        cd wine-tkg
+        cd wine
         
         echo "彻底修复 Termux 路径问题..."
         
@@ -182,117 +213,73 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
+    - name: 使用 build_wine.sh 构建 WOW64 Wine
       run: |
-        cd wine-tkg
-        mkdir -p /tmp/wine-install
-        sudo chmod 777 -R /tmp/wine-install
-
-        # 创建构建目录
-        mkdir -p build-wow64
-        cd build-wow64
-
-        # 配置真正的 WOW64 Wine，启用 Vulkan 和完整 GStreamer 支持
-        ../configure \
-          --enable-win64 \
-          --enable-archs=i386,x86_64 \
-          --prefix=/tmp/wine-install \
-          --with-x \
-          --with-vulkan \
-          --with-alsa \
-          --with-pulse \
-          --with-freetype \
-          --with-fontconfig \
-          --with-gstreamer \
-          --with-gettext \
-          --enable-nls \
-          --without-dbus \
-          --without-sane \
-          --without-pcap \
-          --without-pcsclite \
-          --disable-winemenubuilder \
-          --disable-win16 \
-          --disable-debug \
-          --disable-tests \
-          --without-piper \
-          --without-xinerama \
-          --without-cups \
-          --without-capi \
-          --without-coreaudio \
-          --without-gphoto \
-          --without-osmesa \
-          --without-oss \
-          --without-udev \
-          --without-unwind \
-          --without-usb \
-          --without-v4l2 \
-          --without-wayland
-
-        # 构建真正的 WOW64 Wine
-        echo "开始构建支持 Vulkan 和完整 GStreamer 的 WOW64 Wine..."
-        make -j$(nproc)
-
-    - name: 安装 Wine 并获取版本信息
-      run: |
-        cd wine-tkg/build-wow64
-        # 安装 WOW64 Wine
-        make install
-
-        # 使用输入版本号
-        VERSION="${{ env.WINE_VERSION }}"
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
-
-    - name: 验证 Vulkan 和 GStreamer 支持
-      run: |
-        echo "检查 Vulkan 支持..."
-        if [ -f "/tmp/wine-install/bin/wine" ]; then
-          echo "Wine 二进制文件存在"
-        else
-          echo "错误: Wine 二进制文件不存在"
-          exit 1
-        fi
+        # 复制修改后的 Wine 源码到自定义路径
+        cp -r wine $HOME/wine-custom-src
         
-        echo "检查 Vulkan 相关文件..."
-        find /tmp/wine-install -name "*vulkan*" | head -10
-        echo ""
-        echo "检查 winevulkan.dll..."
-        find /tmp/wine-install -name "winevulkan.dll*" | head -5
-        echo ""
-        echo "检查 GStreamer 支持..."
-        find /tmp/wine-install -name "*gst*" | head -10
+        # 下载 build_wine.sh 脚本
+        wget -O build_wine.sh https://raw.githubusercontent.com/afeimod/linbox/refs/heads/main/path/build_wine.sh
+        chmod +x build_wine.sh
+        
+        # 设置环境变量
+        export WINE_VERSION="${{ env.WINE_VERSION }}"
+        export WINE_BRANCH="staging"
+        export EXPERIMENTAL_WOW64="true"
+        export CUSTOM_SRC_PATH="$HOME/wine-custom-src"
+        export USE_CCACHE="false"
+        export BUILD_DIR="$HOME/build_wine"
+        
+        # 设置构建选项，启用 Vulkan 和 GStreamer
+        export WINE_BUILD_OPTIONS="--enable-win64 --enable-archs=i386,x86_64 --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gstreamer --with-gettext --enable-nls --without-dbus --without-sane --without-pcap --without-pcsclite --disable-winemenubuilder --disable-win16 --disable-debug --disable-tests --without-piper --without-xinerama --without-cups --without-capi --without-coreaudio --without-gphoto --without-osmesa --without-oss --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland"
+        
+        # 运行构建脚本
+        ./build_wine.sh
+        
+        echo "✅ WOW64 Wine 构建完成"
 
     - name: 准备打包
       run: |
-        # 创建打包目录
-        mkdir -p wine-package/opt/wine
+        # 查找构建产物
+        BUILD_NAME="wine-${{ env.WINE_VERSION }}-staging-amd64-wow64"
+        if [ -f "$HOME/$BUILD_NAME.tar.xz" ]; then
+            echo "找到构建产物: $HOME/$BUILD_NAME.tar.xz"
+            cp "$HOME/$BUILD_NAME.tar.xz" ./
+        else
+            # 尝试在脚本目录查找
+            find $HOME -name "wine-*-amd64-wow64.tar.xz" -exec cp {} ./ \;
+        fi
         
-        # 复制 Wine 安装文件
-        echo "复制 Wine 文件..."
-        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        # 重命名产物
+        for file in wine-*-amd64-wow64.tar.xz; do
+            if [ -f "$file" ]; then
+                mv "$file" "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
+                echo "重命名产物: $file -> wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
+            fi
+        done
+        
+        # 如果找不到产物，创建错误
+        if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
+            echo "❌ 错误：找不到构建产物"
+            ls -la $HOME/*.tar.xz || true
+            exit 1
+        fi
 
-    - name: 创建打包文件
+    - name: 验证构建产物
       run: |
-        echo "最终文件结构:"
-        find wine-package -type f | sort
-        echo ""
-        echo "检查 Vulkan 相关文件:"
-        find wine-package -name "*vulkan*" | sort
-        echo ""
-        echo "检查 GStreamer 相关文件:"
-        find wine-package -name "*gst*" | sort
+        echo "检查构建产物..."
+        ls -lh wine-*.tar.xz
         
-        # 打包
-        tar -czf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz wine-package/
-        
-        echo "打包完成:"
-        ls -lh wine-*.tar.gz
+        # 检查文件内容
+        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | head -20
+        echo "..."
+        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | grep -E "(vulkan|gst)" | head -10
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
         name: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux
-        path: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+        path: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
@@ -308,6 +295,7 @@ jobs:
           - **平台**: Termux (Android)
           - **图形 API**: Vulkan 支持已启用
           - **多媒体**: 完整 GStreamer 支持（包含 FFmpeg 插件）
+          - **构建方式**: 基于 wine-exp-wow64 的改进构建
           
           ## 特性
           ✓ 真正的 WOW64 架构
@@ -316,12 +304,14 @@ jobs:
           ✓ 完整的 GStreamer 支持
           ✓ 中文环境支持
           ✓ 应用了关键补丁提升兼容性
+          ✓ 修复了 Termux 路径问题
 
           ## 构建信息
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+          - 修复方式: ${{ env.PATCH_TYPE }}
+        files: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -334,6 +324,7 @@ jobs:
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持"
         echo "修复方式: ${{ env.PATCH_TYPE }}"
+        echo "构建方式: 基于 wine-exp-wow64 改进"
         echo ""
         echo "修复的问题:"
         echo "✓ 无法运行 EXE 文件"
@@ -341,3 +332,5 @@ jobs:
         echo "✓ Vulkan 支持"
         echo "✓ 完整的 GStreamer 支持"
         echo "✓ 应用了关键补丁，提升兼容性"
+        echo "✓ Termux 路径问题修复"
+        echo "✓ 使用改进的 WOW64 构建方式"
