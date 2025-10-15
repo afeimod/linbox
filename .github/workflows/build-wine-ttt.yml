@@ -117,7 +117,7 @@ jobs:
         tar -xzf wine-staging-${{ env.WINE_VERSION }}.tar.gz
     
         # 应用 staging 补丁 - 使用正确的路径
-        cd wine-tkg-staging-${{ env.WINE_VERSION }}/staging
+        cd wine-staging-${{ env.WINE_VERSION }}/staging
         chmod +x patchinstall.py
     
         # 应用所有补丁到 Wine 源码目录（上级的上级目录）
