@@ -108,32 +108,7 @@ jobs:
         git clone https://github.com/Kron4ek/wine-tkg.git
         cd wine-tkg
         git checkout ${{ env.WINE_VERSION }}
-        
-    - name: 下载并应用 staging 补丁
-      run: |
-        cd wine-tkg
-        # 下载 staging 补丁集
-        wget -O wine-staging-${{ env.WINE_VERSION }}.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v${{ env.WINE_VERSION }}.tar.gz
-        tar -xzf wine-staging-${{ env.WINE_VERSION }}.tar.gz
-    
-        # 应用 staging 补丁 - 使用正确的路径
-        cd wine-staging-${{ env.WINE_VERSION }}/staging
-        chmod +x patchinstall.py
-    
-        # 应用所有补丁到 Wine 源码目录（上级的上级目录）
-        ./patchinstall.py --all --destdir=../../
-    
-        echo "✅ Staging 补丁应用完成"
-
-    - name: 验证 staging 补丁应用
-      run: |
-        cd wine-tkg
-        echo "检查 staging 补丁应用情况..."
-        if [ -f "dlls/ntdll/unix/esync.c" ]; then
-            echo "✅ esync 支持已通过 staging 补丁添加"
-        else
-            echo "❌ esync 支持未找到"
-        fi
+     
 
     - name: 根据版本选择修复方式
       run: |
