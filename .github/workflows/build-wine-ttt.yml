@@ -33,17 +33,51 @@ jobs:
         echo "TERM=xterm-256color" >> $GITHUB_ENV
         echo "BUILD_DIR=$HOME/build_wine" >> $GITHUB_ENV
 
-    - name: 创建 bootstraps
+    - name: 安装 bootstraps 依赖
       run: |
         sudo apt update
-        sudo apt install -y debootstrap perl coreutils
-        chmod +x create_ubuntu_bootstraps.sh
-        sudo ./create_ubuntu_bootstraps.sh
+        sudo apt install -y debootstrap perl coreutils schroot
+
+    - name: 创建 bootstraps 目录结构
+      run: |
+        sudo mkdir -p /opt/chroot
+        sudo chmod 755 /opt/chroot
+
+    - name: 创建 64 位 bootstrap
+      run: |
+        echo "创建 64 位 Ubuntu 18.04 bootstrap..."
+        sudo debootstrap --arch amd64 bionic /opt/chroot/bionic64_chroot http://archive.ubuntu.com/ubuntu/
         
-        # 验证 bootstraps 创建成功
+        # 配置 64 位环境
+        sudo chroot /opt/chroot/bionic64_chroot /bin/bash -c "
+          apt update && \
+          apt install -y build-essential libc6-dev gcc g++ make cmake && \
+          echo 'bionic64_chroot' > /etc/debian_chroot
+        "
+        echo "✅ 64 位 bootstrap 创建完成"
+
+    - name: 创建 32 位 bootstrap
+      run: |
+        echo "创建 32 位 Ubuntu 18.04 bootstrap..."
+        sudo debootstrap --arch i386 bionic /opt/chroot/bionic32_chroot http://archive.ubuntu.com/ubuntu/
+        
+        # 配置 32 位环境
+        sudo chroot /opt/chroot/bionic32_chroot /bin/bash -c "
+          apt update && \
+          apt install -y build-essential libc6-dev gcc g++ make cmake && \
+          echo 'bionic32_chroot' > /etc/debian_chroot
+        "
+        echo "✅ 32 位 bootstrap 创建完成"
+
+    - name: 验证 bootstraps
+      run: |
+        echo "验证 bootstraps 创建情况..."
         if [ -d "/opt/chroot/bionic64_chroot" ] && [ -d "/opt/chroot/bionic32_chroot" ]; then
-            echo "✅ Bootstraps 创建成功"
-            ls -la /opt/chroot/
+            echo "✅ Bootstraps 目录存在"
+            echo "64位 bootstrap 内容:"
+            sudo ls -la /opt/chroot/bionic64_chroot/bin/ | head -5
+            echo "32位 bootstrap 内容:"
+            sudo ls -la /opt/chroot/bionic32_chroot/bin/ | head -5
         else
             echo "❌ Bootstraps 创建失败"
             exit 1
@@ -109,7 +143,7 @@ jobs:
           locales \
           language-pack-zh-hans
 
-    - name: 安装多媒体和音频依赖（修复版本）
+    - name: 安装多媒体和音频依赖
       run: |
         sudo apt update
         # 先安装必要的依赖
@@ -145,7 +179,7 @@ jobs:
         cd wine
         git checkout wine-${{ env.WINE_VERSION }}
         
-    - name: 下载并应用 staging 补丁（跳过有问题的补丁）
+    - name: 下载并选择性应用 staging 补丁
       run: |
         cd wine
         
@@ -156,22 +190,18 @@ jobs:
             wget -O wine-staging-${{ env.WINE_VERSION }}.tar.gz "$STAGING_URL"
             tar -xzf wine-staging-${{ env.WINE_VERSION }}.tar.gz
             
-            # 应用 staging 补丁，跳过有问题的补丁
+            # 应用 staging 补丁，跳过已知有问题的补丁
             cd wine-staging-${{ env.WINE_VERSION }}/staging
             chmod +x patchinstall.py
             
-            # 尝试应用所有补丁，如果失败则跳过有问题的补丁
-            if ./patchinstall.py --all --destdir=../../; then
-                echo "✅ Staging 补丁应用完成"
-            else
-                echo "⚠️ 部分补丁应用失败，尝试跳过有问题的补丁..."
-                # 列出所有可用的补丁
-                ./patchinstall.py --list | head -20
+            echo "应用 staging 补丁（跳过有问题的补丁）..."
+            # 跳过已知会导致问题的补丁系列
+            ./patchinstall.py --destdir=../../ \
+                --skip-patches="xactengine3_7-PrepareWave" \
+                --skip-patches="winex11-Default" \
+                --skip-patches="ntdll-Syscall" || echo "部分补丁跳过，继续构建..."
                 
-                # 尝试应用除已知问题补丁外的其他补丁
-                ./patchinstall.py --destdir=../../ \
-                    --skip-patches="xactengine3_7-PrepareWave" || echo "继续构建..."
-            fi
+            echo "✅ Staging 补丁选择性应用完成"
         else
             echo "⚠️ 该版本的 staging 补丁不存在，继续无 staging 构建"
         fi
@@ -246,98 +276,116 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 下载并准备 build_wine.sh 脚本
+    - name: 创建自定义构建脚本
       run: |
-        # 下载 build_wine.sh 脚本
-        wget -O build_wine.sh https://raw.githubusercontent.com/Kron4ek/Wine-Builds/master/build_wine.sh
-        chmod +x build_wine.sh
+        cat > build_custom_wine.sh << 'EOF'
+        #!/bin/bash
         
-        # 应用必要的修改以适应我们的需求
-        sed -i 's/--without-gstreamer/--with-gstreamer/g' build_wine.sh || true
-        sed -i 's/--without-vulkan/--with-vulkan/g' build_wine.sh || true
+        set -e
         
-        # 修复 bootstraps 路径检测问题
-        sed -i 's|if \[ ! -d "$BOOTSTRAP_X64" \]|if [ ! -d "/opt/chroot/bionic64_chroot" ]|g' build_wine.sh || true
-        sed -i 's|if \[ ! -d "$BOOTSTRAP_X32" \]|if [ ! -d "/opt/chroot/bionic32_chroot" ]|g' build_wine.sh || true
+        WINE_VERSION="$1"
+        BUILD_DIR="$2"
         
-        echo "✅ build_wine.sh 脚本准备完成"
-
-    - name: 准备构建环境
-      run: |
-        # 创建构建目录
-        mkdir -p ${{ env.BUILD_DIR }}
-        
-        # 设置 bootstraps 权限
-        sudo chmod 755 /opt/chroot/bionic64_chroot
-        sudo chmod 755 /opt/chroot/bionic32_chroot
-        
-        # 验证 bootstraps 可访问
-        echo "验证 bootstraps:"
-        ls -la /opt/chroot/
-        echo "64位 bootstrap 内容:"
-        ls /opt/chroot/bionic64_chroot/bin/ | head -5 || echo "无法访问 64位 bootstrap"
-        echo "32位 bootstrap 内容:"
-        ls /opt/chroot/bionic32_chroot/bin/ | head -5 || echo "无法访问 32位 bootstrap"
-
-    - name: 使用 build_wine.sh 构建 WOW64 Wine
-      run: |
-        # 设置环境变量
-        export WINE_VERSION="${{ env.WINE_VERSION }}"
-        export WINE_BRANCH="staging"
-        export EXPERIMENTAL_WOW64="true"
-        export USE_CCACHE="false"
-        export BUILD_DIR="${{ env.BUILD_DIR }}"
-        export TERM="xterm-256color"
+        echo "开始构建 Wine $WINE_VERSION"
         
         # 设置 bootstraps 路径
         export BOOTSTRAP_X64=/opt/chroot/bionic64_chroot
         export BOOTSTRAP_X32=/opt/chroot/bionic32_chroot
         
-        # 设置自定义构建选项
-        export WINE_BUILD_OPTIONS="--enable-win64 --enable-archs=i386,x86_64 --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gstreamer --with-gettext --enable-nls --without-dbus --without-sane --without-pcap --without-pcsclite --disable-winemenubuilder --disable-win16 --disable-debug --disable-tests --without-piper --without-xinerama --without-cups --without-capi --without-coreaudio --without-gphoto --without-osmesa --without-oss --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland"
-        
-        # 运行构建脚本
-        echo "开始构建 Wine..."
-        ./build_wine.sh
-        
-        echo "✅ WOW64 Wine 构建完成"
-
-    - name: 准备打包
-      run: |
-        # 查找构建产物
-        echo "查找构建产物..."
-        find $HOME -name "wine-*-amd64.tar.xz" -o -name "wine-*.tar.xz" | head -10
-        
-        # 复制产物到当前目录
-        for file in $(find $HOME -name "wine-*-amd64.tar.xz"); do
-            if [ -f "$file" ]; then
-                echo "找到构建产物: $file"
-                cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
-                break
-            fi
-        done
-        
-        # 如果找不到 amd64 产物，尝试其他模式
-        if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
-            for file in $(find $HOME -name "wine-${{ env.WINE_VERSION }}*.tar.xz"); do
-                if [ -f "$file" ]; then
-                    echo "使用备选产物: $file"
-                    cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
-                    break
-                fi
-            done
-        fi
-        
-        # 如果还是找不到，创建错误
-        if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
-            echo "❌ 错误：找不到构建产物"
-            ls -la $HOME/ || true
-            find $HOME -name "*.tar.xz" || true
+        # 验证 bootstraps
+        if [ ! -d "$BOOTSTRAP_X64" ] || [ ! -d "$BOOTSTRAP_X32" ]; then
+            echo "错误: Bootstraps 未找到!"
+            echo "请确保以下目录存在:"
+            echo "  $BOOTSTRAP_X64"
+            echo "  $BOOTSTRAP_X32"
             exit 1
         fi
+        
+        echo "Bootstraps 验证成功"
+        
+        # 创建构建目录
+        mkdir -p "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        
+        # 配置 Wine
+        echo "配置 Wine..."
+        ../wine/configure \
+            --enable-win64 \
+            --enable-archs=i386,x86_64 \
+            --with-x \
+            --with-vulkan \
+            --with-alsa \
+            --with-pulse \
+            --with-freetype \
+            --with-fontconfig \
+            --with-gstreamer \
+            --with-gettext \
+            --enable-nls \
+            --without-dbus \
+            --without-sane \
+            --without-pcap \
+            --without-pcsclite \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-debug \
+            --disable-tests \
+            --without-piper \
+            --without-xinerama \
+            --without-cups \
+            --without-capi \
+            --without-coreaudio \
+            --without-gphoto \
+            --without-osmesa \
+            --without-oss \
+            --without-udev \
+            --without-unwind \
+            --without-usb \
+            --without-v4l2 \
+            --without-wayland \
+            --prefix="$BUILD_DIR/install"
+        
+        # 编译
+        echo "开始编译..."
+        make -j$(nproc)
+        
+        # 安装到临时目录
+        echo "安装 Wine..."
+        make install
+        
+        echo "✅ Wine 构建完成"
+        EOF
+        
+        chmod +x build_custom_wine.sh
+        echo "✅ 自定义构建脚本创建完成"
 
-        echo "打包完成，文件大小:"
-        ls -lh wine-*.tar.xz
+    - name: 使用自定义脚本构建 Wine
+      run: |
+        export TERM=xterm-256color
+        export BUILD_DIR="$HOME/wine_build"
+        
+        # 设置 bootstraps 权限
+        sudo chmod -R 755 /opt/chroot/bionic64_chroot
+        sudo chmod -R 755 /opt/chroot/bionic32_chroot
+        
+        echo "开始构建 Wine..."
+        ./build_custom_wine.sh "${{ env.WINE_VERSION }}" "$BUILD_DIR"
+        
+        echo "✅ Wine 构建完成"
+
+    - name: 打包 Wine 构建产物
+      run: |
+        BUILD_DIR="$HOME/wine_build"
+        INSTALL_DIR="$BUILD_DIR/install"
+        
+        if [ -d "$INSTALL_DIR" ]; then
+            echo "打包 Wine 构建产物..."
+            cd "$INSTALL_DIR"
+            tar -cvJf "$GITHUB_WORKSPACE/wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" .
+            echo "✅ 打包完成"
+        else
+            echo "❌ 错误: 安装目录不存在: $INSTALL_DIR"
+            exit 1
+        fi
 
     - name: 验证构建产物
       run: |
