@@ -28,41 +28,15 @@ jobs:
     - name: 检出仓库
       uses: actions/checkout@v4
 
-    - name: 修复 create_ubuntu_bootstraps.sh 脚本
-      run: |
-        # 修复脚本中的路径问题
-        sed -i 's|export MAINDIR=/opt/chroot/|export MAINDIR=/opt/chroots/|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount -Rl "${CHROOT_PATH}"|umount -Rl "${CHROOT_PATH}" 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount -l "${CHROOT_PATH}"|umount -l "${CHROOT_PATH}" 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount "${CHROOT_PATH}"/proc|umount "${CHROOT_PATH}"/proc 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount "${CHROOT_PATH}"/sys|umount "${CHROOT_PATH}"/sys 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount "${CHROOT_PATH}"/dev/pts|umount "${CHROOT_PATH}"/dev/pts 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount "${CHROOT_PATH}"/dev/shm|umount "${CHROOT_PATH}"/dev/shm 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        sed -i 's|umount "${CHROOT_PATH}"/dev|umount "${CHROOT_PATH}"/dev 2>/dev/null || true|g' create_ubuntu_bootstraps.sh
-        
-        # 修复 Python 版本问题
-        sed -i 's|pip3 install meson|pip3 install "meson<0.62.0"|g' create_ubuntu_bootstraps.sh
-        sed -i 's|pip3 install ninja|pip3 install ninja|g' create_ubuntu_bootstraps.sh
-        
-        echo "✅ 脚本修复完成"
-
     - name: 创建 bootstraps
       run: |
         sudo apt update
         sudo apt install -y debootstrap perl
         chmod +x create_ubuntu_bootstraps.sh
         sudo ./create_ubuntu_bootstraps.sh
-        
-        # 检查是否创建成功
-        echo "检查创建的 bootstraps:"
-        ls -la /opt/chroots/ || echo "chroots 目录不存在"
-        ls -la /opt/chroot/ || echo "chroot 目录不存在"
-        
-        # 如果脚本使用了旧的路径，创建符号链接
-        if [ -d "/opt/chroot" ] && [ ! -d "/opt/chroots" ]; then
-            echo "创建符号链接 /opt/chroots -> /opt/chroot"
-            sudo ln -s /opt/chroot /opt/chroots
-        fi
+        cd /opt
+        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroots
+        sha256sum bootstraps.tar.xz
 
     - name: 安装构建依赖
       run: |
@@ -242,22 +216,9 @@ jobs:
         export USE_CCACHE="false"
         export BUILD_DIR="$HOME/build_wine"
         
-        # 设置 bootstraps 路径 - 根据实际创建的路径调整
-        if [ -d "/opt/chroots/bionic64_chroot" ]; then
-            export BOOTSTRAP_X64=/opt/chroots/bionic64_chroot
-            export BOOTSTRAP_X32=/opt/chroots/bionic32_chroot
-        elif [ -d "/opt/chroot/bionic64_chroot" ]; then
-            export BOOTSTRAP_X64=/opt/chroot/bionic64_chroot
-            export BOOTSTRAP_X32=/opt/chroot/bionic32_chroot
-        else
-            echo "❌ 错误：找不到 bootstraps 目录"
-            ls -la /opt/ || true
-            exit 1
-        fi
-        
-        echo "使用 bootstraps 路径:"
-        echo "BOOTSTRAP_X64=$BOOTSTRAP_X64"
-        echo "BOOTSTRAP_X32=$BOOTSTRAP_X32"
+        # 设置 bootstraps 路径
+        export BOOTSTRAP_X64=/opt/chroot/bionic64_chroot
+        export BOOTSTRAP_X32=/opt/chroot/bionic32_chroot
         
         # 设置自定义构建选项
         export WINE_BUILD_OPTIONS="--enable-win64 --enable-archs=i386,x86_64 --with-x --with-vulkan --with-alsa --with-pulse --with-freetype --with-fontconfig --with-gstreamer --with-gettext --enable-nls --without-dbus --without-sane --without-pcap --without-pcsclite --disable-winemenubuilder --disable-win16 --disable-debug --disable-tests --without-piper --without-xinerama --without-cups --without-capi --without-coreaudio --without-gphoto --without-osmesa --without-oss --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland"
