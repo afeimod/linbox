@@ -35,7 +35,7 @@ jobs:
         chmod +x create_ubuntu_bootstraps.sh
         sudo ./create_ubuntu_bootstraps.sh
         cd /opt
-        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroots
+        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroot
         sha256sum bootstraps.tar.xz
 
     - name: 安装构建依赖
