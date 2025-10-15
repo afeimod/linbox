@@ -25,27 +25,31 @@ jobs:
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
 
-    - name: 下载 bootstraps
-      uses: dawidd6/action-download-artifact@v3
-      with:
-        workflow: bootstraps.yml
-        repo: ${{ github.repository }}
-        workflow_conclusion: success
-        path: /opt
+    - name: 安装基础依赖
+      run: |
+        sudo apt update
+        sudo apt install -y debootstrap perl git wget xz-utils bubblewrap autoconf
+
+    - name: 创建 bootstraps
+      run: |
+        # 创建 bootstraps 目录
+        sudo mkdir -p /opt/chroots
+        
+        # 创建 64 位 bootstrap (Ubuntu 20.04 focal)
+        echo "创建 64 位 bootstrap..."
+        sudo debootstrap --arch=amd64 focal /opt/chroots/bionic64_chroot http://archive.ubuntu.com/ubuntu/
+        
+        # 创建 32 位 bootstrap
+        echo "创建 32 位 bootstrap..."
+        sudo debootstrap --arch=i386 focal /opt/chroots/bionic32_chroot http://archive.ubuntu.com/ubuntu/
+        
+        echo "Bootstraps 创建完成"
+        ls -la /opt/chroots/
 
     - name: 安装构建依赖
       run: |
         sudo apt update
-        # 先修复损坏的依赖
-        sudo apt --fix-broken install -y
         sudo apt install -y \
-          debootstrap \
-          perl \
-          git \
-          wget \
-          xz-utils \
-          bubblewrap \
-          autoconf \
           flex \
           bison \
           gcc-multilib \
@@ -89,9 +93,6 @@ jobs:
 
     - name: 安装多媒体和音频依赖
       run: |
-        # 先安装 libunwind-dev 解决依赖问题
-        sudo apt install -y libunwind-dev
-        # 然后安装多媒体相关包
         sudo apt install -y \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
@@ -104,13 +105,6 @@ jobs:
         sudo update-locale LANG=zh_CN.UTF-8
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
-
-    - name: 解压 bootstraps
-      run: |
-        sudo tar -C /opt -xpf /opt/Bootstraps/bootstraps.tar.xz
-        echo "Bootstraps 解压完成"
-        echo "检查 bootstraps 是否存在:"
-        ls -la /opt/chroots/
 
     - name: 克隆 Wine 源码
       run: |
@@ -125,24 +119,12 @@ jobs:
         wget -O wine-staging-${{ env.WINE_VERSION }}.tar.gz https://github.com/wine-staging/wine-staging/archive/refs/tags/v${{ env.WINE_VERSION }}.tar.gz
         tar -xzf wine-staging-${{ env.WINE_VERSION }}.tar.gz
     
-        # 应用 staging 补丁 - 使用正确的路径
+        # 应用 staging 补丁
         cd wine-staging-${{ env.WINE_VERSION }}/staging
         chmod +x patchinstall.py
-    
-        # 应用所有补丁到 Wine 源码目录（上级的上级目录）
         ./patchinstall.py --all --destdir=../../
     
         echo "✅ Staging 补丁应用完成"
-
-    - name: 验证 staging 补丁应用
-      run: |
-        cd wine
-        echo "检查 staging 补丁应用情况..."
-        if [ -f "dlls/ntdll/unix/esync.c" ]; then
-            echo "✅ esync 支持已通过 staging 补丁添加"
-        else
-            echo "❌ esync 支持未找到"
-        fi
 
     - name: 根据版本选择修复方式
       run: |
@@ -256,7 +238,7 @@ jobs:
         find $HOME -name "wine-*-amd64-wow64.tar.xz" -o -name "wine-*.tar.xz" | head -10
         
         # 复制产物到当前目录
-        for file in $(find $HOME -name "wine-*-amd64-wow64.tar.xz" -o -name "wine-${{ env.WINE_VERSION }}*.tar.xz"); do
+        for file in $(find $HOME -name "wine-*-amd64-wow64.tar.xz"); do
             if [ -f "$file" ]; then
                 echo "找到构建产物: $file"
                 cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
@@ -264,9 +246,9 @@ jobs:
             fi
         done
         
-        # 如果找不到特定产物，尝试其他模式
+        # 如果找不到 WOW64 产物，尝试其他模式
         if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
-            for file in $HOME/*.tar.xz; do
+            for file in $(find $HOME -name "wine-${{ env.WINE_VERSION }}*.tar.xz"); do
                 if [ -f "$file" ]; then
                     echo "使用备选产物: $file"
                     cp "$file" "./wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
@@ -279,6 +261,7 @@ jobs:
         if [ ! -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
             echo "❌ 错误：找不到构建产物"
             ls -la $HOME/ || true
+            find $HOME -name "*.tar.xz" || true
             exit 1
         fi
 
