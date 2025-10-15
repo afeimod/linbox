@@ -41,7 +41,9 @@ jobs:
     - name: 安装构建依赖
       run: |
         sudo apt update
+        # 先安装基础编译工具
         sudo apt install -y \
+          build-essential \
           git \
           wget \
           xz-utils \
@@ -88,8 +90,23 @@ jobs:
           locales \
           language-pack-zh-hans
 
-    - name: 安装多媒体和音频依赖
+    - name: 安装多媒体和音频依赖（修复版本）
       run: |
+        sudo apt update
+        # 先安装必要的依赖
+        sudo apt install -y \
+          libunwind-dev \
+          libgstreamer1.0-0 \
+          gstreamer1.0-tools \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad \
+          gstreamer1.0-plugins-ugly \
+          gstreamer1.0-libav \
+          libmpg123-0 \
+          libopenal1
+        
+        # 然后安装开发包
         sudo apt install -y \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
