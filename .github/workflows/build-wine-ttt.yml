@@ -31,7 +31,8 @@ jobs:
     - name: 设置环境变量
       run: |
         echo "TERM=xterm-256color" >> $GITHUB_ENV
-        echo "BUILD_DIR=$HOME/build_wine" >> $GITHUB_ENV
+        echo "BUILD_DIR=$HOME/wine_build" >> $GITHUB_ENV
+        echo "SOURCE_DIR=$GITHUB_WORKSPACE/wine" >> $GITHUB_ENV
 
     - name: 安装 bootstraps 依赖
       run: |
@@ -285,8 +286,11 @@ jobs:
         
         WINE_VERSION="$1"
         BUILD_DIR="$2"
+        SOURCE_DIR="$3"
         
         echo "开始构建 Wine $WINE_VERSION"
+        echo "构建目录: $BUILD_DIR"
+        echo "源码目录: $SOURCE_DIR"
         
         # 设置 bootstraps 路径
         export BOOTSTRAP_X64=/opt/chroot/bionic64_chroot
@@ -307,9 +311,17 @@ jobs:
         mkdir -p "$BUILD_DIR"
         cd "$BUILD_DIR"
         
+        # 验证源码目录
+        if [ ! -d "$SOURCE_DIR" ]; then
+            echo "错误: 源码目录不存在: $SOURCE_DIR"
+            exit 1
+        fi
+        
+        echo "源码目录验证成功"
+        
         # 配置 Wine
         echo "配置 Wine..."
-        ../wine/configure \
+        "$SOURCE_DIR/configure" \
             --enable-win64 \
             --enable-archs=i386,x86_64 \
             --with-x \
@@ -362,13 +374,26 @@ jobs:
       run: |
         export TERM=xterm-256color
         export BUILD_DIR="$HOME/wine_build"
+        export SOURCE_DIR="$GITHUB_WORKSPACE/wine"
         
         # 设置 bootstraps 权限
         sudo chmod -R 755 /opt/chroot/bionic64_chroot
         sudo chmod -R 755 /opt/chroot/bionic32_chroot
         
         echo "开始构建 Wine..."
-        ./build_custom_wine.sh "${{ env.WINE_VERSION }}" "$BUILD_DIR"
+        echo "构建目录: $BUILD_DIR"
+        echo "源码目录: $SOURCE_DIR"
+        
+        # 验证源码目录
+        if [ -d "$SOURCE_DIR" ]; then
+            echo "✅ 源码目录存在"
+            ls -la "$SOURCE_DIR" | head -10
+        else
+            echo "❌ 源码目录不存在: $SOURCE_DIR"
+            exit 1
+        fi
+        
+        ./build_custom_wine.sh "${{ env.WINE_VERSION }}" "$BUILD_DIR" "$SOURCE_DIR"
         
         echo "✅ Wine 构建完成"
 
@@ -382,20 +407,30 @@ jobs:
             cd "$INSTALL_DIR"
             tar -cvJf "$GITHUB_WORKSPACE/wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" .
             echo "✅ 打包完成"
+            
+            # 显示打包文件信息
+            ls -lh "$GITHUB_WORKSPACE/wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz"
         else
             echo "❌ 错误: 安装目录不存在: $INSTALL_DIR"
+            echo "构建目录内容:"
+            ls -la "$BUILD_DIR" || true
             exit 1
         fi
 
     - name: 验证构建产物
       run: |
         echo "检查构建产物内容..."
-        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | head -20
-        echo "..."
-        
-        # 检查关键文件
-        echo "检查关键组件:"
-        tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | grep -E "(bin/wine|bin/wine64|lib/wine|lib64/wine)" | head -10
+        if [ -f "wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz" ]; then
+            tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | head -20
+            echo "..."
+            
+            # 检查关键文件
+            echo "检查关键组件:"
+            tar -tf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.xz | grep -E "(bin/wine|bin/wine64|lib/wine|lib64/wine)" | head -10
+        else
+            echo "❌ 构建产物文件不存在"
+            exit 1
+        fi
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
@@ -405,6 +440,7 @@ jobs:
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
+      if: success()
       with:
         tag_name: ${{ env.WINE_VERSION }}-true-wow64-gstreamer
         name: Wine ${{ env.WINE_VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
