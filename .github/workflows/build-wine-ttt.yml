@@ -25,15 +25,28 @@ jobs:
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
 
-    - name: 安装基础依赖
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 创建 bootstraps
       run: |
         sudo apt update
-        sudo apt install -y debootstrap perl git wget xz-utils bubblewrap autoconf
+        sudo apt install -y debootstrap perl
+        chmod +x create_ubuntu_bootstraps.sh
+        sudo ./create_ubuntu_bootstraps.sh
+        cd /opt
+        sudo tar -I "xz -T0 -9" -cpf bootstraps.tar.xz chroots
+        sha256sum bootstraps.tar.xz
 
     - name: 安装构建依赖
       run: |
         sudo apt update
         sudo apt install -y \
+          git \
+          wget \
+          xz-utils \
+          bubblewrap \
+          autoconf \
           flex \
           bison \
           gcc-multilib \
