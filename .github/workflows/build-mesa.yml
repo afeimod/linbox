@@ -55,22 +55,30 @@ jobs:
         # 额外安装构建工具
         sudo apt install -y meson ninja-build pkg-config python3-pip
 
-    - name: 克隆指定版本的 Mesa
+    - name: 克隆并准备 Mesa 源码
       run: |
+        # 克隆 Mesa 仓库
         git clone https://gitlab.freedesktop.org/mesa/mesa.git
         cd mesa
         
-        # 如果指定了分支，先切换到分支
-        if [ -n "$MESA_BRANCH" ]; then
-          echo "切换到分支: $MESA_BRANCH"
-          git checkout mesa-$MESA_BRANCH
-          # 拉取最新更改
-          git pull origin mesa-$MESA_BRANCH
+        # 只有当版本不是 main 或指定了分支时才进行 checkout
+        if [ "$MESA_VERSION" != "main" ] || [ -n "$MESA_BRANCH" ]; then
+          # 如果指定了分支，先切换到分支
+          if [ -n "$MESA_BRANCH" ]; then
+            echo "切换到分支: $MESA_BRANCH"
+            git checkout mesa-$MESA_BRANCH
+            # 拉取最新更改
+            git pull origin mesa-$MESA_BRANCH
+          fi
+          
+          # 如果版本不是 main，检出版本
+          if [ "$MESA_VERSION" != "main" ]; then
+            echo "正在检出 Mesa 版本: $MESA_VERSION"
+            git checkout mesa-$MESA_VERSION
+          fi
+        else
+          echo "使用默认的 main 分支源码，不进行额外 checkout"
         fi
-        
-        # 检出版本
-        echo "正在检出 Mesa 版本: $MESA_VERSION"
-        git checkout mesa-$MESA_VERSION
         
         # 获取详细的版本信息
         MESA_COMMIT_HASH=$(git rev-parse --short HEAD)
