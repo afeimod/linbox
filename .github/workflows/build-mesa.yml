@@ -47,13 +47,25 @@ jobs:
     - name: 检出源码
       uses: actions/checkout@v4
 
-    - name: 安装依赖
+    - name: 安装依赖和更新 Meson
       run: |
         sudo sed -i "s/^Types: deb$/Types: deb deb-src/" /etc/apt/sources.list.d/ubuntu.sources
         sudo apt update
         sudo apt-get build-dep mesa -y
-        # 额外安装构建工具
-        sudo apt install -y meson ninja-build pkg-config python3-pip
+        # 安装构建工具
+        sudo apt install -y ninja-build pkg-config python3-pip python3-setuptools python3-wheel
+        
+        # 移除旧版 meson（如果存在）
+        sudo apt remove -y meson || true
+        
+        # 使用 pip 安装最新版 meson
+        pip3 install --user meson
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: 验证 Meson 版本
+      run: |
+        meson --version
+        which meson
 
     - name: 克隆并准备 Mesa 源码
       run: |
@@ -109,12 +121,12 @@ jobs:
         sudo chmod 777 -R /data
 
         mkdir -p builddir
+        
+        # 修复 Meson 配置，移除重复的构建选项
         meson setup builddir \
           --libdir=lib \
           -Dprefix=/data/data/com.termux/files/usr/glibc \
           -Dbuildtype=release \
-          -Doptimization=3 \
-          -Db_lto=true \
           -Dplatforms=x11 \
           -Degl-native-platform=x11 \
           -Dglx=dri \
