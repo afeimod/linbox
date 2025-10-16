@@ -106,6 +106,7 @@ jobs:
     - name: 克隆 Wine 源码
       run: |
         git clone https://github.com/wine-mirror/wine.git
+        cd wine
         git checkout wine-${{ env.WINE_VERSION }}
         
     - name: 下载并应用 staging 补丁
