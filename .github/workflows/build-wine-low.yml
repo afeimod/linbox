@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
     - name: 设置版本变量
@@ -237,9 +237,7 @@ jobs:
           --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
-          --disable-debug \
           --disable-tests \
-          --without-piper \
           --without-xinerama \
           --without-cups \
           --without-capi \
