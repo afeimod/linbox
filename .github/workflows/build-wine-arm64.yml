@@ -1,4 +1,4 @@
-# build-wine-Arm.yml
+# build-wine-arm.yml
 name: Build Arm64Wine (ARM64 for Termux with Vulkan and Full GStreamer)
 
 on:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm64  # 使用 ARM64 环境
 
     steps:
     - name: 设置版本变量
@@ -24,7 +24,7 @@ jobs:
         echo "STAGING_VERSION=v${{ github.event.inputs.wine_version }}"
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
         echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
-        echo "目标架构: ARM64"
+        echo "目标架构: ARM64 (原生编译)"
 
     - name: 安装构建依赖
       run: |
@@ -41,54 +41,54 @@ jobs:
           autoconf \
           flex \
           bison \
-          gcc-aarch64-linux-gnu \
-          g++-aarch64-linux-gnu \
-          libx11-dev:arm64 \
-          libxext-dev:arm64 \
-          libxi-dev:arm64 \
-          libxrandr-dev:arm64 \
-          libxcursor-dev:arm64 \
-          libxcomposite-dev:arm64 \
-          libxdamage-dev:arm64 \
-          libxfixes-dev:arm64 \
-          libxxf86vm-dev:arm64 \
-          libxrender-dev:arm64 \
-          libxinerama-dev:arm64 \
-          libgl-dev:arm64 \
-          libglu-dev:arm64 \
-          libosmesa6-dev:arm64 \
-          libfreetype6-dev:arm64 \
-          libfontconfig1-dev:arm64 \
-          libpcap-dev:arm64 \
-          libdbus-1-dev:arm64 \
-          libssl-dev:arm64 \
-          libasound2-dev:arm64 \
-          libpulse-dev:arm64 \
-          libudev-dev:arm64 \
-          libcups2-dev:arm64 \
-          libjpeg-dev:arm64 \
-          libpng-dev:arm64 \
-          libtiff-dev:arm64 \
-          libxml2-dev:arm64 \
-          libvulkan-dev:arm64 \
+          gcc \
+          g++ \
+          libx11-dev \
+          libxext-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxfixes-dev \
+          libxxf86vm-dev \
+          libxrender-dev \
+          libxinerama-dev \
+          libgl-dev \
+          libglu-dev \
+          libosmesa6-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libssl-dev \
+          libasound2-dev \
+          libpulse-dev \
+          libudev-dev \
+          libcups2-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxml2-dev \
+          libvulkan-dev \
           vulkan-tools \
-          libvulkan1:arm64 \
-          mesa-vulkan-drivers:arm64 \
+          libvulkan1 \
+          mesa-vulkan-drivers \
           gettext \
-          libgettextpo-dev:arm64 \
+          libgettextpo-dev \
           locales \
           language-pack-zh-hans
 
     - name: 安装多媒体和音频依赖
       run: |
         # 先安装 libunwind-dev 解决依赖问题
-        sudo apt install -y libunwind-dev:arm64
+        sudo apt install -y libunwind-dev
         # 然后安装多媒体相关包
         sudo apt install -y \
-          libgstreamer1.0-dev:arm64 \
-          libgstreamer-plugins-base1.0-dev:arm64 \
-          libmpg123-dev:arm64 \
-          libopenal-dev:arm64
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev
 
     - name: 设置中文语言环境
       run: |
@@ -97,12 +97,12 @@ jobs:
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
 
-    - name: 检查工作目录
+    - name: 检查工作目录和架构
       run: |
         echo "当前工作目录: $(pwd)"
-        ls -la
+        echo "系统架构: $(uname -m)"
         echo "构建版本: ${{ env.WINE_VERSION }}"
-        echo "目标架构: ARM64"
+        echo "目标架构: ARM64 (原生)"
           
     - name: 克隆 Wine 源码
       run: |
@@ -208,31 +208,6 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 构建本地 Wine 工具链
-      run: |
-        cd wine
-        mkdir -p /tmp/wine-tools
-        sudo chmod 777 -R /tmp/wine-tools
-
-        # 创建本地工具构建目录
-        mkdir -p build-tools
-        cd build-tools
-
-        # 配置本地工具
-        ../configure \
-          --prefix=/tmp/wine-tools \
-          --enable-win64 \
-          --without-x \
-          --without-freetype \
-          --without-fontconfig \
-          --disable-tests
-
-        # 构建工具
-        echo "构建本地 Wine 工具链..."
-        make -j$(nproc) __tooldeps__
-
-        echo "✅ 本地工具链构建完成"
-
     - name: 配置和构建 ARM64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
         cd wine
@@ -243,21 +218,10 @@ jobs:
         mkdir -p build-arm64
         cd build-arm64
 
-        # 设置交叉编译环境变量
-        export CC=aarch64-linux-gnu-gcc
-        export CXX=aarch64-linux-gnu-g++
-        export PKG_CONFIG=/usr/bin/aarch64-linux-gnu-pkg-config
-        export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
-        export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
-        export PATH=/tmp/wine-tools/bin:$PATH
-
         # 配置 ARM64 Wine，启用 Vulkan 和完整 GStreamer 支持
         ../configure \
-          --host=aarch64-linux-gnu \
-          --build=x86_64-linux-gnu \
           --enable-win64 \
           --prefix=/tmp/wine-install \
-          --with-wine-tools=/tmp/wine-tools \
           --with-x \
           --with-vulkan \
           --with-alsa \
@@ -378,13 +342,13 @@ jobs:
           
           ## 版本信息
           - **Wine 版本**: ${{ env.WINE_VERSION }}
-          - **架构**: ARM64 (专为 Android Termux 优化)
+          - **架构**: ARM64 (原生构建，专为 Android Termux 优化)
           - **平台**: Termux (Android)
           - **图形 API**: Vulkan 支持已启用
           - **多媒体**: 完整 GStreamer 支持（包含 FFmpeg 插件）
           
           ## 特性
-          ✓ ARM64 原生支持
+          ✓ ARM64 原生支持（非交叉编译）
           ✓ 专为 Android Termux 优化
           ✓ Vulkan 图形 API 支持
           ✓ 完整的 GStreamer 支持
@@ -400,6 +364,7 @@ jobs:
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
+          - 构建环境: Ubuntu 24.04 ARM64 (原生)
         files: wine-${{ env.WINE_VERSION }}-arm64-bin-gstreamer-termux.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -408,7 +373,7 @@ jobs:
       run: |
         echo "✅ ARM64 Wine with Vulkan and Full GStreamer 构建完成"
         echo "版本号: ${{ env.WINE_VERSION }}"
-        echo "架构: ARM64"
+        echo "架构: ARM64 (原生构建)"
         echo "环境: Termux (Android)"
         echo "图形 API: Vulkan 支持已启用"
         echo "多媒体: 完整 GStreamer 支持"
@@ -420,5 +385,4 @@ jobs:
         echo "✓ Vulkan 支持"
         echo "✓ 完整的 GStreamer 支持"
         echo "✓ 应用了关键补丁，提升兼容性"
-        echo "✓ ARM64 架构适配"
-        echo "✓ 交叉编译工具链问题"
+        echo "✓ ARM64 原生架构适配（无交叉编译问题）"
