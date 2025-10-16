@@ -26,6 +26,9 @@ jobs:
   create-bootstrap:
     name: Create WoW64 Bootstrap
     runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      options: --privileged --security-opt seccomp=unconfined
     
     steps:
       - name: Checkout repository
@@ -33,12 +36,12 @@ jobs:
 
       - name: Create bootstraps
         run: |
-          sudo apt update
-          sudo apt install -y debootstrap perl wget xz-utils
+          apt update
+          apt install -y debootstrap perl wget xz-utils sudo
           chmod +x ubuntu_bootstrap_wow64.sh
-          sudo ./ubuntu_bootstrap_wow64.sh
+          ./ubuntu_bootstrap_wow64.sh
           cd /opt
-          sudo tar -I "xz -T0 -9" -cpf bootstraps_wow64.tar.xz chroots
+          tar -I "xz -T0 -9" -cpf bootstraps_wow64.tar.xz chroots
           sha256sum *.tar.xz
 
       - name: Upload bootstrap artifact
@@ -46,11 +49,15 @@ jobs:
         with:
           name: bootstraps-wow64
           path: /opt/bootstraps_wow64.tar.xz
+          retention-days: 1
 
   build-wine:
     name: Build Wine (${{ github.event.inputs.build_type }})
     runs-on: ubuntu-24.04
     needs: create-bootstrap
+    container:
+      image: ubuntu:24.04
+      options: --privileged --security-opt seccomp=unconfined
     
     steps:
       - name: Checkout repository
@@ -64,15 +71,15 @@ jobs:
 
       - name: Extract bootstrap
         run: |
-          sudo mkdir -p /opt/chroots
-          sudo tar -xpf "/opt/bootstraps_wow64.tar.xz" -C /opt
+          mkdir -p /opt/chroots
+          tar -xpf "/opt/bootstraps_wow64.tar.xz" -C /opt
 
       - name: Install build dependencies
         run: |
-          sudo apt update
-          sudo apt install -y \
+          apt update
+          apt install -y \
             git wget xz-utils bubblewrap autoconf flex bison \
-            gcc-multilib g++-multilib ccache \
+            gcc-14 g++-14 gcc-multilib g++-multilib ccache \
             libx11-dev libxext-dev libxi-dev libxrandr-dev \
             libxcursor-dev libxcomposite-dev libxdamage-dev \
             libxfixes-dev libxxf86vm-dev libxrender-dev \
@@ -89,50 +96,54 @@ jobs:
 
       - name: Set build environment
         run: |
-          echo "WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
-          echo "WINE_BRANCH=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
-          echo "TERMUX_GLIBC=true" >> $GITHUB_ENV
-          echo "EXPERIMENTAL_WOW64=true" >> $GITHUB_ENV
-          echo "USE_CCACHE=true" >> $GITHUB_ENV
+          echo "BUILD_WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
+          echo "BUILD_WINE_BRANCH=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
           echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
           echo "构建分支: ${{ github.event.inputs.build_type }}"
 
       - name: Build Wine with custom script
         env:
+          WINE_VERSION: ${{ github.event.inputs.wine_version }}
+          WINE_BRANCH: ${{ github.event.inputs.build_type }}
           TERMUX_GLIBC: true
           EXPERIMENTAL_WOW64: true
           USE_CCACHE: true
-          WINE_VERSION: ${{ github.event.inputs.wine_version }}
-          WINE_BRANCH: ${{ github.event.inputs.build_type }}
           STAGING_VERSION: v${{ github.event.inputs.wine_version }}
+          ALLOW_ROOT: true
         run: |
           chmod +x build_wine.sh
+          # 设置终端环境变量
+          export TERM=xterm-256color
+          echo "开始构建 Wine $WINE_VERSION ($WINE_BRANCH)"
           ./build_wine.sh
 
-      - name: Prepare final artifacts
+      - name: Check build artifacts
         run: |
-          echo "准备最终构建产物..."
-          find . -name "*.tar.xz" -type f | head -5
+          echo "检查构建产物..."
           ls -la *.tar.xz || echo "未找到 tar.xz 文件"
+          find . -name "*.tar.xz" -type f | while read f; do
+            echo "找到文件: $f"
+            ls -lh "$f"
+          done
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wine-${{ env.WINE_VERSION }}-${{ env.WINE_BRANCH }}-wow64
+          name: wine-${{ github.event.inputs.wine_version }}-${{ github.event.inputs.build_type }}-wow64
           path: "*.tar.xz"
         if: success()
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ env.WINE_VERSION }}-${{ env.WINE_BRANCH }}-wow64
-          name: Wine ${{ env.WINE_VERSION }} ${{ env.WINE_BRANCH }} (WoW64 for Termux)
+          tag_name: wine-${{ github.event.inputs.wine_version }}-${{ github.event.inputs.build_type }}-wow64
+          name: Wine ${{ github.event.inputs.wine_version }} ${{ github.event.inputs.build_type }} (WoW64 for Termux)
           body: |
-            # Wine ${{ env.WINE_VERSION }} ${{ env.WINE_BRANCH }} - WoW64 for Termux
+            # Wine ${{ github.event.inputs.wine_version }} ${{ github.event.inputs.build_type }} - WoW64 for Termux
             
             ## 构建信息
-            - **Wine 版本**: ${{ env.WINE_VERSION }}
-            - **分支**: ${{ env.WINE_BRANCH }}
+            - **Wine 版本**: ${{ github.event.inputs.wine_version }}
+            - **分支**: ${{ github.event.inputs.build_type }}
             - **架构**: WoW64 (32位和64位支持)
             - **平台**: Termux (Android)
             
@@ -159,8 +170,8 @@ jobs:
       - name: Print build summary
         run: |
           echo "✅ Wine 构建完成!"
-          echo "版本: ${{ env.WINE_VERSION }}"
-          echo "分支: ${{ env.WINE_BRANCH }}"
+          echo "版本: ${{ github.event.inputs.wine_version }}"
+          echo "分支: ${{ github.event.inputs.build_type }}"
           echo "架构: WoW64"
           echo ""
           echo "构建产物已上传到 Release 和 Artifacts"
