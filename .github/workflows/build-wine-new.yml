@@ -115,6 +115,7 @@ jobs:
           USE_CCACHE: true
           STAGING_VERSION: v${{ github.event.inputs.wine_version }}
           ALLOW_ROOT: true
+          BUILD_DIR: /github/workspace/build_wine
         run: |
           chmod +x build_wine.sh
           # 设置终端环境变量
