@@ -1,0 +1,27 @@
+name: Bootstraps WoW64 CI
+
+on:
+  schedule:
+    - cron:  0 0 1 */2 *
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create bootstraps
+        run: |
+          sudo apt update
+          sudo apt install debootstrap perl
+          chmod +x ubuntu_bootstrap_wow64.sh
+          sudo ./ubuntu_bootstrap_wow64.sh
+          cd /opt
+          sudo tar -I "xz -T0 -9" -cpf bootstraps_wow64.tar.xz chroots
+          sha256sum *.tar.xz
+      - uses: actions/upload-artifact@v3
+        with:
+          name: Bootstraps WoW64
+          path: /opt/bootstraps_wow64.tar.xz
