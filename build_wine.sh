@@ -617,10 +617,10 @@ fi
 ### Experimental addition to address space hackery
 if [ "$TERMUX_GLIBC" = "true" ]; then
 echo "Applying additional address space patch... (credits to Bylaws)"
-patch -p1 < "${scriptdir}"/wine-virtual-memory.patch || {
-        echo "This patch did not apply. Stopping..."
-	exit 1
-    }
+#patch -p1 < "${scriptdir}"/wine-virtual-memory.patch || {
+#        echo "This patch did not apply. Stopping..."
+#	exit 1
+#    }
     clear
 fi
 
