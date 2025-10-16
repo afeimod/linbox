@@ -1,0 +1,82 @@
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index 456555e..bb4d5af 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -2724,3 +2724,76 @@ EtcFiles  = 12,etc
+ InfFiles  = 17
+ NlsFiles  = 11
+ SortFiles = 10,globalization\sorting
++
++[ProtonOverrides]
++HKLM,Software\Khronos\OpenXR\1,"ActiveRuntime",,"C:\openxr\wineopenxr64.json"
++;;Likely want *80 and *90 too, but those require removing Wine's manifest files.
++HKCU,Software\Wine\DllOverrides,"atl100",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcp100",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcr100",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"vcomp100",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"atl110",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcp110",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcr110",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"vcomp110",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"atl120",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcp120",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcr120",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"vcomp120",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-conio-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-heap-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-locale-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-math-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-runtime-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-stdio-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"api-ms-win-crt-time-l1-1-0",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"atl140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"concrt140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcp140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcp140_atomic_wait",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"msvcr140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"ucrtbase",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"vcomp140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"vcruntime140",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"atiadlxx",,"disabled"
++HKCU,Software\Wine\DllOverrides,"d3d8",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"d3d9",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"d3d10",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"d3d10core",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"d3d11",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"d3d12",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"dxgi",0x2,"native"
++HKCU,Software\Wine\DllOverrides,"nvcuda",0x2,"disabled"
++;;App-specific overrides to limit the number of resolutions
++HKCU,Software\Wine\AppDefaults\DarkSoulsIII.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
++HKCU,Software\Wine\AppDefaults\sekiro.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
++HKCU,Software\Wine\AppDefaults\NieRAutomata.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"32"
++HKCU,Software\Wine\AppDefaults\SpellForce.exe\X11 Driver,"LimitNumberOfResolutions",0x2,"16"
++;;Other app-specific overrides
++HKCU,Software\Wine\AppDefaults\Pentiment.exe\DllOverrides,"SpeechSynthesisWrapper",,"disabled"
++HKCU,Software\Wine\AppDefaults\Maine-Win64-Shipping.exe\DllOverrides,"SpeechSynthWrapper",0x2,"disabled"
++HKCU,Software\Wine\AppDefaults\rayne1.exe\DllOverrides,"d3d8",,"native"
++HKCU,Software\Wine\AppDefaults\rayne2.exe\DllOverrides,"d3d8",,"native"
++HKCU,Software\Wine\AppDefaults\RDR2.exe\DllOverrides,"vulkan-1",,"native"
++HKCU,Software\Wine\AppDefaults\ShadowOfWar.exe\DllOverrides,"amd_ags_x64",,"disabled"
++;;App-specific overrides for atiadlxx.dll.
++HKCU,Software\Wine\AppDefaults\s2_sp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\s2_mp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\h1_sp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\h1_mp64_ship.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\iw7_ship.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\BlackOps3.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\NFS16.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\ShadowOfWar.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\DIRT5.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\Paradox Launcher.exe\DllOverrides,,4,
++HKCU,Software\Wine\AppDefaults\gotg.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\RelicCardinal.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\msedgewebview2.exe,"Version",,"win81"
++HKCU,Software\Wine\AppDefaults\Avengers.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\starwarssquadrons.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\GW2.Main_Win64_Retail.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\Spider-Man.exe\DllOverrides,"atiadlxx",,"builtin"
++HKCU,Software\Wine\AppDefaults\RiftApart.exe\DllOverrides,"atiadlxx",,"builtin"
++HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Height",0x10001,480
++HKLM,Software\Wow6432Node\lucasarts entertainment company llc\Star Wars: Episode I Racer\v1.0,"Display Width",0x10001,640
+

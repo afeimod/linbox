@@ -1,0 +1,50 @@
+diff -uNr a/dlls/crypt32/unixlib.c b/dlls/crypt32/unixlib.c
+--- a/dlls/crypt32/unixlib.c	2023-12-04 12:47:08.053258896 +0300
++++ b/dlls/crypt32/unixlib.c	2023-12-04 12:53:50.192309555 +0300
+@@ -619,6 +619,7 @@
+  "/usr/local/share/certs/",
+  "/etc/sfw/openssl/certs",
+  "/etc/security/cacerts",  /* Android */
++ "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem"
+ };
+ 
+ static void load_root_certs(void)
+diff -uNr a/programs/winemenubuilder/winemenubuilder.c b/programs/winemenubuilder/winemenubuilder.c
+--- a/programs/winemenubuilder/winemenubuilder.c	2023-12-04 12:47:08.946595692 +0300
++++ b/programs/winemenubuilder/winemenubuilder.c	2023-12-04 12:53:50.195642913 +0300
+@@ -1724,7 +1724,7 @@
+     if (_wgetenv( L"XDG_DATA_DIRS" ))
+         dirs = xwcsdup( _wgetenv( L"XDG_DATA_DIRS" ));
+     else
+-        dirs = xwcsdup( L"/usr/local/share/:/usr/share/" );
++        dirs = xwcsdup( L"/data/data/com.termux/files/usr/glibc/local/share:/data/data/com.termux/files/usr/glibc/share" );
+ 
+     ret = add_mimes(xdg_data_dir, mime_types);
+     if (ret)
+diff -uNr a/server/request.c b/server/request.c
+--- a/server/request.c	2023-12-04 12:47:08.956595729 +0300
++++ b/server/request.c	2023-12-04 12:53:50.195642913 +0300
+@@ -663,9 +663,9 @@
+     strcpy( server_dir, config_dir );
+     strcat( server_dir, "/.wineserver" );
+ #else
+-    len += sizeof("/tmp/.wine-") + 12;
++    len += sizeof("/data/data/com.termux/files/usr/tmp/.wine");
+     if (!(server_dir = malloc( len ))) fatal_error( "out of memory\n" );
+-    sprintf( server_dir, "/tmp/.wine-%u", getuid() );
++    strcpy( server_dir, "/data/data/com.termux/files/usr/tmp/.wine" );
+ #endif
+     create_dir( server_dir, &st2 );
+ 
+diff -uNr a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+--- a/dlls/ntdll/unix/server.c	2023-12-04 12:47:08.396593560 +0300
++++ b/dlls/ntdll/unix/server.c	2023-12-04 12:56:08.003396911 +0300
+@@ -1260,7 +1260,7 @@
+ #ifdef __ANDROID__  /* there's no /tmp dir on Android */
+     asprintf( &dir, "%s/.wineserver/server-%s", config_dir, tmp );
+ #else
+-    asprintf( &dir, "/tmp/.wine-%u/server-%s", getuid(), tmp );
++    asprintf( &dir, "/data/data/com.termux/files/usr/tmp/.wine/server-%s", tmp );
+ #endif
+     return dir;
+ }

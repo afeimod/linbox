@@ -1,0 +1,106 @@
+diff --git a/dlls/crypt32/unixlib.c b/dlls/crypt32/unixlib.c
+index 5a25544..3e49ad4 100644
+--- a/dlls/crypt32/unixlib.c
++++ b/dlls/crypt32/unixlib.c
+@@ -621,47 +621,27 @@ static const char * const CRYPT_knownLocations[] = {
+  "/usr/local/share/certs/",
+  "/etc/sfw/openssl/certs",
+  "/etc/security/cacerts",  /* Android */
++ "/data/data/com.termux/files/usr/glibc/etc/ca-certificates/cacert.pem",
++ NULL
+ };
+ 
++static const char* get_ca_cert_path(void) {
++    const char *env_path = getenv("WINE_CA_CERT_PATH");
++    return env_path ? env_path : CRYPT_knownLocations[3];
++}
++
+ static void load_root_certs(void)
+ {
+     unsigned int i;
++    const char *cert_path = get_ca_cert_path();
+ 
+-#ifdef __APPLE__
+-    const SecTrustSettingsDomain domains[] = {
+-        kSecTrustSettingsDomainSystem,
+-        kSecTrustSettingsDomainAdmin,
+-        kSecTrustSettingsDomainUser
+-    };
+-    OSStatus status;
+-    CFArrayRef certs;
+-    DWORD domain;
++    import_certs_from_path(cert_path, TRUE);
+ 
+-    for (domain = 0; domain < ARRAY_SIZE(domains); domain++)
+-    {
+-        status = SecTrustSettingsCopyCertificates(domains[domain], &certs);
+-        if (status == noErr)
+-        {
+-            for (i = 0; i < CFArrayGetCount(certs); i++)
+-            {
+-                SecCertificateRef cert = (SecCertificateRef)CFArrayGetValueAtIndex(certs, i);
+-                CFDataRef certData;
+-                if ((status = SecItemExport(cert, kSecFormatX509Cert, 0, NULL, &certData)) == noErr)
+-                {
+-                    BYTE *data = add_cert( CFDataGetLength(certData) );
+-                    if (data) memcpy( data, CFDataGetBytePtr(certData), CFDataGetLength(certData) );
+-                    CFRelease(certData);
+-                }
+-                else
+-                    WARN("could not export certificate %u to X509 format: 0x%08x\n", i, (unsigned int)status);
+-            }
+-            CFRelease(certs);
++    if (list_empty(&root_cert_list)) {
++        for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations); i++) {
++            import_certs_from_path(CRYPT_knownLocations[i], TRUE);
+         }
+     }
+-#endif
+-
+-    for (i = 0; i < ARRAY_SIZE(CRYPT_knownLocations) && list_empty(&root_cert_list); i++)
+-        import_certs_from_path( CRYPT_knownLocations[i], TRUE );
+ }
+ 
+ static NTSTATUS enum_root_certs( void *args )
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index f3ffd99..e6926b6 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -1240,7 +1240,8 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
+ #ifdef __ANDROID__  /* there's no /tmp dir on Android */
+     asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+ #else
+-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
++    const char *tmp_dir = getenv("WINE_TMP_DIR") ? getenv("WINE_TMP_DIR") : "/data/data/com.termux/files/usr/tmp";
++    asprintf( &dir, "%s/.wine-%u/server-%llx-%llx", tmp_dir, getuid(), (unsigned long long)dev, (unsigned long long)ino );
+ #endif
+     return dir;
+ }
+diff --git a/programs/winemenubuilder/winemenubuilder.c b/programs/winemenubuilder/winemenubuilder.c
+index 36569fa..bf2b178 100644
+--- a/programs/winemenubuilder/winemenubuilder.c
++++ b/programs/winemenubuilder/winemenubuilder.c
+@@ -1724,7 +1724,8 @@ static BOOL build_native_mime_types(struct list *mime_types)
+     if (_wgetenv( L"XDG_DATA_DIRS" ))
+         dirs = xwcsdup( _wgetenv( L"XDG_DATA_DIRS" ));
+     else
+-        dirs = xwcsdup( L"/usr/local/share/:/usr/share/" );
++        dirs = xwcsdup( _wgetenv(L"WINE_SHARE_DIRS") ? _wgetenv(L"WINE_SHARE_DIRS") :
++                         L"/data/data/com.termux/files/usr/glibc/local/share:/data/data/com.termux/files/usr/glibc/share" );
+ 
+     ret = add_mimes(xdg_data_dir, mime_types);
+     if (ret)
+diff --git a/server/request.c b/server/request.c
+index dabcea6..be1e1a8 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -644,7 +644,8 @@ static char *create_server_dir( int force )
+     if (asprintf( &base_dir, "%s/.wineserver", config_dir ) == -1)
+         fatal_error( "out of memory\n" );
+ #else
+-    if (asprintf( &base_dir, "/tmp/.wine-%u", getuid() ) == -1)
++    const char *tmp_dir = getenv("WINE_TMP_DIR") ? getenv("WINE_TMP_DIR") : "/data/data/com.termux/files/usr/tmp";
++    if (asprintf( &base_dir, "%s/.wine-%u", tmp_dir, getuid() ) == -1)
+         fatal_error( "out of memory\n" );
+ #endif
+     create_dir( base_dir, &st2 );
