@@ -98,6 +98,52 @@ export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-wi
 # This directory is removed and recreated on each script run.
 export BUILD_DIR="${HOME}"/build_wine
 
+# 新增：应用 MF 补丁函数
+apply_mf_patches() {
+    echo "检查并应用 MF 补丁..."
+    
+    # 解析版本号进行比较
+    VERSION_MAJOR=$(echo "${WINE_VERSION}" | cut -d. -f1)
+    VERSION_MINOR=$(echo "${WINE_VERSION}" | cut -d. -f2)
+    
+    echo "Wine 版本: ${WINE_VERSION}"
+    echo "主版本: ${VERSION_MAJOR}, 次版本: ${VERSION_MINOR}"
+    
+    # 判断版本是否 >= 9.10
+    if [ ${VERSION_MAJOR} -gt 9 ] || [ ${VERSION_MAJOR} -eq 9 -a ${VERSION_MINOR} -ge 10 ]; then
+        echo "使用 9.10+ 版本的 MF 修复方式"
+        MF_PATCH_URL="https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch"
+        PATCH_FILE="wine_do_not_create_dxgi_manager2.patch"
+        PATCH_TYPE="wine_do_not_create_dxgi_manager2"
+    else
+        echo "使用 9.10 以下版本的 MF 修复方式"
+        MF_PATCH_URL="https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh"
+        PATCH_FILE="fix_wine9.2_mfplat.sh"
+        PATCH_TYPE="fix_wine9_2_mfplat"
+    fi
+    
+    echo "MF 修复类型: ${PATCH_TYPE}"
+    echo "下载 MF 补丁: ${MF_PATCH_URL}"
+    
+    # 下载补丁
+    if wget -O "${PATCH_FILE}" "${MF_PATCH_URL}"; then
+        echo "成功下载补丁: ${PATCH_FILE}"
+        
+        # 应用补丁
+        if [ "${PATCH_TYPE}" = "fix_wine9_2_mfplat" ]; then
+            chmod +x "${PATCH_FILE}"
+            echo "执行补丁脚本: ${PATCH_FILE}"
+            ./"${PATCH_FILE}" || echo "补丁脚本执行完成"
+        else
+            echo "应用补丁文件: ${PATCH_FILE}"
+            patch -d wine -Np1 < "${PATCH_FILE}" || echo "补丁可能已部分应用或不需要"
+        fi
+        echo "✅ MF 补丁应用完成"
+    else
+        echo "⚠️ 警告: 无法下载 MF 补丁，继续构建..."
+    fi
+}
+
 # Implement a new WoW64 specific check which will change the way Wine is built.
 # New WoW64 builds will use a different bootstrap which require different
 # variables and they are not compatible with old WoW64 build mode.
@@ -509,6 +555,10 @@ if [ "$TERMUX_GLIBC" = "true" ]; then
     clear 
 fi
 fi
+
+# 新增：应用 MF 补丁
+echo "开始应用 MF 补丁..."
+apply_mf_patches
     
 ## NDIS patch for fixing crappy Android's SELinux limitations.
 #if [ "$TERMUX_GLIBC" = "true" ]; then
