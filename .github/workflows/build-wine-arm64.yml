@@ -1,4 +1,4 @@
-# build-wine-arm64.yml
+# build-wine-Arm.yml
 name: Build Arm64Wine (ARM64 for Termux with Vulkan and Full GStreamer)
 
 on:
@@ -43,52 +43,52 @@ jobs:
           bison \
           gcc-aarch64-linux-gnu \
           g++-aarch64-linux-gnu \
-          libx11-dev \
-          libxext-dev \
-          libxi-dev \
-          libxrandr-dev \
-          libxcursor-dev \
-          libxcomposite-dev \
-          libxdamage-dev \
-          libxfixes-dev \
-          libxxf86vm-dev \
-          libxrender-dev \
-          libxinerama-dev \
-          libgl-dev \
-          libglu-dev \
-          libosmesa6-dev \
-          libfreetype6-dev \
-          libfontconfig1-dev \
-          libpcap-dev \
-          libdbus-1-dev \
-          libssl-dev \
-          libasound2-dev \
-          libpulse-dev \
-          libudev-dev \
-          libcups2-dev \
-          libjpeg-dev \
-          libpng-dev \
-          libtiff-dev \
-          libxml2-dev \
-          libvulkan-dev \
+          libx11-dev:arm64 \
+          libxext-dev:arm64 \
+          libxi-dev:arm64 \
+          libxrandr-dev:arm64 \
+          libxcursor-dev:arm64 \
+          libxcomposite-dev:arm64 \
+          libxdamage-dev:arm64 \
+          libxfixes-dev:arm64 \
+          libxxf86vm-dev:arm64 \
+          libxrender-dev:arm64 \
+          libxinerama-dev:arm64 \
+          libgl-dev:arm64 \
+          libglu-dev:arm64 \
+          libosmesa6-dev:arm64 \
+          libfreetype6-dev:arm64 \
+          libfontconfig1-dev:arm64 \
+          libpcap-dev:arm64 \
+          libdbus-1-dev:arm64 \
+          libssl-dev:arm64 \
+          libasound2-dev:arm64 \
+          libpulse-dev:arm64 \
+          libudev-dev:arm64 \
+          libcups2-dev:arm64 \
+          libjpeg-dev:arm64 \
+          libpng-dev:arm64 \
+          libtiff-dev:arm64 \
+          libxml2-dev:arm64 \
+          libvulkan-dev:arm64 \
           vulkan-tools \
-          libvulkan1 \
-          mesa-vulkan-drivers \
+          libvulkan1:arm64 \
+          mesa-vulkan-drivers:arm64 \
           gettext \
-          libgettextpo-dev \
+          libgettextpo-dev:arm64 \
           locales \
           language-pack-zh-hans
 
     - name: 安装多媒体和音频依赖
       run: |
         # 先安装 libunwind-dev 解决依赖问题
-        sudo apt install -y libunwind-dev
+        sudo apt install -y libunwind-dev:arm64
         # 然后安装多媒体相关包
         sudo apt install -y \
-          libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libmpg123-dev \
-          libopenal-dev
+          libgstreamer1.0-dev:arm64 \
+          libgstreamer-plugins-base1.0-dev:arm64 \
+          libmpg123-dev:arm64 \
+          libopenal-dev:arm64
 
     - name: 设置中文语言环境
       run: |
@@ -208,6 +208,31 @@ jobs:
         
         echo "路径修复完成"
 
+    - name: 构建本地 Wine 工具链
+      run: |
+        cd wine
+        mkdir -p /tmp/wine-tools
+        sudo chmod 777 -R /tmp/wine-tools
+
+        # 创建本地工具构建目录
+        mkdir -p build-tools
+        cd build-tools
+
+        # 配置本地工具
+        ../configure \
+          --prefix=/tmp/wine-tools \
+          --enable-win64 \
+          --without-x \
+          --without-freetype \
+          --without-fontconfig \
+          --disable-tests
+
+        # 构建工具
+        echo "构建本地 Wine 工具链..."
+        make -j$(nproc) __tooldeps__
+
+        echo "✅ 本地工具链构建完成"
+
     - name: 配置和构建 ARM64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
         cd wine
@@ -224,6 +249,7 @@ jobs:
         export PKG_CONFIG=/usr/bin/aarch64-linux-gnu-pkg-config
         export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
         export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+        export PATH=/tmp/wine-tools/bin:$PATH
 
         # 配置 ARM64 Wine，启用 Vulkan 和完整 GStreamer 支持
         ../configure \
@@ -231,6 +257,7 @@ jobs:
           --build=x86_64-linux-gnu \
           --enable-win64 \
           --prefix=/tmp/wine-install \
+          --with-wine-tools=/tmp/wine-tools \
           --with-x \
           --with-vulkan \
           --with-alsa \
@@ -246,9 +273,7 @@ jobs:
           --without-pcsclite \
           --disable-winemenubuilder \
           --disable-win16 \
-          --disable-debug \
           --disable-tests \
-          --without-piper \
           --without-xinerama \
           --without-cups \
           --without-capi \
@@ -396,3 +421,4 @@ jobs:
         echo "✓ 完整的 GStreamer 支持"
         echo "✓ 应用了关键补丁，提升兼容性"
         echo "✓ ARM64 架构适配"
+        echo "✓ 交叉编译工具链问题"
