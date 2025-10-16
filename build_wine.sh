@@ -11,7 +11,17 @@
 ## You can change the environment variables below to your desired values.
 ##
 ########################################################################
+# 在脚本开头添加版本检查
+echo "构建配置检查:"
+echo "WINE_VERSION: ${WINE_VERSION}"
+echo "WINE_BRANCH: ${WINE_BRANCH}"
+echo "STAGING_VERSION: ${STAGING_VERSION}"
 
+# 确保版本变量正确设置
+if [ -z "${WINE_VERSION}" ]; then
+    echo "错误: WINE_VERSION 未设置!"
+    exit 1
+fi
 # Prevent launching as root
 if [ $EUID = 0 ] && [ -z "$ALLOW_ROOT" ]; then
 	echo "Do not run this script as root!"
