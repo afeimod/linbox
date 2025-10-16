@@ -1,4 +1,4 @@
-name: Wine Build Pipeline (WoW64 + Staging-TKG + Termux)
+name: Build NewWine (WoW64 + Staging-TKG + Termux)
 
 on:
   workflow_dispatch:
@@ -87,89 +87,31 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libmpg123-dev libopenal-dev libunwind-dev
 
-      - name: Set version variables
+      - name: Set build environment
         run: |
           echo "WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
           echo "WINE_BRANCH=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
-          echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
-          echo "构建分支: ${{ github.event.inputs.build_type }}"
-
-      - name: Set build environment
-        run: |
           echo "TERMUX_GLIBC=true" >> $GITHUB_ENV
           echo "EXPERIMENTAL_WOW64=true" >> $GITHUB_ENV
           echo "USE_CCACHE=true" >> $GITHUB_ENV
-
-      - name: Configure build options based on version
-        run: |
-          # 解析版本号进行比较
-          VERSION_MAJOR=$(echo ${{ env.WINE_VERSION }} | cut -d. -f1)
-          VERSION_MINOR=$(echo ${{ env.WINE_VERSION }} | cut -d. -f2)
-          
-          echo "Wine 版本: ${{ env.WINE_VERSION }}"
-          echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
-          
-          # 判断版本是否 >= 9.10
-          if [ $VERSION_MAJOR -gt 9 ] || [ $VERSION_MAJOR -eq 9 -a $VERSION_MINOR -ge 10 ]; then
-              echo "使用 9.10+ 版本的 MF 修复方式"
-              echo "PATCH_TYPE=wine_do_not_create_dxgi_manager2" >> $GITHUB_ENV
-              echo "MF_PATCH_URL=https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch" >> $GITHUB_ENV
-          else
-              echo "使用 9.10 以下版本的 MF 修复方式"
-              echo "PATCH_TYPE=fix_wine9_2_mfplat" >> $GITHUB_ENV
-              echo "MF_PATCH_URL=https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh" >> $GITHUB_ENV
-          fi
-
-      - name: Download and apply MF patches
-        run: |
-          echo "下载 MF 补丁: ${{ env.MF_PATCH_URL }}"
-          wget -O mf_patch "${{ env.MF_PATCH_URL }}"
-          
-          if [ "${{ env.PATCH_TYPE }}" = "fix_wine9_2_mfplat" ]; then
-            chmod +x mf_patch
-            # 保存补丁脚本，将在构建过程中应用
-            mv mf_patch fix_wine9.2_mfplat.sh
-          else
-            # 保存补丁文件
-            mv mf_patch wine_do_not_create_dxgi_manager2.patch
-          fi
+          echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
+          echo "构建分支: ${{ github.event.inputs.build_type }}"
 
       - name: Build Wine with custom script
         env:
           TERMUX_GLIBC: true
           EXPERIMENTAL_WOW64: true
           USE_CCACHE: true
-          WINE_VERSION: ${{ env.WINE_VERSION }}
-          WINE_BRANCH: ${{ env.WINE_BRANCH }}
-          STAGING_VERSION: v${{ env.WINE_VERSION }}
+          WINE_VERSION: ${{ github.event.inputs.wine_version }}
+          WINE_BRANCH: ${{ github.event.inputs.build_type }}
+          STAGING_VERSION: v${{ github.event.inputs.wine_version }}
         run: |
           chmod +x build_wine.sh
-          
-          # 复制 MF 补丁到脚本目录
-          if [ -f "fix_wine9.2_mfplat.sh" ]; then
-            cp fix_wine9.2_mfplat.sh build_wine.sh ./
-          fi
-          if [ -f "wine_do_not_create_dxgi_manager2.patch" ]; then
-            cp wine_do_not_create_dxgi_manager2.patch build_wine.sh ./
-          fi
-          
-          # 运行构建脚本
           ./build_wine.sh
-
-      - name: Apply additional patches post-build
-        if: env.PATCH_TYPE == 'wine_do_not_create_dxgi_manager2'
-        run: |
-          echo "应用 9.10+ MF 补丁到已构建的 Wine..."
-          # 这里假设构建脚本在 BUILD_DIR 中留下了 Wine 源码
-          if [ -f "wine_do_not_create_dxgi_manager2.patch" ] && [ -d "wine" ]; then
-            cd wine
-            patch -p1 < ../wine_do_not_create_dxgi_manager2.patch || echo "补丁可能已部分应用或不需要"
-          fi
 
       - name: Prepare final artifacts
         run: |
           echo "准备最终构建产物..."
-          # 查找构建生成的 tar.xz 文件
           find . -name "*.tar.xz" -type f | head -5
           ls -la *.tar.xz || echo "未找到 tar.xz 文件"
 
@@ -193,7 +135,6 @@ jobs:
             - **分支**: ${{ env.WINE_BRANCH }}
             - **架构**: WoW64 (32位和64位支持)
             - **平台**: Termux (Android)
-            - **MF 修复**: ${{ env.PATCH_TYPE }}
             
             ## 特性
             ✓ WoW64 架构支持
@@ -221,6 +162,5 @@ jobs:
           echo "版本: ${{ env.WINE_VERSION }}"
           echo "分支: ${{ env.WINE_BRANCH }}"
           echo "架构: WoW64"
-          echo "MF 修复: ${{ env.PATCH_TYPE }}"
           echo ""
           echo "构建产物已上传到 Release 和 Artifacts"
