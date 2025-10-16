@@ -69,6 +69,11 @@ jobs:
           name: bootstraps-wow64
           path: /opt
 
+      - name: Install xz-utils for extraction
+        run: |
+          apt update
+          apt install -y xz-utils
+
       - name: Extract bootstrap
         run: |
           mkdir -p /opt/chroots
