@@ -115,28 +115,35 @@ jobs:
           USE_CCACHE: true
           STAGING_VERSION: v${{ github.event.inputs.wine_version }}
           ALLOW_ROOT: true
-          BUILD_DIR: /github/workspace/build_wine
+          BUILD_DIR: /tmp/build_wine
         run: |
           chmod +x build_wine.sh
-          # 设置终端环境变量
           export TERM=xterm-256color
           echo "开始构建 Wine $WINE_VERSION ($WINE_BRANCH)"
           ./build_wine.sh
 
       - name: Check build artifacts
         run: |
+          echo "当前工作目录: $(pwd)"
           echo "检查构建产物..."
-          ls -la *.tar.xz || echo "未找到 tar.xz 文件"
+          cd /github/workspace
+          echo "切换到 /github/workspace 目录"
+          echo "目录内容:"
+          ls -la
+          echo "查找 .tar.xz 文件:"
           find . -name "*.tar.xz" -type f | while read f; do
             echo "找到文件: $f"
             ls -lh "$f"
           done
+          # 确保我们在正确的位置
+          pwd
+          ls -la *.tar.xz && echo "找到构建产物" || echo "未找到构建产物"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wine-${{ github.event.inputs.wine_version }}-${{ github.event.inputs.build_type }}-wow64
-          path: "*.tar.xz"
+          path: /github/workspace/*.tar.xz
         if: success()
 
       - name: Create GitHub Release
@@ -169,7 +176,7 @@ jobs:
             - 构建时间: ${{ github.event.head_commit.timestamp }}
             - 工作流: ${{ github.workflow }}
             - 提交: ${{ github.sha }}
-          files: "*.tar.xz"
+          files: /github/workspace/*.tar.xz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
