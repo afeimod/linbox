@@ -24,15 +24,16 @@ if [ -z "${WINE_VERSION}" ]; then
     exit 1
 fi
 
+# 清理版本号，移除重复的 v 前缀
+CLEAN_WINE_VERSION="${WINE_VERSION#v}"
+export WINE_VERSION="${CLEAN_WINE_VERSION}"
+export BUILD_WINE_VERSION="${CLEAN_WINE_VERSION}"
+
 # 如果版本是 "latest"，获取最新版本
 if [ "${WINE_VERSION}" = "latest" ] || [ -z "${WINE_VERSION}" ]; then
     WINE_VERSION="$(wget -q -O - "https://raw.githubusercontent.com/wine-mirror/wine/master/VERSION" | tail -c +14)"
     echo "获取到最新版本: ${WINE_VERSION}"
 fi
-
-# 设置实际的版本变量
-export WINE_VERSION="${WINE_VERSION}"
-export BUILD_WINE_VERSION="${WINE_VERSION}"
 
 # 根据版本确定 URL 版本
 if [ "$(echo "$WINE_VERSION" | cut -c3)" = "0" ]; then
@@ -125,7 +126,7 @@ export DO_NOT_COMPILE="false"
 # Make sure that ccache is installed before enabling this.
 export USE_CCACHE="${USE_CCACHE:-false}"
 
-export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-win64 --disable-tests --without-capi --without-coreaudio --without-cups --without-gphoto --without-osmesa --without-oss --without-pcap --without-pcsclite --without-sane --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland --with-gstreamer --without-xinerama"
+export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-win64 --disable-tests --without-capi --without-coreaudio --without-cups --without-gphoto --without-osmesa --without-oss --without-pcap --without-pcsclite --without-sane --without-udev --without-unwind --without-usb --without-v4l2 --without-xinerama --with-gstreamer --with-fontconfig --with-freetype"
 
 # 修复构建目录路径 - 使用可写的临时目录
 export BUILD_DIR="/tmp/build_wine"
@@ -533,25 +534,38 @@ else
                 WINE_VERSION="${STAGING_VERSION}"
             fi
 
+            # 清理版本号，移除重复的 v 前缀
+            CLEAN_VERSION="${WINE_VERSION#v}"
+            echo "使用清理后的版本号: ${CLEAN_VERSION}"
+
             if [ "${WINE_BRANCH}" = "vanilla" ]; then
-                BUILD_NAME="${WINE_VERSION}"
+                BUILD_NAME="${CLEAN_VERSION}"
             else
-                BUILD_NAME="${WINE_VERSION}"-staging
+                BUILD_NAME="${CLEAN_VERSION}"-staging
             fi
 
-            wget -q --show-progress "https://github.com/wine-staging/wine-staging/archive/v${WINE_VERSION}.tar.gz"
-            tar xf v"${WINE_VERSION}".tar.gz
-
-            if [ ! -f v"${WINE_VERSION}".tar.gz ]; then
-                git clone https://github.com/wine-staging/wine-staging wine-staging-"${WINE_VERSION}"
+            # 下载 wine-staging，使用清理后的版本号
+            STAGING_TAR="v${CLEAN_VERSION}.tar.gz"
+            echo "尝试下载 wine-staging: ${STAGING_TAR}"
+            
+            if wget -q --show-progress "https://github.com/wine-staging/wine-staging/archive/${STAGING_TAR}"; then
+                echo "成功下载 wine-staging ${STAGING_TAR}"
+                tar xf "${STAGING_TAR}"
+            else
+                echo "无法下载 ${STAGING_TAR}，尝试 git 克隆..."
+                git clone https://github.com/wine-staging/wine-staging "wine-staging-${CLEAN_VERSION}"
             fi
-        fi
 
-        if [ -f wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh ]; then
-            staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh
-                            DESTDIR="${BUILD_DIR}"/wine)
-        else
-            staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/staging/patchinstall.py)
+            # 使用清理后的版本号设置补丁路径
+            if [ -f "wine-staging-${CLEAN_VERSION}/patches/patchinstall.sh" ]; then
+                staging_patcher=("${BUILD_DIR}/wine-staging-${CLEAN_VERSION}/patches/patchinstall.sh"
+                                DESTDIR="${BUILD_DIR}/wine")
+            elif [ -f "wine-staging-${CLEAN_VERSION}/staging/patchinstall.py" ]; then
+                staging_patcher=("${BUILD_DIR}/wine-staging-${CLEAN_VERSION}/staging/patchinstall.py")
+            else
+                echo "错误: 未找到 patchinstall 脚本"
+                exit 1
+            fi
         fi
 
         # Wine-Staging patch arguments

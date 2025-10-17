@@ -75,10 +75,26 @@ create_build_scripts () {
 
 apt-get update
 apt-get -y install nano
-apt-get -y install locales
-echo ru_RU.UTF_8 UTF-8 >> /etc/locale.gen
-echo en_US.UTF_8 UTF-8 >> /etc/locale.gen
+
+# 安装中文语言环境
+echo "安装中文语言环境..."
+apt-get -y install locales language-pack-zh-hans language-pack-zh-hant
+apt-get -y install fonts-noto-cjk fonts-noto fonts-droid-fallback
+apt-get -y install fonts-wqy-microhei fonts-wqy-zenhei
+apt-get -y install fonts-arphic-ukai fonts-arphic-uming
+
+# 生成中文 locale
+echo "zh_CN.UTF-8 UTF-8" >> /etc/locale.gen
+echo "zh_TW.UTF-8 UTF-8" >> /etc/locale.gen
+echo "zh_HK.UTF-8 UTF-8" >> /etc/locale.gen
+echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen
 locale-gen
+update-locale LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
+
+# 设置时区为亚洲/上海
+ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+DEBIAN_FRONTEND=noninteractive apt-get -y install tzdata
+
 echo deb '${CHROOT_MIRROR}' ${CHROOT_DISTRO} main universe > /etc/apt/sources.list
 echo deb '${CHROOT_MIRROR}' ${CHROOT_DISTRO}-updates main universe >> /etc/apt/sources.list
 echo deb '${CHROOT_MIRROR}' ${CHROOT_DISTRO}-security main universe >> /etc/apt/sources.list
@@ -90,6 +106,16 @@ apt-get -y upgrade
 apt-get -y dist-upgrade
 apt-get -y install software-properties-common
 apt-get update
+
+# 安装 GStreamer 完整支持
+echo "安装 GStreamer 多媒体支持..."
+apt-get -y install \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav gstreamer1.0-tools \
+    gstreamer1.0-x gstreamer1.0-alsa gstreamer1.0-pulseaudio \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
 apt-get -y build-dep wine-development libsdl2 libvulkan1
 apt-get -y install cmake flex bison ccache gcc-14 g++-14 wget git gcc-mingw-w64 g++-mingw-w64
 apt-get -y install libxpresent-dev libjxr-dev libusb-1.0-0-dev libgcrypt20-dev libpulse-dev libudev-dev libsane-dev libv4l-dev libkrb5-dev libgphoto2-dev liblcms2-dev libcapi20-dev
@@ -100,6 +126,7 @@ apt-get -y install meson ninja-build libxml2 libxml2-dev libxkbcommon-dev libxkb
 apt-get -y purge libvulkan-dev libvulkan1 libsdl2-dev libsdl2-2.0-0 libpcap0.8-dev libpcap0.8 --purge --autoremove
 apt-get -y clean
 apt-get -y autoclean
+
 export PATH="/usr/local/bin:${PATH}"
 mkdir /opt/build_libs
 cd /opt/build_libs
@@ -149,6 +176,10 @@ cd ../ && rm -r build && mkdir build && cd build
 #meson compile -C build
 #meson install -C build
 cd /opt && rm -r /opt/build_libs
+
+echo "✅ Bootstrap 环境准备完成！"
+echo "✅ 中文语言环境已安装"
+echo "✅ GStreamer 多媒体支持已安装"
 EOF
 
 	chmod +x "${MAINDIR}"/prepare_chroot.sh
@@ -165,4 +196,5 @@ prepare_chroot 64
 rm "${CHROOT_X64}"/opt/prepare_chroot.sh
 
 clear
-echo "Done"
+echo "✅ WoW64 Bootstrap 创建完成！"
+echo "✅ 包含中文语言环境和 GStreamer 支持"
