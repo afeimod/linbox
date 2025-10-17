@@ -130,6 +130,15 @@ export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-wi
 # 修复构建目录路径 - 使用可写的临时目录
 export BUILD_DIR="/tmp/build_wine"
 
+# 新增：在容器环境中禁用 ccache 的家目录映射
+if [ "${IN_CONTAINER}" = "true" ]; then
+    echo "容器环境中运行，禁用 ccache 家目录映射"
+    export CCACHE_DISABLE_HOME_MAPPING=true
+    # 设置 ccache 目录到可写位置
+    export CCACHE_DIR="/tmp/ccache"
+    mkdir -p "${CCACHE_DIR}"
+fi
+
 # 新增：应用 MF 补丁函数
 apply_mf_patches() {
     echo "检查并应用 MF 补丁..."
@@ -198,33 +207,48 @@ if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
    export CROSSLDFLAGS="${LDFLAGS}"
 
    if [ "$USE_CCACHE" = "true" ]; then
-	export CC="ccache ${CC}"
-	export CXX="ccache ${CXX}"
- 
-	export x86_64_CC="ccache ${CROSSCC_X64}"
- 
-	export CROSSCC_X64="ccache ${CROSSCC_X64}"
-	export CROSSCXX_X64="ccache ${CROSSCXX_X64}"
+        # 修复：在容器环境中使用可写的 ccache 目录
+        if [ "${IN_CONTAINER}" = "true" ]; then
+            export CCACHE_DIR="/tmp/ccache"
+            mkdir -p "${CCACHE_DIR}"
+        fi
+        
+        export CC="ccache ${CC}"
+        export CXX="ccache ${CXX}"
+        export x86_64_CC="ccache ${CROSSCC_X64}"
+        export CROSSCC_X64="ccache ${CROSSCC_X64}"
+        export CROSSCXX_X64="ccache ${CROSSCXX_X64}"
 
-	if [ -z "${XDG_CACHE_HOME}" ]; then
-		export XDG_CACHE_HOME="${HOME}"/.cache
-	fi
+        if [ -z "${XDG_CACHE_HOME}" ]; then
+            export XDG_CACHE_HOME="${HOME}"/.cache
+        fi
 
-	mkdir -p "${XDG_CACHE_HOME}"/ccache
-	mkdir -p "${HOME}"/.ccache
+        mkdir -p "${XDG_CACHE_HOME}"/ccache
+        mkdir -p "${HOME}"/.ccache
    fi
 
    build_with_bwrap () {
-		BOOTSTRAP_PATH="${BOOTSTRAP_X64}"
+        BOOTSTRAP_PATH="${BOOTSTRAP_X64}"
 
-    bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
-		  --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
-		  --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
-		  --bind-try "${XDG_CACHE_HOME}"/ccache "${XDG_CACHE_HOME}"/ccache \
-		  --bind-try "${HOME}"/.ccache "${HOME}"/.ccache \
-		  --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
-			"$@"
-}
+        # 修复：在容器环境中不绑定只读的家目录
+        if [ "${IN_CONTAINER}" = "true" ]; then
+            bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
+                  --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
+                  --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
+                  --bind-try "${CCACHE_DIR}" "${CCACHE_DIR}" \
+                  --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
+                  --setenv CCACHE_DIR "${CCACHE_DIR}" \
+                    "$@"
+        else
+            bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
+                  --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
+                  --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
+                  --bind-try "${XDG_CACHE_HOME}"/ccache "${XDG_CACHE_HOME}"/ccache \
+                  --bind-try "${HOME}"/.ccache "${HOME}"/.ccache \
+                  --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
+                    "$@"
+        fi
+   }
 
 else
 
@@ -250,43 +274,60 @@ export CROSSCFLAGS_X64="${CFLAGS_X64}"
 export CROSSLDFLAGS="${LDFLAGS}"
 
 if [ "$USE_CCACHE" = "true" ]; then
-	export CC="ccache ${CC}"
-	export CXX="ccache ${CXX}"
+        # 修复：在容器环境中使用可写的 ccache 目录
+        if [ "${IN_CONTAINER}" = "true" ]; then
+            export CCACHE_DIR="/tmp/ccache"
+            mkdir -p "${CCACHE_DIR}"
+        fi
+        
+        export CC="ccache ${CC}"
+        export CXX="ccache ${CXX}"
 
-	export i386_CC="ccache ${CROSSCC_X32}"
-	export x86_64_CC="ccache ${CROSSCC_X64}"
+        export i386_CC="ccache ${CROSSCC_X32}"
+        export x86_64_CC="ccache ${CROSSCC_X64}"
 
-	export CROSSCC_X32="ccache ${CROSSCC_X32}"
-	export CROSSCXX_X32="ccache ${CROSSCXX_X32}"
-	export CROSSCC_X64="ccache ${CROSSCC_X64}"
-	export CROSSCXX_X64="ccache ${CROSSCXX_X64}"
+        export CROSSCC_X32="ccache ${CROSSCC_X32}"
+        export CROSSCXX_X32="ccache ${CROSSCXX_X32}"
+        export CROSSCC_X64="ccache ${CROSSCC_X64}"
+        export CROSSCXX_X64="ccache ${CROSSCXX_X64}"
 
-	if [ -z "${XDG_CACHE_HOME}" ]; then
-		export XDG_CACHE_HOME="${HOME}"/.cache
-	fi
+        if [ -z "${XDG_CACHE_HOME}" ]; then
+            export XDG_CACHE_HOME="${HOME}"/.cache
+        fi
 
-	mkdir -p "${XDG_CACHE_HOME}"/ccache
-	mkdir -p "${HOME}"/.ccache
+        mkdir -p "${XDG_CACHE_HOME}"/ccache
+        mkdir -p "${HOME}"/.ccache
 fi
 
 build_with_bwrap () {
-	if [ "${1}" = "32" ]; then
-		BOOTSTRAP_PATH="${BOOTSTRAP_X32}"
-	else
-		BOOTSTRAP_PATH="${BOOTSTRAP_X64}"
-	fi
+    if [ "${1}" = "32" ]; then
+        BOOTSTRAP_PATH="${BOOTSTRAP_X32}"
+    else
+        BOOTSTRAP_PATH="${BOOTSTRAP_X64}"
+    fi
 
-	if [ "${1}" = "32" ] || [ "${1}" = "64" ]; then
-		shift
-	fi
+    if [ "${1}" = "32" ] || [ "${1}" = "64" ]; then
+        shift
+    fi
 
-    bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
-		  --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
-		  --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
-		  --bind-try "${XDG_CACHE_HOME}"/ccache "${XDG_CACHE_HOME}"/ccache \
-		  --bind-try "${HOME}"/.ccache "${HOME}"/.ccache \
-		  --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
-			"$@"
+    # 修复：在容器环境中不绑定只读的家目录
+    if [ "${IN_CONTAINER}" = "true" ]; then
+        bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
+              --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
+              --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
+              --bind-try "${CCACHE_DIR}" "${CCACHE_DIR}" \
+              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
+              --setenv CCACHE_DIR "${CCACHE_DIR}" \
+                "$@"
+    else
+        bwrap --ro-bind "${BOOTSTRAP_PATH}" / --dev /dev --ro-bind /sys /sys \
+              --proc /proc --tmpfs /tmp --tmpfs /home --tmpfs /run --tmpfs /var \
+              --tmpfs /mnt --tmpfs /media --bind "${BUILD_DIR}" "${BUILD_DIR}" \
+              --bind-try "${XDG_CACHE_HOME}"/ccache "${XDG_CACHE_HOME}"/ccache \
+              --bind-try "${HOME}"/.ccache "${HOME}"/.ccache \
+              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
+                "$@"
+    fi
 }
 fi
 
@@ -314,37 +355,37 @@ fi
 sleep 3
 
 if ! command -v git 1>/dev/null; then
-	echo "Please install git and run the script again"
-	exit 1
+    echo "Please install git and run the script again"
+    exit 1
 fi
 
 if ! command -v autoconf 1>/dev/null; then
-	echo "Please install autoconf and run the script again"
-	exit 1
+    echo "Please install autoconf and run the script again"
+    exit 1
 fi
 
 if ! command -v wget 1>/dev/null; then
-	echo "Please install wget and run the script again"
-	exit 1
+    echo "Please install wget and run the script again"
+    exit 1
 fi
 
 if ! command -v xz 1>/dev/null; then
-	echo "Please install xz and run the script again"
-	exit 1
+    echo "Please install xz and run the script again"
+    exit 1
 fi
 
 # 替换 "latest" 参数为实际的 Wine 版本
 if [ "${WINE_VERSION}" = "latest" ] || [ -z "${WINE_VERSION}" ]; then
-	WINE_VERSION="$(wget -q -O - "https://raw.githubusercontent.com/wine-mirror/wine/master/VERSION" | tail -c +14)"
+    WINE_VERSION="$(wget -q -O - "https://raw.githubusercontent.com/wine-mirror/wine/master/VERSION" | tail -c +14)"
     echo "获取到最新版本: ${WINE_VERSION}"
 fi
 
 # 稳定版和开发版有不同的源码位置
 # 确定选择的版本是稳定版还是开发版
 if [ "$(echo "$WINE_VERSION" | cut -c3)" = "0" ]; then
-	WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).0
+    WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).0
 else
-	WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).x
+    WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).x
 fi
 
 # 确保构建目录存在且有正确权限
@@ -363,22 +404,22 @@ echo "准备编译 Wine"
 echo
 
 if [ -n "${CUSTOM_SRC_PATH}" ]; then
-	is_url="$(echo "${CUSTOM_SRC_PATH}" | head -c 6)"
+    is_url="$(echo "${CUSTOM_SRC_PATH}" | head -c 6)"
 
-	if [ "${is_url}" = "git://" ] || [ "${is_url}" = "https:" ]; then
-		git clone "${CUSTOM_SRC_PATH}" wine
-	else
-		if [ ! -f "${CUSTOM_SRC_PATH}"/configure ]; then
-			echo "CUSTOM_SRC_PATH 设置为不正确或不存在的目录!"
-			echo "请确保使用包含正确 Wine 源码的目录。"
-			exit 1
-		fi
+    if [ "${is_url}" = "git://" ] || [ "${is_url}" = "https:" ]; then
+        git clone "${CUSTOM_SRC_PATH}" wine
+    else
+        if [ ! -f "${CUSTOM_SRC_PATH}"/configure ]; then
+            echo "CUSTOM_SRC_PATH 设置为不正确或不存在的目录!"
+            echo "请确保使用包含正确 Wine 源码的目录。"
+            exit 1
+        fi
 
-		cp -r "${CUSTOM_SRC_PATH}" wine
-	fi
+        cp -r "${CUSTOM_SRC_PATH}" wine
+    fi
 
-	WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
-	BUILD_NAME="${WINE_VERSION}"-custom
+    WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
+    BUILD_NAME="${WINE_VERSION}"-custom
 elif [ "$WINE_BRANCH" = "staging-tkg" ]; then
     echo "克隆 wine-tkg 仓库..."
     git clone https://github.com/Kron4ek/wine-tkg wine
@@ -415,12 +456,12 @@ elif [ "$WINE_BRANCH" = "staging-tkg" ]; then
         BUILD_NAME="${WINE_VERSION}"-staging-tkg
     fi
 elif [ "$WINE_BRANCH" = "wayland" ]; then
-	git clone https://github.com/Kron4ek/wine-wayland wine
+    git clone https://github.com/Kron4ek/wine-wayland wine
 
-	WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
-	BUILD_NAME="${WINE_VERSION}"-wayland
+    WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
+    BUILD_NAME="${WINE_VERSION}"-wayland
 
-	export WINE_BUILD_OPTIONS="--without-x --without-xcomposite \
+    export WINE_BUILD_OPTIONS="--without-x --without-xcomposite \
                                --without-xfixes --without-xinerama \
                                --without-xinput --without-xinput2 \
                                --without-xrandr --without-xrender \
@@ -429,27 +470,26 @@ elif [ "$WINE_BRANCH" = "wayland" ]; then
                                --without-xcursor --without-opengl \
                                ${WINE_BUILD_OPTIONS}"
 elif [ "$WINE_BRANCH" = "proton" ]; then
-	if [ -z "${PROTON_BRANCH}" ]; then
-		git clone https://github.com/ValveSoftware/wine
-	else
-		git clone https://github.com/ValveSoftware/wine -b "${PROTON_BRANCH}"
-	fi
+    if [ -z "${PROTON_BRANCH}" ]; then
+        git clone https://github.com/ValveSoftware/wine
+    else
+        git clone https://github.com/ValveSoftware/wine -b "${PROTON_BRANCH}"
+    fi
 
-	if [ "${PROTON_BRANCH}" = "experimental_8.0" ]; then
-		patch -d wine -Np1 < "${scriptdir}"/proton-exp-8.0.patch
-	fi
+    if [ "${PROTON_BRANCH}" = "experimental_8.0" ]; then
+        patch -d wine -Np1 < "${scriptdir}"/proton-exp-8.0.patch
+    fi
 
-	if [ "${PROTON_BRANCH}" = "experimental_9.0" ] || [ "${PROTON_BRANCH}" = "bleeding-edge" ]; then
-	 patch -d wine -Np1 < "${scriptdir}"/proton-exp-9.0.patch
-	fi
+    if [ "${PROTON_BRANCH}" = "experimental_9.0" ] || [ "${PROTON_BRANCH}" = "bleeding-edge" ]; then
+     patch -d wine -Np1 < "${scriptdir}"/proton-exp-9.0.patch
+    fi
 
-
-	WINE_VERSION="$(cat wine/VERSION | tail -c +14)-$(git -C wine rev-parse --short HEAD)"
-	if [[ "${PROTON_BRANCH}" == "experimental_"* ]] || [ "${PROTON_BRANCH}" = "bleeding-edge" ]; then
-		BUILD_NAME=proton-exp-"${WINE_VERSION}"
-	else
-		BUILD_NAME=proton-"${WINE_VERSION}"
-	fi
+    WINE_VERSION="$(cat wine/VERSION | tail -c +14)-$(git -C wine rev-parse --short HEAD)"
+    if [[ "${PROTON_BRANCH}" == "experimental_"* ]] || [ "${PROTON_BRANCH}" = "bleeding-edge" ]; then
+        BUILD_NAME=proton-exp-"${WINE_VERSION}"
+    else
+        BUILD_NAME=proton-"${WINE_VERSION}"
+    fi
 else
     if [ "${WINE_VERSION}" = "git" ]; then
         git clone https://gitlab.winehq.org/wine/wine.git wine
@@ -478,96 +518,96 @@ else
         fi
     fi
 
-        if [ "$WINE_BRANCH" = "staging" ] || [ "$WINE_BRANCH" = "vanilla" ]; then
-	if [ "${WINE_VERSION}" = "git" ]; then
-    git clone https://github.com/wine-staging/wine-staging wine-staging-"${WINE_VERSION}"
-    upstream_commit="$(cat wine-staging-"${WINE_VERSION}"/staging/upstream-commit | head -c 7)"
-    git -C wine checkout "${upstream_commit}"
-    if [ "$WINE_BRANCH" = "vanilla" ]; then
-    BUILD_NAME="${WINE_VERSION}-${upstream_commit}"
-    else
-    BUILD_NAME="${WINE_VERSION}-${upstream_commit}-staging"
+    if [ "$WINE_BRANCH" = "staging" ] || [ "$WINE_BRANCH" = "vanilla" ]; then
+        if [ "${WINE_VERSION}" = "git" ]; then
+            git clone https://github.com/wine-staging/wine-staging wine-staging-"${WINE_VERSION}"
+            upstream_commit="$(cat wine-staging-"${WINE_VERSION}"/staging/upstream-commit | head -c 7)"
+            git -C wine checkout "${upstream_commit}"
+            if [ "$WINE_BRANCH" = "vanilla" ]; then
+                BUILD_NAME="${WINE_VERSION}-${upstream_commit}"
+            else
+                BUILD_NAME="${WINE_VERSION}-${upstream_commit}-staging"
+            fi
+        else
+            if [ -n "${STAGING_VERSION}" ]; then
+                WINE_VERSION="${STAGING_VERSION}"
+            fi
+
+            if [ "${WINE_BRANCH}" = "vanilla" ]; then
+                BUILD_NAME="${WINE_VERSION}"
+            else
+                BUILD_NAME="${WINE_VERSION}"-staging
+            fi
+
+            wget -q --show-progress "https://github.com/wine-staging/wine-staging/archive/v${WINE_VERSION}.tar.gz"
+            tar xf v"${WINE_VERSION}".tar.gz
+
+            if [ ! -f v"${WINE_VERSION}".tar.gz ]; then
+                git clone https://github.com/wine-staging/wine-staging wine-staging-"${WINE_VERSION}"
+            fi
+        fi
+
+        if [ -f wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh ]; then
+            staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh
+                            DESTDIR="${BUILD_DIR}"/wine)
+        else
+            staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/staging/patchinstall.py)
+        fi
+
+        # Wine-Staging patch arguments
+        # Not recommended to change these if statements unless you know what you are doing.
+
+        if [ "$TERMUX_GLIBC" = "true" ] && [ "$WINE_BRANCH" = "staging" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
+            STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
+        elif [ "$TERMUX_GLIBC" = "true" ] && [ "$WINE_BRANCH" = "staging" ]; then
+            STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
+        elif [ "$TERMUX_GLIBC" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
+            STAGING_ARGS="eventfd_synchronization winecfg_Staging"
+        elif [ "$TERMUX_GLIBC" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ]; then
+            STAGING_ARGS="eventfd_synchronization winecfg_Staging"
+        elif [ "$TERMUX_PROOT" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ]; then
+            STAGING_ARGS="eventfd_synchronization winecfg_Staging"
+        elif [ "$TERMUX_PROOT" = "true" ] && [ "${WINE_BRANCH}" = "staging" ]; then
+            STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
+        elif [ "$TERMUX_PROOT" = "true" ] && [ "$WINE_BRANCH" = "staging" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
+            STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
+        elif [ "$TERMUX_PROOT" = "true" ] && [ "$WINE_BRANCH" = "vanilla" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
+            STAGING_ARGS="eventfd_synchronization winecfg_Staging"
+        fi
+
+        cd wine || exit 1
+        if [ -n "${STAGING_ARGS}" ]; then
+            "${staging_patcher[@]}" ${STAGING_ARGS}
+        else
+            echo "跳过 Wine-Staging 补丁..."
+        fi
+        
+        if [ $? -ne 0 ]; then
+            echo
+            echo "Wine-Staging 补丁未正确应用!"
+            exit 1
+        fi
+
+        cd "${BUILD_DIR}" || exit 1
     fi
-else
-    if [ -n "${STAGING_VERSION}" ]; then
-        WINE_VERSION="${STAGING_VERSION}"
-    fi
-
-    if [ "${WINE_BRANCH}" = "vanilla" ]; then
-    BUILD_NAME="${WINE_VERSION}"
-    else
-    BUILD_NAME="${WINE_VERSION}"-staging
-fi
-
-    wget -q --show-progress "https://github.com/wine-staging/wine-staging/archive/v${WINE_VERSION}.tar.gz"
-    tar xf v"${WINE_VERSION}".tar.gz
-
-    if [ ! -f v"${WINE_VERSION}".tar.gz ]; then
-        git clone https://github.com/wine-staging/wine-staging wine-staging-"${WINE_VERSION}"
-    fi
-fi
-
-if [ -f wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh ]; then
-    staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh
-                    DESTDIR="${BUILD_DIR}"/wine)
-else
-    staging_patcher=("${BUILD_DIR}"/wine-staging-"${WINE_VERSION}"/staging/patchinstall.py)
-fi
-fi
-
-# Wine-Staging patch arguments
-# Not recommended to change these if statements unless you know what you are doing.
-
-   if [ "$TERMUX_GLIBC" = "true" ] && [ "$WINE_BRANCH" = "staging" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-    STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
-   elif [ "$TERMUX_GLIBC" = "true" ] && [ "$WINE_BRANCH" = "staging" ]; then
-    STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
-   elif [ "$TERMUX_GLIBC" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-    STAGING_ARGS="eventfd_synchronization winecfg_Staging"
-   elif [ "$TERMUX_GLIBC" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ]; then
-    STAGING_ARGS="eventfd_synchronization winecfg_Staging"
-   elif [ "$TERMUX_PROOT" = "true" ] && [ "${WINE_BRANCH}" = "vanilla" ]; then
-    STAGING_ARGS="eventfd_synchronization winecfg_Staging"
-   elif [ "$TERMUX_PROOT" = "true" ] && [ "${WINE_BRANCH}" = "staging" ]; then
-    STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
-   elif [ "$TERMUX_PROOT" = "true" ] && [ "$WINE_BRANCH" = "staging" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-    STAGING_ARGS="--all -W ntdll-Syscall_Emulation"
-   elif [ "$TERMUX_PROOT" = "true" ] && [ "$WINE_BRANCH" = "vanilla" ] && [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-    STAGING_ARGS="eventfd_synchronization winecfg_Staging"
-    fi
-
-		cd wine || exit 1
-		if [ -n "${STAGING_ARGS}" ]; then
-			"${staging_patcher[@]}" ${STAGING_ARGS}
-		else
-			echo "跳过 Wine-Staging 补丁..."
-		fi
-     
-		if [ $? -ne 0 ]; then
-			echo
-			echo "Wine-Staging 补丁未正确应用!"
-			exit 1
-		fi
-
-cd "${BUILD_DIR}" || exit 1
 fi
 
 if [ "$TERMUX_PROOT" = "true" ]; then
     if [ "$WINE_BRANCH" = "staging" ] || [ "$WINE_BRANCH" = "staging-tkg" ] || [ "$WINE_BRANCH" = "proton" ]; then
-    echo "Applying address patch to proot/chroot Wine build..."
-    patch -d wine -Np1 < "${scriptdir}"/address-space-proot.patch || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear
+        echo "Applying address patch to proot/chroot Wine build..."
+        patch -d wine -Np1 < "${scriptdir}"/address-space-proot.patch || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear
     elif [ "$WINE_BRANCH" = "vanilla" ]; then
-    echo "Applying address patch to proot/chroot Wine build..."
-    patch -d wine -Np1 < "${scriptdir}"/address-space-proot.patch || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear
-fi
+        echo "Applying address patch to proot/chroot Wine build..."
+        patch -d wine -Np1 < "${scriptdir}"/address-space-proot.patch || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear
+    fi
 fi
 
 # Checks which Wine branch you are building and applies additional convenient patches.
@@ -577,74 +617,74 @@ if [ "$TERMUX_GLIBC" = "true" ]; then
     echo "Applying additional patches for Termux Glibc..."
 
     if [ "$WINE_BRANCH" = "staging" ]; then
-    echo "Applying esync patch"
-    patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
-    echo "Applying address space patch"
-    patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
-    echo "Add Proton DLL overrides"
-    patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix-staging.patch && \
-    echo "Applying path change patch"
-    if git -C "${BUILD_DIR}/wine" log | grep -q 4e04b2d5282e4ef769176c94b4b38b5fba006a06; then
-    patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch
-    else
-    patch -d wine -Np1 < "${scriptdir}"/pathfix.patch
-    fi || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear
+        echo "Applying esync patch"
+        patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
+        echo "Applying address space patch"
+        patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
+        echo "Add Proton DLL overrides"
+        patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix-staging.patch && \
+        echo "Applying path change patch"
+        if git -C "${BUILD_DIR}/wine" log | grep -q 4e04b2d5282e4ef769176c94b4b38b5fba006a06; then
+            patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch
+        else
+            patch -d wine -Np1 < "${scriptdir}"/pathfix.patch
+        fi || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear
     elif [ "$WINE_BRANCH" = "vanilla" ]; then
-    echo "Applying esync patch"
-    patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
-    echo "Applying address space patch"
-    patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
-    echo "Add Proton DLL overrides"
-    patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix.patch && \
-    echo "Applying path change patch"
-    if git -C "${BUILD_DIR}/wine" log | grep -q 4e04b2d5282e4ef769176c94b4b38b5fba006a06; then
-    patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch
-    else
-    patch -d wine -Np1 < "${scriptdir}"/pathfix.patch
-    fi || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear
+        echo "Applying esync patch"
+        patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
+        echo "Applying address space patch"
+        patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
+        echo "Add Proton DLL overrides"
+        patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix.patch && \
+        echo "Applying path change patch"
+        if git -C "${BUILD_DIR}/wine" log | grep -q 4e04b2d5282e4ef769176c94b4b38b5fba006a06; then
+            patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch
+        else
+            patch -d wine -Np1 < "${scriptdir}"/pathfix.patch
+        fi || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear
     elif [ "$WINE_BRANCH" = "staging-tkg" ]; then
-    echo "Applying esync patch"
-    patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
-    echo "Applying address space patch"
-    patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
-    echo "Add Proton DLL overrides"
-    patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix-staging.patch && \
-    echo "Applying path change patch"
-    ## This needs an additional check since this patch will not work on
-    ## Wine 9.4 and lower due to differences in Wine source code.
-    patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear 
+        echo "Applying esync patch"
+        patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
+        echo "Applying address space patch"
+        patch -d wine -Np1 < "${scriptdir}"/protonoverrides.patch && \
+        echo "Add Proton DLL overrides"
+        patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix-staging.patch && \
+        echo "Applying path change patch"
+        ## This needs an additional check since this patch will not work on
+        ## Wine 9.4 and lower due to differences in Wine source code.
+        patch -d wine -Np1 < "${scriptdir}"/path-patch-universal.patch || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear 
     elif [ "$WINE_BRANCH" = "proton" ]; then
-    echo "Applying esync patch"
-    patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
-    echo "Applying address space patch"
-    patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix.patch && \
-    echo "Applying path change patch"
-    ## Proton is based on Wine 9.0 stable release so some of the updates
-    ## for patches are not required.
-    patch -d wine -Np1 < "${scriptdir}"/pathfix.patch || {
-        echo "Error: Failed to apply one or more patches."
-        exit 1
-    }
-    clear 
-fi
+        echo "Applying esync patch"
+        patch -d wine -Np1 < "${scriptdir}"/esync.patch && \
+        echo "Applying address space patch"
+        patch -d wine -Np1 < "${scriptdir}"/termux-wine-fix.patch && \
+        echo "Applying path change patch"
+        ## Proton is based on Wine 9.0 stable release so some of the updates
+        ## for patches are not required.
+        patch -d wine -Np1 < "${scriptdir}"/pathfix.patch || {
+            echo "Error: Failed to apply one or more patches."
+            exit 1
+        }
+        clear 
+    fi
 fi
 
 # 新增：应用 MF 补丁
 echo "开始应用 MF 补丁..."
 apply_mf_patches
-    
+
 ## NDIS patch for fixing crappy Android's SELinux limitations.
 #if [ "$TERMUX_GLIBC" = "true" ]; then
 #echo "Circumventing crappy SELinux's limitations... (Thanks BrunoSX)"
@@ -663,26 +703,25 @@ apply_mf_patches
 #fi
 
 if [ ! -d wine ]; then
-	clear
-	echo "未找到 Wine 源码!"
-	echo "请确保指定了正确的 Wine 版本。"
-	exit 1
+    echo "未找到 Wine 源码!"
+    echo "请确保指定了正确的 Wine 版本。"
+    exit 1
 fi
 
 cd wine || exit 1
 echo "Fixing Input Bridge..."
 if [ "$WINE_BRANCH" = "vanilla" ]; then
-git revert --no-commit 2bfe81e41f93ce75139e3a6a2d0b68eb2dcb8fa6 || {
+    git revert --no-commit 2bfe81e41f93ce75139e3a6a2d0b68eb2dcb8fa6 || {
         echo "Error: Failed to revert one or two patches. Stopping."
         exit 1
     }
-   clear
+    clear
 elif [ "$WINE_BRANCH" = "staging" ] || [ "$WINE_BRANCH" = "staging-tkg" ]; then
-patch -p1 -R < "${scriptdir}"/inputbridgefix.patch || {
+    patch -p1 -R < "${scriptdir}"/inputbridgefix.patch || {
         echo "Error: Failed to revert one or two patches. Stopping."
         exit 1
     }
-   clear
+    clear
 fi
 
 #echo "Applying CPU topology patch"
@@ -701,11 +740,10 @@ fi
 
 ### Experimental addition to address space hackery
 if [ "$TERMUX_GLIBC" = "true" ]; then
-echo "Applying additional address space patch... (credits to Bylaws)"
-#patch -p1 < "${scriptdir}"/wine-virtual-memory.patch || {
-#        echo "This patch did not apply. Stopping..."
-#	exit 1
-#    }
+    echo "跳过有问题的地址空间补丁..."
+    # patch -p1 < "${scriptdir}"/wine-virtual-memory.patch || {
+    #     echo "这个补丁没有应用，继续..."
+    # }
     clear
 fi
 
@@ -717,37 +755,34 @@ autoreconf -f
 cd "${BUILD_DIR}" || exit 1
 
 if [ "${DO_NOT_COMPILE}" = "true" ]; then
-	clear
-	echo "DO_NOT_COMPILE 设置为 true"
-	echo "强制退出"
-	exit
+    echo "DO_NOT_COMPILE 设置为 true"
+    echo "强制退出"
+    exit
 fi
 
 if ! command -v bwrap 1>/dev/null; then
-	echo "您的系统未安装 Bubblewrap!"
-	echo "请安装后重新运行脚本"
-	exit 1
+    echo "您的系统未安装 Bubblewrap!"
+    echo "请安装后重新运行脚本"
+    exit 1
 fi
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
     if [ ! -d "${BOOTSTRAP_X64}" ]; then
-        clear
         echo "编译需要引导程序!"
         exit 1
     fi
 else    
     if [ ! -d "${BOOTSTRAP_X64}" ] || [ ! -d "${BOOTSTRAP_X32}" ]; then
-        clear
         echo "编译需要引导程序!"
         exit 1
     fi
 fi
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-BWRAP64="build_with_bwrap"
+    BWRAP64="build_with_bwrap"
 else
-BWRAP64="build_with_bwrap 64"
-BWRAP32="build_with_bwrap 32"
+    BWRAP64="build_with_bwrap 64"
+    BWRAP32="build_with_bwrap 32"
 fi
 
 # 修复安装目录问题 - 使用相对路径
@@ -755,85 +790,85 @@ INSTALL_DIR="wine-${BUILD_NAME}-amd64"
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
 
-export CROSSCC="${CROSSCC_X64}"
-export CROSSCXX="${CROSSCXX_X64}"
-export CFLAGS="${CFLAGS_X64}"
-export CXXFLAGS="${CFLAGS_X64}"
-export CROSSCFLAGS="${CROSSCFLAGS_X64}"
-export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
+    export CROSSCC="${CROSSCC_X64}"
+    export CROSSCXX="${CROSSCXX_X64}"
+    export CFLAGS="${CFLAGS_X64}"
+    export CXXFLAGS="${CFLAGS_X64}"
+    export CROSSCFLAGS="${CROSSCFLAGS_X64}"
+    export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
-mkdir "${BUILD_DIR}"/build64
-cd "${BUILD_DIR}"/build64 || exit
+    mkdir "${BUILD_DIR}"/build64
+    cd "${BUILD_DIR}"/build64 || exit
 
-echo "配置 Wine 构建..."
-${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix="/${INSTALL_DIR}"
+    echo "配置 Wine 构建..."
+    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix="/${INSTALL_DIR}"
 
-echo "编译 Wine..."
-${BWRAP64} make -j8
+    echo "编译 Wine..."
+    ${BWRAP64} make -j8
 
-echo "安装 Wine..."
-${BWRAP64} make install
+    echo "安装 Wine..."
+    ${BWRAP64} make install
 
-# 检查安装是否成功
-echo "检查安装结果..."
-if [ -d "/${INSTALL_DIR}" ]; then
-    echo "安装目录已创建: /${INSTALL_DIR}"
-    # 将安装目录移动到构建目录
-    mv "/${INSTALL_DIR}" "${BUILD_DIR}/"
-    echo "安装目录已移动到: ${BUILD_DIR}/${INSTALL_DIR}"
+    # 检查安装是否成功
+    echo "检查安装结果..."
+    if [ -d "/${INSTALL_DIR}" ]; then
+        echo "安装目录已创建: /${INSTALL_DIR}"
+        # 将安装目录移动到构建目录
+        mv "/${INSTALL_DIR}" "${BUILD_DIR}/"
+        echo "安装目录已移动到: ${BUILD_DIR}/${INSTALL_DIR}"
+    else
+        echo "警告: 安装目录 /${INSTALL_DIR} 不存在，尝试从 build64 目录查找..."
+        # 尝试从 build64 目录查找安装文件
+        find "${BUILD_DIR}/build64" -name "bin" -type d | head -1 | while read bin_dir; do
+            if [ -n "$bin_dir" ]; then
+                echo "在 $bin_dir 找到二进制文件，创建手动安装目录"
+                mkdir -p "${BUILD_DIR}/${INSTALL_DIR}"
+                # 复制所有找到的文件
+                find "${BUILD_DIR}/build64" -type f -name "wine*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
+                find "${BUILD_DIR}/build64" -type f -name "*.so*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
+                break
+            fi
+        done
+    fi
+
 else
-    echo "警告: 安装目录 /${INSTALL_DIR} 不存在，尝试从 build64 目录查找..."
-    # 尝试从 build64 目录查找安装文件
-    find "${BUILD_DIR}/build64" -name "bin" -type d | head -1 | while read bin_dir; do
-        if [ -n "$bin_dir" ]; then
-            echo "在 $bin_dir 找到二进制文件，创建手动安装目录"
-            mkdir -p "${BUILD_DIR}/${INSTALL_DIR}"
-            # 复制所有找到的文件
-            find "${BUILD_DIR}/build64" -type f -name "wine*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
-            find "${BUILD_DIR}/build64" -type f -name "*.so*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
-            break
-        fi
-    done
-fi
 
-else
+    export CROSSCC="${CROSSCC_X64}"
+    export CROSSCXX="${CROSSCXX_X64}"
+    export CFLAGS="${CFLAGS_X64}"
+    export CXXFLAGS="${CFLAGS_X64}"
+    export CROSSCFLAGS="${CROSSCFLAGS_X64}"
+    export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
-export CROSSCC="${CROSSCC_X64}"
-export CROSSCXX="${CROSSCXX_X64}"
-export CFLAGS="${CFLAGS_X64}"
-export CXXFLAGS="${CFLAGS_X64}"
-export CROSSCFLAGS="${CROSSCFLAGS_X64}"
-export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
+    mkdir "${BUILD_DIR}"/build64
+    cd "${BUILD_DIR}"/build64 || exit
+    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
+    ${BWRAP64} make -j8
+    ${BWRAP64} make install
 
-mkdir "${BUILD_DIR}"/build64
-cd "${BUILD_DIR}"/build64 || exit
-${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
-${BWRAP64} make -j8
-${BWRAP64} make install
+    export CROSSCC="${CROSSCC_X32}"
+    export CROSSCXX="${CROSSCXX_X32}"
+    export CFLAGS="${CFLAGS_X32}"
+    export CXXFLAGS="${CFLAGS_X32}"
+    export CROSSCFLAGS="${CROSSCFLAGS_X32}"
+    export CROSSCXXFLAGS="${CROSSCFLAGS_X32}"
 
-export CROSSCC="${CROSSCC_X32}"
-export CROSSCXX="${CROSSCXX_X32}"
-export CFLAGS="${CFLAGS_X32}"
-export CXXFLAGS="${CFLAGS_X32}"
-export CROSSCFLAGS="${CROSSCFLAGS_X32}"
-export CROSSCXXFLAGS="${CROSSCFLAGS_X32}"
+    mkdir "${BUILD_DIR}"/build32-tools
+    cd "${BUILD_DIR}"/build32-tools || exit
+    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-x86
+    ${BWRAP32} make -j$(nproc)
+    ${BWRAP32} make install
 
-mkdir "${BUILD_DIR}"/build32-tools
-cd "${BUILD_DIR}"/build32-tools || exit
-PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-x86
-${BWRAP32} make -j$(nproc)
-${BWRAP32} make install
+    export CFLAGS="${CFLAGS_X64}"
+    export CXXFLAGS="${CFLAGS_X64}"
+    export CROSSCFLAGS="${CROSSCFLAGS_X64}"
+    export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
-export CFLAGS="${CFLAGS_X64}"
-export CXXFLAGS="${CFLAGS_X64}"
-export CROSSCFLAGS="${CROSSCFLAGS_X64}"
-export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
-
-mkdir "${BUILD_DIR}"/build32
-cd "${BUILD_DIR}"/build32 || exit
-PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-${BUILD_NAME}-amd64
-${BWRAP32} make -j8
-${BWRAP32} make install
+    mkdir "${BUILD_DIR}"/build32
+    cd "${BUILD_DIR}"/build32 || exit
+    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-${BUILD_NAME}-amd64
+    ${BWRAP32} make -j8
+    ${BWRAP32} make install
 
 fi
 
@@ -957,7 +992,7 @@ echo "构建产物已经在 ${result_dir} 目录中"
 # 列出最终的工作目录内容
 echo "=== 工作目录内容 ==="
 ls -la "${result_dir}"/*.tar.xz 2>/dev/null || echo "未找到 tar.xz 文件"
-if [ -f "${result_dir}"/*.tar.xz ]; then
+if ls "${result_dir}"/*.tar.xz >/dev/null 2>&1; then
     echo "找到的构建产物:"
     ls -lh "${result_dir}"/*.tar.xz
 fi
