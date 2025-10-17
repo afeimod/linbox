@@ -99,6 +99,11 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libmpg123-dev libopenal-dev libunwind-dev
 
+      - name: Install complete build dependencies
+        run: |
+          chmod +x install_deps.sh
+          ./install_deps.sh
+
       - name: Set build environment
         run: |
           echo "BUILD_WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
