@@ -131,7 +131,7 @@ export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-wi
 # A temporary directory where the Wine source code will be stored.
 # Do not set this variable to an existing non-empty directory!
 # This directory is removed and recreated on each script run.
-export BUILD_DIR="/tmp/build_wine"
+export BUILD_DIR="/github/workspace/build_wine"
 
 # 新增：应用 MF 补丁函数
 apply_mf_patches() {
