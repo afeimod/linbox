@@ -1,5 +1,5 @@
 # build-wine-test.yml
-name: Build TestWine (True WOW64 for Termux with Bootstrap)
+name: Build LiteWine (Lite WOW64 for Termux with Bootstrap)
 
 on:
   workflow_dispatch:

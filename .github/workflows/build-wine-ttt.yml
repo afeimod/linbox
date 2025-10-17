@@ -1,5 +1,5 @@
 # build-wine-ttt.yml
-name: Build TTTWine (True WOW64 for Termux with Vulkan and Full GStreamer)
+name: Build BigWine (Big WOW64 for Termux with Vulkan and Full GStreamer)
 
 on:
   workflow_dispatch:
