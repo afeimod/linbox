@@ -839,8 +839,6 @@ for build in ${builds_list}; do
 	fi
 done
 
-rm -rf "${BUILD_DIR}"
-
 echo
 echo "完成"
 echo "构建产物应该在 ${result_dir} 目录中"
