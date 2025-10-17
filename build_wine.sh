@@ -125,7 +125,7 @@ export DO_NOT_COMPILE="false"
 # Make sure that ccache is installed before enabling this.
 export USE_CCACHE="${USE_CCACHE:-false}"
 
-export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-win64 --disable-tests --without-capi --without-coreaudio --without-cups --without-gphoto --without-osmesa --without-oss --without-pcap --without-pcsclite --without-sane --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland --without-xinerama"
+export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-win64 --disable-tests --without-capi --without-coreaudio --without-cups --without-gphoto --without-osmesa --without-oss --without-pcap --without-pcsclite --without-sane --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland --with-gstreamer --without-xinerama"
 
 # 修复构建目录路径 - 使用可写的临时目录
 export BUILD_DIR="/tmp/build_wine"
@@ -466,7 +466,7 @@ elif [ "$WINE_BRANCH" = "wayland" ]; then
                                --without-xinput --without-xinput2 \
                                --without-xrandr --without-xrender \
                                --without-xshape --without-xshm  \
-                               --without-xslt --without-xxf86vm \
+                               --without-xslt --with-gstreamer --without-xxf86vm \
                                --without-xcursor --without-opengl \
                                ${WINE_BUILD_OPTIONS}"
 elif [ "$WINE_BRANCH" = "proton" ]; then
