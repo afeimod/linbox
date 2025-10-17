@@ -99,19 +99,36 @@ jobs:
             meson nasm yasm \
             && echo '✅ 基础开发工具安装完成'
           
-          # 安装 Wine 构建依赖
+          # 安装完整的 X11 开发包
+          echo '安装完整的 X11 开发包...'
           apt install -y \
-            libx11-dev libxext-dev libxi-dev \
+            libx11-dev libx11-xcb-dev \
+            libxext-dev libxi-dev \
             libxrandr-dev libxcursor-dev libxcomposite-dev \
             libxdamage-dev libxfixes-dev libxxf86vm-dev \
             libxrender-dev libxinerama-dev \
+            libxtst-dev libxss-dev \
+            libxcb1-dev libxcb-*-dev \
+            x11proto-core-dev x11proto-xext-dev \
+            x11proto-xf86vidmode-dev x11proto-xinerama-dev \
+            x11proto-randr-dev x11proto-record-dev \
+            x11proto-scrnsaver-dev x11proto-video-dev \
+            && echo '✅ X11 开发包安装完成'
+          
+          # 安装 OpenGL 和 Vulkan 开发包
+          apt install -y \
             libgl-dev libglu-dev libosmesa6-dev \
+            libglvnd-dev \
+            libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers \
+            && echo '✅ OpenGL/Vulkan 开发包安装完成'
+          
+          # 安装 Wine 构建依赖
+          apt install -y \
             libfreetype6-dev libfontconfig1-dev \
             libpcap-dev libdbus-1-dev libssl-dev \
             libasound2-dev libpulse-dev libudev-dev \
             libcups2-dev libjpeg-dev libpng-dev \
-            libtiff-dev libxml2-dev libvulkan-dev \
-            vulkan-tools libvulkan1 mesa-vulkan-drivers \
+            libtiff-dev libxml2-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libmpg123-dev libopenal-dev \
             libsane-dev libcapi20-dev libgsm1-dev \
@@ -136,6 +153,8 @@ jobs:
           x86_64-w64-mingw32-gcc --version
           i686-w64-mingw32-gcc --version
           pkg-config --version
+          echo 'X11 库检查:'
+          pkg-config --list-all | grep -i x11 | head -10
           echo '=== 验证完成 ==='
         "
         
@@ -226,9 +245,15 @@ jobs:
       run: |
         echo "在 Bootstrap 环境中配置 Wine..."
         
-        # 首先检查源码目录
-        echo "检查源码目录:"
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "pwd && ls -la /opt/wine/"
+        # 首先检查 X11 库
+        echo "检查 X11 库:"
+        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
+          pkg-config --list-all | grep -i x11 | head -10
+          echo 'Xext 库:'
+          pkg-config --libs xext
+          echo 'Xi 库:'
+          pkg-config --libs xi
+        "
         
         # 使用 chroot 配置
         sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
@@ -237,7 +262,6 @@ jobs:
           echo '切换到 Wine 源码目录...'
           cd /opt/wine
           echo '当前目录: $(pwd)'
-          ls -la | head -10
           
           echo '创建构建目录...'
           mkdir -p build-wow64
@@ -299,7 +323,24 @@ jobs:
       run: |
         cd wine
         echo "当前目录: $(pwd)"
-        ls -la | head -10
+        
+        # 安装宿主系统的 X11 开发包
+        echo "安装宿主系统的 X11 开发包..."
+        sudo apt update
+        sudo apt install -y \
+          libx11-dev libx11-xcb-dev \
+          libxext-dev libxi-dev \
+          libxrandr-dev libxcursor-dev libxcomposite-dev \
+          libxdamage-dev libxfixes-dev libxxf86vm-dev \
+          libxrender-dev libxinerama-dev \
+          libxtst-dev libxss-dev \
+          libxcb1-dev libxcb-*-dev \
+          x11proto-core-dev x11proto-xext-dev \
+          x11proto-xf86vidmode-dev x11proto-xinerama-dev \
+          x11proto-randr-dev x11proto-record-dev \
+          x11proto-scrnsaver-dev x11proto-video-dev \
+          libgl-dev libglu-dev libosmesa6-dev \
+          libglvnd-dev
         
         mkdir -p build-wow64
         cd build-wow64
@@ -586,6 +627,7 @@ jobs:
         echo "✓ Termux 路径兼容性"
         echo "✓ MF 兼容性修复"
         echo "✓ 完整开发工具链"
+        echo "✓ 完整的 X11 支持"
         echo ""
         echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap-full' || 'direct' }}-termux.tar.gz"
         echo "================"
