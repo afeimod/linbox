@@ -11,25 +11,50 @@
 ## You can change the environment variables below to your desired values.
 ##
 ########################################################################
-# 在脚本开头添加版本检查
-echo "构建配置检查:"
-echo "WINE_VERSION: ${WINE_VERSION}"
-echo "WINE_BRANCH: ${WINE_BRANCH}"
-echo "STAGING_VERSION: ${STAGING_VERSION}"
+
+# 在脚本开头添加详细的版本检查和设置
+echo "=== 构建配置检查 ==="
+echo "输入 WINE_VERSION: ${WINE_VERSION}"
+echo "输入 WINE_BRANCH: ${WINE_BRANCH}"
+echo "输入 STAGING_VERSION: ${STAGING_VERSION}"
 
 # 确保版本变量正确设置
 if [ -z "${WINE_VERSION}" ]; then
     echo "错误: WINE_VERSION 未设置!"
     exit 1
 fi
+
+# 如果版本是 "latest"，获取最新版本
+if [ "${WINE_VERSION}" = "latest" ] || [ -z "${WINE_VERSION}" ]; then
+    WINE_VERSION="$(wget -q -O - "https://raw.githubusercontent.com/wine-mirror/wine/master/VERSION" | tail -c +14)"
+    echo "获取到最新版本: ${WINE_VERSION}"
+fi
+
+# 设置实际的版本变量
+export WINE_VERSION="${WINE_VERSION}"
+export BUILD_WINE_VERSION="${WINE_VERSION}"
+
+# 根据版本确定 URL 版本
+if [ "$(echo "$WINE_VERSION" | cut -c3)" = "0" ]; then
+    WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).0
+else
+    WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).x
+fi
+
+echo "最终使用的版本: ${WINE_VERSION}"
+echo "URL 版本: ${WINE_URL_VERSION}"
+echo "构建分支: ${WINE_BRANCH}"
+echo "=== 版本检查完成 ==="
+
+sleep 2
+
 # Prevent launching as root
 if [ $EUID = 0 ] && [ -z "$ALLOW_ROOT" ]; then
-	echo "Do not run this script as root!"
-	echo
-	echo "If you really need to run it as root and you know what you are doing,"
-	echo "set the ALLOW_ROOT environment variable."
-
-	exit 1
+    echo "Do not run this script as root!"
+    echo
+    echo "If you really need to run it as root and you know what you are doing,"
+    echo "set the ALLOW_ROOT environment variable."
+    exit 1
 fi
 
 # Wine version to compile.
@@ -38,7 +63,7 @@ fi
 #
 # This variable affects only vanilla and staging branches. Other branches
 # use their own versions.
-export WINE_VERSION="${WINE_VERSION:-latest}"
+export WINE_VERSION="${WINE_VERSION}"
 
 # Available branches: vanilla, staging, staging-tkg, proton, wayland
 export WINE_BRANCH="${WINE_BRANCH:-staging}"
@@ -311,13 +336,14 @@ if ! command -v xz 1>/dev/null; then
 	exit 1
 fi
 
-# Replace the "latest" parameter with the actual latest Wine version
+# 替换 "latest" 参数为实际的 Wine 版本
 if [ "${WINE_VERSION}" = "latest" ] || [ -z "${WINE_VERSION}" ]; then
 	WINE_VERSION="$(wget -q -O - "https://raw.githubusercontent.com/wine-mirror/wine/master/VERSION" | tail -c +14)"
+    echo "获取到最新版本: ${WINE_VERSION}"
 fi
 
-# Stable and Development versions have a different source code location
-# Determine if the chosen version is stable or development
+# 稳定版和开发版有不同的源码位置
+# 确定选择的版本是稳定版还是开发版
 if [ "$(echo "$WINE_VERSION" | cut -c3)" = "0" ]; then
 	WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).0
 else
@@ -329,8 +355,8 @@ mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}" || exit 1
 
 echo
-echo "Downloading the source code and patches"
-echo "Preparing Wine for compilation"
+echo "下载源码和补丁"
+echo "准备编译 Wine"
 echo
 
 if [ -n "${CUSTOM_SRC_PATH}" ]; then
@@ -340,8 +366,8 @@ if [ -n "${CUSTOM_SRC_PATH}" ]; then
 		git clone "${CUSTOM_SRC_PATH}" wine
 	else
 		if [ ! -f "${CUSTOM_SRC_PATH}"/configure ]; then
-			echo "CUSTOM_SRC_PATH is set to an incorrect or non-existent directory!"
-			echo "Please make sure to use a directory with the correct Wine source code."
+			echo "CUSTOM_SRC_PATH 设置为不正确或不存在的目录!"
+			echo "请确保使用包含正确 Wine 源码的目录。"
 			exit 1
 		fi
 
@@ -351,10 +377,40 @@ if [ -n "${CUSTOM_SRC_PATH}" ]; then
 	WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
 	BUILD_NAME="${WINE_VERSION}"-custom
 elif [ "$WINE_BRANCH" = "staging-tkg" ]; then
-	git clone https://github.com/Kron4ek/wine-tkg wine
-
-	WINE_VERSION="$(cat wine/VERSION | tail -c +14)"
-	BUILD_NAME="${WINE_VERSION}"-staging-tkg
+    echo "克隆 wine-tkg 仓库..."
+    git clone https://github.com/Kron4ek/wine-tkg wine
+    
+    # 尝试切换到指定版本
+    cd wine || exit 1
+    if [ "${WINE_VERSION}" != "latest" ] && [ "${WINE_VERSION}" != "git" ]; then
+        echo "尝试切换到 wine-tkg 版本: ${WINE_VERSION}"
+        # 查找匹配的标签或分支
+        if git tag -l | grep -q "${WINE_VERSION}"; then
+            git checkout "${WINE_VERSION}"
+            echo "成功切换到标签: ${WINE_VERSION}"
+        elif git branch -a | grep -q "${WINE_VERSION}"; then
+            git checkout "${WINE_VERSION}"
+            echo "成功切换到分支: ${WINE_VERSION}"
+        else
+            echo "未找到精确匹配的版本 ${WINE_VERSION}，使用默认分支"
+            # 尝试查找相近版本
+            CLOSEST_TAG=$(git tag -l | grep "${WINE_VERSION%.*}" | sort -V | tail -n1)
+            if [ -n "${CLOSEST_TAG}" ]; then
+                echo "使用最接近的版本: ${CLOSEST_TAG}"
+                git checkout "${CLOSEST_TAG}"
+            fi
+        fi
+    fi
+    cd "${BUILD_DIR}" || exit 1
+    
+    # 从仓库获取实际版本号
+    if [ -f wine/VERSION ]; then
+        ACTUAL_VERSION="$(cat wine/VERSION | tail -c +14)"
+        echo "wine-tkg 实际版本: ${ACTUAL_VERSION}"
+        BUILD_NAME="${ACTUAL_VERSION}"-staging-tkg
+    else
+        BUILD_NAME="${WINE_VERSION}"-staging-tkg
+    fi
 elif [ "$WINE_BRANCH" = "wayland" ]; then
 	git clone https://github.com/Kron4ek/wine-wayland wine
 
@@ -392,16 +448,32 @@ elif [ "$WINE_BRANCH" = "proton" ]; then
 		BUILD_NAME=proton-"${WINE_VERSION}"
 	fi
 else
-	if [ "${WINE_VERSION}" = "git" ]; then
-		git clone https://gitlab.winehq.org/wine/wine.git wine
-		BUILD_NAME="${WINE_VERSION}-$(git -C wine rev-parse --short HEAD)"
-	else
-		BUILD_NAME="${WINE_VERSION}"
-
-		wget -q --show-progress "https://dl.winehq.org/wine/source/${WINE_URL_VERSION}/wine-${WINE_VERSION}.tar.xz"
-		tar xf "wine-${WINE_VERSION}.tar.xz"
-		mv "wine-${WINE_VERSION}" wine
-	fi
+    if [ "${WINE_VERSION}" = "git" ]; then
+        git clone https://gitlab.winehq.org/wine/wine.git wine
+        BUILD_NAME="${WINE_VERSION}-$(git -C wine rev-parse --short HEAD)"
+    else
+        BUILD_NAME="${WINE_VERSION}"
+        echo "下载 Wine 版本: ${WINE_VERSION}"
+        
+        # 尝试下载指定版本
+        if wget -q --show-progress "https://dl.winehq.org/wine/source/${WINE_URL_VERSION}/wine-${WINE_VERSION}.tar.xz"; then
+            echo "成功下载 wine-${WINE_VERSION}.tar.xz"
+            tar xf "wine-${WINE_VERSION}.tar.xz"
+            mv "wine-${WINE_VERSION}" wine
+        else
+            echo "无法下载 wine-${WINE_VERSION}.tar.xz，尝试查找可用版本..."
+            # 备用下载方案
+            wget -q -O - "https://dl.winehq.org/wine/source/${WINE_URL_VERSION}/" | grep "wine-${WINE_VERSION%.*}." | head -1 | sed 's/.*href="//g' | sed 's/".*//g' | while read fname; do
+                echo "尝试下载: $fname"
+                wget -q --show-progress "https://dl.winehq.org/wine/source/${WINE_URL_VERSION}/${fname}"
+                if [ -f "${fname}" ]; then
+                    tar xf "${fname}"
+                    mv "${fname%.tar.xz}" wine
+                    break
+                fi
+            done
+        fi
+    fi
 
         if [ "$WINE_BRANCH" = "staging" ] || [ "$WINE_BRANCH" = "vanilla" ]; then
 	if [ "${WINE_VERSION}" = "git" ]; then
@@ -465,12 +537,12 @@ fi
 		if [ -n "${STAGING_ARGS}" ]; then
 			"${staging_patcher[@]}" ${STAGING_ARGS}
 		else
-			echo "Skipping Wine-Staging patches..."
+			echo "跳过 Wine-Staging 补丁..."
 		fi
      
 		if [ $? -ne 0 ]; then
 			echo
-			echo "Wine-Staging patches were not applied correctly!"
+			echo "Wine-Staging 补丁未正确应用!"
 			exit 1
 		fi
 
@@ -589,8 +661,8 @@ apply_mf_patches
 
 if [ ! -d wine ]; then
 	clear
-	echo "No Wine source code found!"
-	echo "Make sure that the correct Wine version is specified."
+	echo "未找到 Wine 源码!"
+	echo "请确保指定了正确的 Wine 版本。"
 	exit 1
 fi
 
@@ -643,27 +715,27 @@ cd "${BUILD_DIR}" || exit 1
 
 if [ "${DO_NOT_COMPILE}" = "true" ]; then
 	clear
-	echo "DO_NOT_COMPILE is set to true"
-	echo "Force exiting"
+	echo "DO_NOT_COMPILE 设置为 true"
+	echo "强制退出"
 	exit
 fi
 
 if ! command -v bwrap 1>/dev/null; then
-	echo "Bubblewrap is not installed on your system!"
-	echo "Please install it and run the script again"
+	echo "您的系统未安装 Bubblewrap!"
+	echo "请安装后重新运行脚本"
 	exit 1
 fi
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
     if [ ! -d "${BOOTSTRAP_X64}" ]; then
         clear
-        echo "Bootstraps are required for compilation!"
+        echo "编译需要引导程序!"
         exit 1
     fi
 else    
     if [ ! -d "${BOOTSTRAP_X64}" ] || [ ! -d "${BOOTSTRAP_X32}" ]; then
         clear
-        echo "Bootstraps are required for compilation!"
+        echo "编译需要引导程序!"
         exit 1
     fi
 fi
@@ -732,8 +804,8 @@ ${BWRAP32} make install
 fi
 
 echo
-echo "Compilation complete"
-echo "Creating and compressing archives..."
+echo "编译完成"
+echo "创建并压缩归档文件..."
 
 cd "${BUILD_DIR}" || exit
 
@@ -770,5 +842,5 @@ done
 rm -rf "${BUILD_DIR}"
 
 echo
-echo "Done"
-echo "The builds should be in ${result_dir}"
+echo "完成"
+echo "构建产物应该在 ${result_dir} 目录中"
