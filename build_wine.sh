@@ -48,13 +48,12 @@ echo "=== 版本检查完成 ==="
 
 sleep 2
 
-# Prevent launching as root
-if [ $EUID = 0 ] && [ -z "$ALLOW_ROOT" ]; then
-    echo "Do not run this script as root!"
-    echo
-    echo "If you really need to run it as root and you know what you are doing,"
-    echo "set the ALLOW_ROOT environment variable."
-    exit 1
+# 检查是否在容器环境中运行
+if [ -f /.dockerenv ]; then
+    echo "检测到在容器环境中运行"
+    export IN_CONTAINER=true
+else
+    export IN_CONTAINER=false
 fi
 
 # Wine version to compile.
@@ -350,9 +349,9 @@ fi
 
 # 确保构建目录存在且有正确权限
 echo "设置构建目录: ${BUILD_DIR}"
-sudo mkdir -p "${BUILD_DIR}"
-sudo chown -R $(whoami):$(whoami) "${BUILD_DIR}"
-sudo chmod -R 755 "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}"
+chown -R $(whoami):$(whoami) "${BUILD_DIR}" || echo "警告: 无法更改所有权，继续..."
+chmod -R 755 "${BUILD_DIR}"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
@@ -852,6 +851,9 @@ echo "=== 构建目录内容结束 ==="
 # 设置结果目录为工作目录
 result_dir="/github/workspace"
 
+# 确保结果目录存在
+mkdir -p "${result_dir}"
+
 export XZ_OPT="-9"
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
@@ -860,6 +862,11 @@ if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
         mv "${INSTALL_DIR}" "wine-${BUILD_NAME}-exp-wow64-amd64"
         builds_list="wine-${BUILD_NAME}-exp-wow64-amd64"
         echo "找到安装目录: wine-${BUILD_NAME}-exp-wow64-amd64"
+        
+        # 检查目录内容
+        echo "=== 安装目录内容 ==="
+        find "wine-${BUILD_NAME}-exp-wow64-amd64" -type f | head -20
+        echo "=== 安装目录内容结束 ==="
     else
         echo "错误: 安装目录 ${INSTALL_DIR} 不存在!"
         echo "尝试手动创建构建产物..."
@@ -868,14 +875,30 @@ if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
         MANUAL_DIR="wine-${BUILD_NAME}-exp-wow64-amd64"
         mkdir -p "${MANUAL_DIR}"/bin
         mkdir -p "${MANUAL_DIR}"/lib
-        mkdir -p "${MANUAL_DIR}"/share
+        mkdir -p "${MANUAL_DIR}"/share/wine
         
         # 尝试从 build64 目录复制关键文件
         if [ -d "build64" ]; then
             echo "从 build64 目录复制文件..."
-            find build64 -name "wine" -type f -exec cp {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
-            find build64 -name "wine64" -type f -exec cp {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
-            find build64 -name "*.so*" -type f -exec cp {} "${MANUAL_DIR}/lib/" \; 2>/dev/null || true
+            # 查找并复制所有 Wine 相关文件
+            find build64 -type f -name "wine" -exec cp -v {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            find build64 -type f -name "wine64" -exec cp -v {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            find build64 -type f -name "wineboot" -exec cp -v {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            find build64 -type f -name "winecfg" -exec cp -v {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            
+            # 复制库文件
+            find build64 -type f -name "*.so" -exec cp -v {} "${MANUAL_DIR}/lib/" \; 2>/dev/null || true
+            find build64 -type f -name "*.so.*" -exec cp -v {} "${MANUAL_DIR}/lib/" \; 2>/dev/null || true
+            
+            # 复制其他必要文件
+            if [ -d "build64/dlls" ]; then
+                cp -r build64/dlls "${MANUAL_DIR}/" 2>/dev/null || true
+            fi
+            if [ -d "build64/programs" ]; then
+                cp -r build64/programs "${MANUAL_DIR}/" 2>/dev/null || true
+            fi
+        else
+            echo "警告: build64 目录不存在"
         fi
         
         builds_list="${MANUAL_DIR}"
@@ -888,18 +911,33 @@ fi
 for build in ${builds_list}; do
     if [ -d "${build}" ]; then
         echo "处理构建: ${build}"
-        rm -rf "${build}"/include "${build}"/share/applications "${build}"/share/man
+        
+        # 检查目录是否为空
+        if [ -z "$(ls -A "${build}")" ]; then
+            echo "警告: 构建目录 ${build} 为空!"
+        else
+            echo "构建目录 ${build} 包含文件:"
+            find "${build}" -type f | head -10
+        fi
+        
+        # 清理不必要的文件
+        rm -rf "${build}"/include "${build}"/share/applications "${build}"/share/man 2>/dev/null || true
 
         if [ -f wine/wine-tkg-config.txt ]; then
-            cp wine/wine-tkg-config.txt "${build}"
+            cp wine/wine-tkg-config.txt "${build}" 2>/dev/null || true
         fi
 
-        tar -Jcf "${build}".tar.xz "${build}"
+        # 创建压缩包
+        echo "创建压缩包: ${build}.tar.xz"
+        tar -Jcf "${build}.tar.xz" "${build}"
+        
         # 复制到工作目录
-        cp "${build}".tar.xz "${result_dir}"/
+        echo "复制到结果目录: ${result_dir}"
+        cp -v "${build}.tar.xz" "${result_dir}/"
         echo "已创建: ${build}.tar.xz"
         
         # 显示文件大小
+        echo "文件大小:"
         ls -lh "${build}.tar.xz"
     else
         echo "警告: 构建目录 ${build} 不存在!"
@@ -908,6 +946,10 @@ for build in ${builds_list}; do
     fi
 done
 
+# 清理临时构建目录
+cd /tmp
+rm -rf "${BUILD_DIR}"
+
 echo
 echo "完成"
 echo "构建产物已经在 ${result_dir} 目录中"
@@ -915,4 +957,8 @@ echo "构建产物已经在 ${result_dir} 目录中"
 # 列出最终的工作目录内容
 echo "=== 工作目录内容 ==="
 ls -la "${result_dir}"/*.tar.xz 2>/dev/null || echo "未找到 tar.xz 文件"
+if [ -f "${result_dir}"/*.tar.xz ]; then
+    echo "找到的构建产物:"
+    ls -lh "${result_dir}"/*.tar.xz
+fi
 echo "=== 工作目录内容结束 ==="
