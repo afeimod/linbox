@@ -908,10 +908,6 @@ for build in ${builds_list}; do
     fi
 done
 
-# 清理临时构建目录
-cd /tmp
-rm -rf "${BUILD_DIR}"
-
 echo
 echo "完成"
 echo "构建产物已经在 ${result_dir} 目录中"
