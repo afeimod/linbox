@@ -203,7 +203,7 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 配置 Wine 构建（Bootstrap 模式）
+    - name: 配置 Wine 构建（Bootstrap 模式 - 修复权限问题）
       if: env.USE_BOOTSTRAP == 'true'
       run: |
         cd wine
@@ -211,14 +211,21 @@ jobs:
         cd build-wow64
         
         echo "使用完整的 Bootstrap 环境配置 Wine..."
+        echo "注意: 在 GitHub Actions 中使用简化版 bubblewrap 配置以避免权限问题"
         
-        # 使用 bubblewrap 在完整的 Bootstrap 环境中配置
+        # 在 GitHub Actions 中使用简化的 bubblewrap 配置
+        # 避免用户命名空间权限问题
         bwrap --ro-bind /opt/chroots/ubuntu64_chroot / \
-              --dev /dev --ro-bind /sys /sys --proc /proc \
-              --tmpfs /tmp --tmpfs /home --tmpfs /run \
+              --dev /dev \
+              --proc /proc \
+              --tmpfs /tmp \
+              --tmpfs /home \
               --bind $(pwd)/../.. $(pwd)/../.. \
               --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin" \
               --setenv PKG_CONFIG_PATH "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
+              --unshare-user \
+              --uid 0 \
+              --gid 0 \
               ../configure \
                 --enable-win64 \
                 --enable-archs=i386,x86_64 \
@@ -295,7 +302,29 @@ jobs:
         
         echo "✅ 直接模式配置完成"
 
-    - name: 编译 Wine
+    - name: 编译 Wine（Bootstrap 模式）
+      if: env.USE_BOOTSTRAP == 'true'
+      run: |
+        cd wine/build-wow64
+        echo "在 Bootstrap 环境中编译 Wine..."
+        
+        # 在 Bootstrap 环境中编译
+        bwrap --ro-bind /opt/chroots/ubuntu64_chroot / \
+              --dev /dev \
+              --proc /proc \
+              --tmpfs /tmp \
+              --tmpfs /home \
+              --bind $(pwd)/../.. $(pwd)/../.. \
+              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin" \
+              --unshare-user \
+              --uid 0 \
+              --gid 0 \
+              make -j$(nproc)
+        
+        echo "✅ Bootstrap 环境编译完成"
+
+    - name: 编译 Wine（直接模式）
+      if: env.USE_BOOTSTRAP == 'false'
       run: |
         cd wine/build-wow64
         echo "开始编译 Wine..."
@@ -304,7 +333,33 @@ jobs:
         make -j$(nproc)
         echo "✅ 编译完成"
 
-    - name: 安装 Wine
+    - name: 安装 Wine（Bootstrap 模式）
+      if: env.USE_BOOTSTRAP == 'true'
+      run: |
+        cd wine/build-wow64
+        echo "在 Bootstrap 环境中安装 Wine..."
+        
+        # 在 Bootstrap 环境中安装
+        bwrap --ro-bind /opt/chroots/ubuntu64_chroot / \
+              --dev /dev \
+              --proc /proc \
+              --tmpfs /tmp \
+              --tmpfs /home \
+              --bind $(pwd)/../.. $(pwd)/../.. \
+              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin" \
+              --unshare-user \
+              --uid 0 \
+              --gid 0 \
+              make install
+        
+        echo "✅ Bootstrap 环境安装完成"
+        
+        # 显示安装文件大小
+        echo "安装目录大小:"
+        du -sh /tmp/wine-install/
+
+    - name: 安装 Wine（直接模式）
+      if: env.USE_BOOTSTRAP == 'false'
       run: |
         cd wine/build-wow64
         make install
@@ -358,10 +413,11 @@ jobs:
         chmod +x wine-package/usr/local/bin/wine
         
         # 创建版本信息文件
+        BUILD_TYPE=${{ env.USE_BOOTSTRAP && 'Bootstrap (Full Ubuntu)' || 'Direct' }}
         cat > wine-package/version-info.txt << EOF
             Wine Version: ${{ env.WINE_VERSION }}
             Build Date: $(date)
-            Build Type: ${{ env.USE_BOOTSTRAP && 'Bootstrap (Full Ubuntu)' || 'Direct' }} Mode
+            Build Type: $BUILD_TYPE
             Architecture: True WOW64 (i386/x86_64)
             Platform: Termux
             Features: Vulkan, GStreamer, True WOW64
