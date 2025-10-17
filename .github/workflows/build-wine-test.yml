@@ -18,6 +18,16 @@ on:
 permissions:
   contents: write
 
+env:
+  CC: gcc
+  CXX: g++
+  CROSSCC_X64: x86_64-w64-mingw32-gcc
+  CROSSCXX_X64: x86_64-w64-mingw32-g++
+  CFLAGS_X64: -march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe
+  LDFLAGS: -Wl,-O1,--sort-common,--as-needed
+  CROSSCFLAGS_X64: -march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe
+  CROSSLDFLAGS: -Wl,-O1,--sort-common,--as-needed
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -42,7 +52,7 @@ jobs:
           mingw-w64 \
           gettext libgettextpo-dev \
           locales language-pack-zh-hans \
-          ccache
+          ccache bubblewrap
 
     - name: 设置中文环境
       run: |
@@ -225,10 +235,18 @@ jobs:
         sudo cp -r wine /opt/chroots/ubuntu64_chroot/opt/
         echo "✅ 源码复制完成"
 
-    - name: 配置 Wine 构建（Bootstrap 模式）
+    - name: 配置 Wine 构建（Bootstrap 模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'true'
       run: |
-        echo "在 Bootstrap 环境中配置 Wine..."
+        echo "在 Bootstrap 环境中配置 Wine (WOW64 模式)..."
+        
+        # 设置环境变量
+        export CROSSCC="${{ env.CROSSCC_X64 }}"
+        export CROSSCXX="${{ env.CROSSCXX_X64 }}"
+        export CFLAGS="${{ env.CFLAGS_X64 }}"
+        export CXXFLAGS="${{ env.CFLAGS_X64 }}"
+        export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+        export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
         
         sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
           set -e
@@ -236,9 +254,15 @@ jobs:
           mkdir -p build-wow64
           cd build-wow64
           
-          echo '开始配置 Wine 构建...'
+          echo '开始配置 Wine WOW64 构建...'
+          export CROSSCC='${{ env.CROSSCC_X64 }}'
+          export CROSSCXX='${{ env.CROSSCXX_X64 }}'
+          export CFLAGS='${{ env.CFLAGS_X64 }}'
+          export CXXFLAGS='${{ env.CFLAGS_X64 }}'
+          export CROSSCFLAGS='${{ env.CROSSCFLAGS_X64 }}'
+          export CROSSCXXFLAGS='${{ env.CROSSCFLAGS_X64 }}'
+          
           ../configure \
-            --enable-win64 \
             --enable-archs=i386,x86_64 \
             --prefix=/tmp/wine-install \
             --with-x \
@@ -269,7 +293,7 @@ jobs:
             --without-v4l2 \
             --without-wayland
             
-          echo '✅ Bootstrap 环境配置完成'
+          echo '✅ Bootstrap 环境 WOW64 配置完成'
           
           # 验证 Makefile
           if [ -f 'Makefile' ]; then
@@ -280,7 +304,7 @@ jobs:
           fi
         "
 
-    - name: 配置 Wine 构建（直接模式）
+    - name: 配置 Wine 构建（直接模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'false'
       run: |
         cd wine
@@ -305,8 +329,15 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
         
+        # 设置环境变量
+        export CROSSCC="${{ env.CROSSCC_X64 }}"
+        export CROSSCXX="${{ env.CROSSCXX_X64 }}"
+        export CFLAGS="${{ env.CFLAGS_X64 }}"
+        export CXXFLAGS="${{ env.CFLAGS_X64 }}"
+        export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+        export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+        
         ../configure \
-          --enable-win64 \
           --enable-archs=i386,x86_64 \
           --prefix=/tmp/wine-install \
           --with-x \
@@ -337,7 +368,7 @@ jobs:
           --without-v4l2 \
           --without-wayland
         
-        echo "✅ 直接模式配置完成"
+        echo "✅ 直接模式 WOW64 配置完成"
         
         # 验证 Makefile
         if [ -f 'Makefile' ]; then
@@ -347,49 +378,49 @@ jobs:
           exit 1
         fi
 
-    - name: 编译 Wine（Bootstrap 模式）
+    - name: 编译 Wine（Bootstrap 模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'true'
       run: |
-        echo "在 Bootstrap 环境中编译 Wine..."
+        echo "在 Bootstrap 环境中编译 Wine (WOW64 模式)..."
         
         sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
           set -e
           cd /opt/wine/build-wow64
-          echo '开始编译 Wine...'
+          echo '开始编译 Wine WOW64...'
           make -j\$(nproc)
-          echo '✅ Bootstrap 环境编译完成'
+          echo '✅ Bootstrap 环境 WOW64 编译完成'
         "
 
-    - name: 编译 Wine（直接模式）
+    - name: 编译 Wine（直接模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'false'
       run: |
         cd wine/build-wow64
-        echo "开始编译 Wine..."
+        echo "开始编译 Wine WOW64..."
         make -j$(nproc)
-        echo "✅ 编译完成"
+        echo "✅ WOW64 编译完成"
 
-    - name: 安装 Wine（Bootstrap 模式）
+    - name: 安装 Wine（Bootstrap 模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'true'
       run: |
-        echo "在 Bootstrap 环境中安装 Wine..."
+        echo "在 Bootstrap 环境中安装 Wine (WOW64 模式)..."
         
         sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
           set -e
           cd /opt/wine/build-wow64
           make install
-          echo '✅ Bootstrap 环境安装完成'
+          echo '✅ Bootstrap 环境 WOW64 安装完成'
         "
         
         # 将安装文件复制到主机
         sudo cp -r /opt/chroots/ubuntu64_chroot/tmp/wine-install /tmp/
         sudo chown -R $USER:$USER /tmp/wine-install
 
-    - name: 安装 Wine（直接模式）
+    - name: 安装 Wine（直接模式 - WOW64）
       if: env.USE_BOOTSTRAP == 'false'
       run: |
         cd wine/build-wow64
         make install
-        echo "✅ Wine 安装完成"
+        echo "✅ Wine WOW64 安装完成"
 
     - name: 验证构建结果
       run: |
@@ -438,6 +469,7 @@ jobs:
             Architecture: True WOW64 (i386/x86_64)
             Platform: Termux
             Features: X11, Vulkan, ALSA, PulseAudio, FreeType, FontConfig, GStreamer
+            Build Mode: Experimental WOW64
         EOF
 
     - name: 创建压缩包
@@ -477,9 +509,11 @@ jobs:
           - **构建模式**: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
           - **平台**: Termux (Android)
           - **特性**: X11, Vulkan, ALSA, PulseAudio, FreeType, FontConfig, GStreamer
+          - **构建方式**: 实验性 WOW64 模式
           
           ## 主要改进
-          ✓ 真正的 WOW64 架构支持
+          ✓ 真正的 WOW64 架构支持 (i386/x86_64)
+          ✓ 实验性 WOW64 构建模式
           ✓ Vulkan 图形 API 支持
           ✓ GStreamer 多媒体支持  
           ✓ Termux 路径兼容性修复
@@ -505,6 +539,7 @@ jobs:
         echo "版本: ${{ env.WINE_VERSION }}"
         echo "架构: True WOW64 (i386/x86_64)"
         echo "构建模式: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}"
+        echo "构建方式: 实验性 WOW64 模式"
         echo "平台: Termux"
         echo ""
         echo "包含特性:"
@@ -517,6 +552,7 @@ jobs:
         echo "✓ GStreamer 多媒体"
         echo "✓ Termux 路径兼容性"
         echo "✓ MF 兼容性修复"
+        echo "✓ 实验性 WOW64 架构"
         echo ""
         echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux.tar.gz"
         echo "================"
