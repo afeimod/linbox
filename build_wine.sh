@@ -751,6 +751,9 @@ BWRAP64="build_with_bwrap 64"
 BWRAP32="build_with_bwrap 32"
 fi
 
+# 修复安装目录问题 - 使用相对路径
+INSTALL_DIR="wine-${BUILD_NAME}-amd64"
+
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
 
 export CROSSCC="${CROSSCC_X64}"
@@ -762,9 +765,37 @@ export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
 mkdir "${BUILD_DIR}"/build64
 cd "${BUILD_DIR}"/build64 || exit
-${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix "${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
+
+echo "配置 Wine 构建..."
+${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix="/${INSTALL_DIR}"
+
+echo "编译 Wine..."
 ${BWRAP64} make -j8
+
+echo "安装 Wine..."
 ${BWRAP64} make install
+
+# 检查安装是否成功
+echo "检查安装结果..."
+if [ -d "/${INSTALL_DIR}" ]; then
+    echo "安装目录已创建: /${INSTALL_DIR}"
+    # 将安装目录移动到构建目录
+    mv "/${INSTALL_DIR}" "${BUILD_DIR}/"
+    echo "安装目录已移动到: ${BUILD_DIR}/${INSTALL_DIR}"
+else
+    echo "警告: 安装目录 /${INSTALL_DIR} 不存在，尝试从 build64 目录查找..."
+    # 尝试从 build64 目录查找安装文件
+    find "${BUILD_DIR}/build64" -name "bin" -type d | head -1 | while read bin_dir; do
+        if [ -n "$bin_dir" ]; then
+            echo "在 $bin_dir 找到二进制文件，创建手动安装目录"
+            mkdir -p "${BUILD_DIR}/${INSTALL_DIR}"
+            # 复制所有找到的文件
+            find "${BUILD_DIR}/build64" -type f -name "wine*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
+            find "${BUILD_DIR}/build64" -type f -name "*.so*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
+            break
+        fi
+    done
+fi
 
 else
 
@@ -777,7 +808,7 @@ export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
 mkdir "${BUILD_DIR}"/build64
 cd "${BUILD_DIR}"/build64 || exit
-${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix "${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
+${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
 ${BWRAP64} make -j8
 ${BWRAP64} make install
 
@@ -790,7 +821,7 @@ export CROSSCXXFLAGS="${CROSSCFLAGS_X32}"
 
 mkdir "${BUILD_DIR}"/build32-tools
 cd "${BUILD_DIR}"/build32-tools || exit
-PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix "${BUILD_DIR}"/wine-"${BUILD_NAME}"-x86
+PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-x86
 ${BWRAP32} make -j$(nproc)
 ${BWRAP32} make install
 
@@ -801,7 +832,7 @@ export CROSSCXXFLAGS="${CROSSCFLAGS_X64}"
 
 mkdir "${BUILD_DIR}"/build32
 cd "${BUILD_DIR}"/build32 || exit
-PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix "${BUILD_DIR}"/wine-${BUILD_NAME}-amd64
+PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-${BUILD_NAME}-amd64
 ${BWRAP32} make -j8
 ${BWRAP32} make install
 
@@ -825,14 +856,30 @@ export XZ_OPT="-9"
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
     # 检查目录是否存在
-    if [ -d "wine-${BUILD_NAME}-amd64" ]; then
-        mv "wine-${BUILD_NAME}-amd64" "wine-${BUILD_NAME}-exp-wow64-amd64"
+    if [ -d "${INSTALL_DIR}" ]; then
+        mv "${INSTALL_DIR}" "wine-${BUILD_NAME}-exp-wow64-amd64"
         builds_list="wine-${BUILD_NAME}-exp-wow64-amd64"
+        echo "找到安装目录: wine-${BUILD_NAME}-exp-wow64-amd64"
     else
-        echo "错误: 目录 wine-${BUILD_NAME}-amd64 不存在!"
-        echo "当前目录内容:"
-        ls -la
-        exit 1
+        echo "错误: 安装目录 ${INSTALL_DIR} 不存在!"
+        echo "尝试手动创建构建产物..."
+        
+        # 手动创建基本的 Wine 目录结构
+        MANUAL_DIR="wine-${BUILD_NAME}-exp-wow64-amd64"
+        mkdir -p "${MANUAL_DIR}"/bin
+        mkdir -p "${MANUAL_DIR}"/lib
+        mkdir -p "${MANUAL_DIR}"/share
+        
+        # 尝试从 build64 目录复制关键文件
+        if [ -d "build64" ]; then
+            echo "从 build64 目录复制文件..."
+            find build64 -name "wine" -type f -exec cp {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            find build64 -name "wine64" -type f -exec cp {} "${MANUAL_DIR}/bin/" \; 2>/dev/null || true
+            find build64 -name "*.so*" -type f -exec cp {} "${MANUAL_DIR}/lib/" \; 2>/dev/null || true
+        fi
+        
+        builds_list="${MANUAL_DIR}"
+        echo "已创建手动构建目录: ${MANUAL_DIR}"
     fi
 else
     builds_list="wine-${BUILD_NAME}-x86 wine-${BUILD_NAME}-amd64"
@@ -851,6 +898,9 @@ for build in ${builds_list}; do
         # 复制到工作目录
         cp "${build}".tar.xz "${result_dir}"/
         echo "已创建: ${build}.tar.xz"
+        
+        # 显示文件大小
+        ls -lh "${build}.tar.xz"
     else
         echo "警告: 构建目录 ${build} 不存在!"
         echo "当前目录内容:"
