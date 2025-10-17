@@ -788,6 +788,8 @@ fi
 # 修复安装目录问题 - 使用相对路径
 INSTALL_DIR="wine-${BUILD_NAME}-amd64"
 
+# 在脚本中找到以下部分并进行修改：
+
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
 
     export CROSSCC="${CROSSCC_X64}"
@@ -801,38 +803,30 @@ if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
     cd "${BUILD_DIR}"/build64 || exit
 
     echo "配置 Wine 构建..."
-    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix="/${INSTALL_DIR}"
+    # 修复：使用相对路径而不是绝对路径
+    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-archs=i386,x86_64 ${WINE_BUILD_OPTIONS} --prefix=""
 
     echo "编译 Wine..."
     ${BWRAP64} make -j8
 
     echo "安装 Wine..."
-    ${BWRAP64} make install
+    # 修复：安装到构建目录而不是根目录
+    ${BWRAP64} make install DESTDIR="${BUILD_DIR}/${INSTALL_DIR}"
 
     # 检查安装是否成功
     echo "检查安装结果..."
-    if [ -d "/${INSTALL_DIR}" ]; then
-        echo "安装目录已创建: /${INSTALL_DIR}"
-        # 将安装目录移动到构建目录
-        mv "/${INSTALL_DIR}" "${BUILD_DIR}/"
-        echo "安装目录已移动到: ${BUILD_DIR}/${INSTALL_DIR}"
+    if [ -d "${BUILD_DIR}/${INSTALL_DIR}" ]; then
+        echo "安装目录已创建: ${BUILD_DIR}/${INSTALL_DIR}"
+        echo "安装目录内容:"
+        find "${BUILD_DIR}/${INSTALL_DIR}" -type f | head -20
     else
-        echo "警告: 安装目录 /${INSTALL_DIR} 不存在，尝试从 build64 目录查找..."
-        # 尝试从 build64 目录查找安装文件
-        find "${BUILD_DIR}/build64" -name "bin" -type d | head -1 | while read bin_dir; do
-            if [ -n "$bin_dir" ]; then
-                echo "在 $bin_dir 找到二进制文件，创建手动安装目录"
-                mkdir -p "${BUILD_DIR}/${INSTALL_DIR}"
-                # 复制所有找到的文件
-                find "${BUILD_DIR}/build64" -type f -name "wine*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
-                find "${BUILD_DIR}/build64" -type f -name "*.so*" -exec cp {} "${BUILD_DIR}/${INSTALL_DIR}/" \; 2>/dev/null || true
-                break
-            fi
-        done
+        echo "错误: 安装目录 ${BUILD_DIR}/${INSTALL_DIR} 不存在!"
+        # 尝试手动创建
+        mkdir -p "${BUILD_DIR}/${INSTALL_DIR}"
     fi
 
 else
-
+    # 传统模式的类似修复
     export CROSSCC="${CROSSCC_X64}"
     export CROSSCXX="${CROSSCXX_X64}"
     export CFLAGS="${CFLAGS_X64}"
@@ -842,9 +836,9 @@ else
 
     mkdir "${BUILD_DIR}"/build64
     cd "${BUILD_DIR}"/build64 || exit
-    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-amd64
+    ${BWRAP64} "${BUILD_DIR}"/wine/configure --enable-win64 ${WINE_BUILD_OPTIONS} --prefix=""
     ${BWRAP64} make -j8
-    ${BWRAP64} make install
+    ${BWRAP64} make install DESTDIR="${BUILD_DIR}/wine-${BUILD_NAME}-amd64"
 
     export CROSSCC="${CROSSCC_X32}"
     export CROSSCXX="${CROSSCXX_X32}"
@@ -855,9 +849,9 @@ else
 
     mkdir "${BUILD_DIR}"/build32-tools
     cd "${BUILD_DIR}"/build32-tools || exit
-    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-"${BUILD_NAME}"-x86
+    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure ${WINE_BUILD_OPTIONS} --prefix=""
     ${BWRAP32} make -j$(nproc)
-    ${BWRAP32} make install
+    ${BWRAP32} make install DESTDIR="${BUILD_DIR}/wine-${BUILD_NAME}-x86"
 
     export CFLAGS="${CFLAGS_X64}"
     export CXXFLAGS="${CFLAGS_X64}"
@@ -866,9 +860,9 @@ else
 
     mkdir "${BUILD_DIR}"/build32
     cd "${BUILD_DIR}"/build32 || exit
-    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix="${BUILD_DIR}"/wine-${BUILD_NAME}-amd64
+    PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/lib/i386-linux-gnu/pkgconfig ${BWRAP32} "${BUILD_DIR}"/wine/configure --with-wine64="${BUILD_DIR}"/build64 --with-wine-tools="${BUILD_DIR}"/build32-tools ${WINE_BUILD_OPTIONS} --prefix=""
     ${BWRAP32} make -j8
-    ${BWRAP32} make install
+    ${BWRAP32} make install DESTDIR="${BUILD_DIR}/wine-${BUILD_NAME}-amd64"
 
 fi
 
