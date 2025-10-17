@@ -1,5 +1,5 @@
 # build-wine-test.yml
-name: Build Test1Wine (True WOW64 for Termux with Bootstrap)
+name: Build TestWine (True WOW64 for Termux with Bootstrap)
 
 on:
   workflow_dispatch:
@@ -51,39 +51,95 @@ jobs:
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
 
-    - name: 创建最小化 Bootstrap 环境
+    - name: 创建完整的 Bootstrap 环境
       if: env.USE_BOOTSTRAP == 'true'
       run: |
-        echo "创建最小化 Bootstrap 环境..."
+        echo "创建完整的 Bootstrap 环境..."
         sudo apt install -y debootstrap bubblewrap
         
         # 创建引导目录
-        sudo mkdir -p /opt/chroots/noble64_chroot
+        sudo mkdir -p /opt/chroots/ubuntu64_chroot
         
-        # 创建最小化 Ubuntu 22.04 环境
-        sudo debootstrap --arch=amd64 --variant=minbase jammy /opt/chroots/noble64_chroot http://archive.ubuntu.com/ubuntu/
+        # 创建完整的 Ubuntu 22.04 环境（非最小化）
+        echo "创建完整的 Ubuntu 22.04 环境..."
+        sudo debootstrap --arch=amd64 jammy /opt/chroots/ubuntu64_chroot http://archive.ubuntu.com/ubuntu/
         
-        # 在引导环境中安装最小化构建工具
-        echo "在引导环境中安装构建工具..."
-        sudo chroot /opt/chroots/noble64_chroot /bin/bash -c "
-          apt update && \
+        # 在引导环境中配置基本的 apt 源和更新
+        echo "配置引导环境的软件源..."
+        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
+          # 添加 universe 和 multiverse 仓库
+          echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe multiverse' > /etc/apt/sources.list
+          echo 'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe multiverse' >> /etc/apt/sources.list
+          echo 'deb http://archive.ubuntu.com/ubuntu jammy-security main universe multiverse' >> /etc/apt/sources.list
+          
+          # 更新软件包列表
+          apt update
+          
+          # 安装基本系统工具
+          apt install -y software-properties-common apt-utils
+          
+          # 更新整个系统
+          apt upgrade -y
+        "
+        
+        # 在引导环境中安装完整的构建工具链
+        echo "在引导环境中安装完整的构建工具链..."
+        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
+          # 更新软件包列表
+          apt update
+          
+          # 安装完整的开发工具链
           apt install -y \
             build-essential \
             gcc g++ gcc-multilib g++-multilib \
-            mingw-w64 \
-            autoconf flex bison \
-            libx11-dev libxext-dev libfreetype6-dev \
-            libfontconfig1-dev libvulkan-dev \
+            mingw-w64 mingw-w64-tools \
+            autoconf automake flex bison \
+            libtool pkg-config \
+            cmake ninja-build \
+            meson nasm yasm \
+            && echo '✅ 基础开发工具安装完成'
+          
+          # 安装 Wine 构建依赖
+          apt install -y \
+            libx11-dev libxext-dev libxi-dev \
+            libxrandr-dev libxcursor-dev libxcomposite-dev \
+            libxdamage-dev libxfixes-dev libxxf86vm-dev \
+            libxrender-dev libxinerama-dev \
+            libgl-dev libglu-dev libosmesa6-dev \
+            libfreetype6-dev libfontconfig1-dev \
+            libpcap-dev libdbus-1-dev libssl-dev \
+            libasound2-dev libpulse-dev libudev-dev \
+            libcups2-dev libjpeg-dev libpng-dev \
+            libtiff-dev libxml2-dev libvulkan-dev \
+            vulkan-tools libvulkan1 mesa-vulkan-drivers \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            libasound2-dev libpulse-dev \
-            libdbus-1-dev libcups2-dev \
-            libjpeg-dev libpng-dev libtiff-dev \
-            libxml2-dev libssl-dev \
+            libmpg123-dev libopenal-dev \
+            libsane-dev libcapi20-dev libgsm1-dev \
+            liblcms2-dev libldap2-dev libmp3lame-dev \
+            libopencl-dev libpcap-dev libva-dev \
+            && echo '✅ Wine 依赖安装完成'
+          
+          # 安装语言和区域支持
+          apt install -y \
+            locales language-pack-zh-hans \
             gettext libgettextpo-dev \
-            && apt clean
+            && echo '✅ 语言支持安装完成'
+          
+          # 清理缓存
+          apt clean
+          rm -rf /var/lib/apt/lists/*
+          
+          # 验证安装
+          echo '=== 验证安装 ==='
+          gcc --version
+          g++ --version
+          x86_64-w64-mingw32-gcc --version
+          i686-w64-mingw32-gcc --version
+          pkg-config --version
+          echo '=== 验证完成 ==='
         "
         
-        echo "Bootstrap 环境准备完成"
+        echo "✅ 完整的 Bootstrap 环境准备完成"
 
     - name: 克隆 Wine 源码
       run: |
@@ -154,12 +210,15 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
         
-        # 使用 bubblewrap 在 Bootstrap 环境中配置
-        bwrap --ro-bind /opt/chroots/noble64_chroot / \
+        echo "使用完整的 Bootstrap 环境配置 Wine..."
+        
+        # 使用 bubblewrap 在完整的 Bootstrap 环境中配置
+        bwrap --ro-bind /opt/chroots/ubuntu64_chroot / \
               --dev /dev --ro-bind /sys /sys --proc /proc \
               --tmpfs /tmp --tmpfs /home --tmpfs /run \
               --bind $(pwd)/../.. $(pwd)/../.. \
-              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin" \
+              --setenv PATH "/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin" \
+              --setenv PKG_CONFIG_PATH "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
               ../configure \
                 --enable-win64 \
                 --enable-archs=i386,x86_64 \
@@ -275,6 +334,10 @@ jobs:
         # 检查 GStreamer 支持
         echo "GStreamer 支持检查:"
         find /tmp/wine-install -name "*gst*" | head -5 || echo "未找到 GStreamer 文件"
+        
+        # 检查 WoW64 支持
+        echo "WoW64 支持检查:"
+        find /tmp/wine-install -name "*wine*" -type f | grep -E "(bin|lib)" | head -10
 
     - name: 准备打包
       run: |
@@ -298,17 +361,18 @@ jobs:
         cat > wine-package/version-info.txt << EOF
             Wine Version: ${{ env.WINE_VERSION }}
             Build Date: $(date)
-            Build Type: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }} Mode
+            Build Type: ${{ env.USE_BOOTSTRAP && 'Bootstrap (Full Ubuntu)' || 'Direct' }} Mode
             Architecture: True WOW64 (i386/x86_64)
             Platform: Termux
             Features: Vulkan, GStreamer, True WOW64
+            Bootstrap Environment: Full Ubuntu 22.04 with all development tools
         EOF
 
     - name: 创建压缩包
       run: |
         # 确定构建类型标签
         if [ "${{ env.USE_BOOTSTRAP }}" = "true" ]; then
-            BUILD_TYPE="bootstrap"
+            BUILD_TYPE="bootstrap-full"
         else
             BUILD_TYPE="direct"
         fi
@@ -325,14 +389,14 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux
+        name: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap-full' || 'direct' }}-termux
         path: wine-${{ env.WINE_VERSION }}-wow64-*-termux.tar.gz
         retention-days: 30
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}
+        tag_name: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap-full' || 'direct' }}
         name: Wine ${{ env.WINE_VERSION }} (WOW64 for Termux)
         body: |
           # Wine ${{ env.WINE_VERSION }} - True WOW64 for Termux
@@ -340,7 +404,7 @@ jobs:
           ## 构建信息
           - **版本**: ${{ env.WINE_VERSION }}
           - **架构**: True WOW64 (同时支持 32/64 位)
-          - **构建模式**: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
+          - **构建模式**: ${{ env.USE_BOOTSTRAP && 'Bootstrap (完整 Ubuntu 环境)' || 'Direct' }}
           - **平台**: Termux (Android)
           - **特性**: Vulkan, GStreamer, True WOW64
           
@@ -350,7 +414,7 @@ jobs:
           ✓ GStreamer 多媒体支持  
           ✓ Termux 路径兼容性修复
           ✓ MF 兼容性补丁
-          ✓ ${{ env.USE_BOOTSTRAP && '最小化 Bootstrap 构建' || '直接构建' }}
+          ✓ ${{ env.USE_BOOTSTRAP && '完整 Ubuntu Bootstrap 环境构建' || '直接构建' }}
           
           ## 使用说明
           1. 解压到 Termux 环境
@@ -371,7 +435,7 @@ jobs:
         echo "✅ Wine 构建完成"
         echo "版本: ${{ env.WINE_VERSION }}"
         echo "架构: True WOW64 (i386/x86_64)"
-        echo "构建模式: ${{ env.USE_BOOTSTRAP && 'Bootstrap（最小化）' || 'Direct（直接）' }}"
+        echo "构建模式: ${{ env.USE_BOOTSTRAP && 'Bootstrap（完整 Ubuntu 环境）' || 'Direct（直接）' }}"
         echo "平台: Termux"
         echo ""
         echo "包含特性:"
@@ -379,6 +443,7 @@ jobs:
         echo "✓ GStreamer 多媒体支持"
         echo "✓ Termux 路径兼容性"
         echo "✓ MF 兼容性修复"
+        echo "✓ 完整开发工具链"
         echo ""
-        echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux.tar.gz"
+        echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap-full' || 'direct' }}-termux.tar.gz"
         echo "================"
