@@ -122,19 +122,70 @@ jobs:
             libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers \
             && echo '✅ OpenGL/Vulkan 开发包安装完成'
           
-          # 安装 Wine 构建依赖
+          # 安装完整的字体和多媒体开发包
           apt install -y \
-            libfreetype6-dev libfontconfig1-dev \
-            libpcap-dev libdbus-1-dev libssl-dev \
-            libasound2-dev libpulse-dev libudev-dev \
-            libcups2-dev libjpeg-dev libpng-dev \
-            libtiff-dev libxml2-dev \
+            libfreetype6-dev libfontconfig1-dev libfribidi-dev \
+            libharfbuzz-dev libharfbuzz-icu0 libharfbuzz-gobject0 \
+            libpng-dev libjpeg-dev libtiff-dev \
+            libgif-dev libwebp-dev \
+            && echo '✅ 字体和图像开发包安装完成'
+          
+          # 安装音频开发包
+          apt install -y \
+            libasound2-dev libpulse-dev \
+            libopenal-dev libaudio-dev \
+            libsndfile1-dev libsoxr-dev \
+            && echo '✅ 音频开发包安装完成'
+          
+          # 安装网络和安全开发包
+          apt install -y \
+            libssl-dev libgnutls28-dev \
+            libpcap-dev libnet1-dev \
+            libldap2-dev libsasl2-dev \
+            && echo '✅ 网络和安全开发包安装完成'
+          
+          # 安装多媒体开发包
+          apt install -y \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            libmpg123-dev libopenal-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav gstreamer1.0-tools \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libpostproc-dev \
+            libmpg123-dev libvorbis-dev libflac-dev \
+            && echo '✅ 多媒体开发包安装完成'
+          
+          # 安装其他 Wine 构建依赖
+          apt install -y \
+            libdbus-1-dev libudev-dev \
+            libcups2-dev libcairo2-dev \
+            libpango1.0-dev libgdk-pixbuf2.0-dev \
+            libatk1.0-dev libgtk-3-dev \
+            libxml2-dev libxslt1-dev \
+            libncurses5-dev libreadline-dev \
+            libbz2-dev liblzma-dev \
+            libgcrypt20-dev libgpg-error-dev \
+            libsystemd-dev libkrb5-dev \
             libsane-dev libcapi20-dev libgsm1-dev \
-            liblcms2-dev libldap2-dev libmp3lame-dev \
-            libopencl-dev libpcap-dev libva-dev \
-            && echo '✅ Wine 依赖安装完成'
+            liblcms2-dev libmp3lame-dev \
+            libopencl-dev libva-dev libvdpau-dev \
+            libegl1-mesa-dev libgles2-mesa-dev \
+            libgbm-dev libdrm-dev \
+            libjack-dev libportaudio2 portaudio19-dev \
+            libusb-1.0-0-dev libpciaccess-dev \
+            libunwind-dev libcap-dev \
+            libattr1-dev libacl1-dev \
+            libblkid-dev libmount-dev \
+            libselinux1-dev libsepol-dev \
+            libffi-dev libpcre3-dev \
+            libzstd-dev liblz4-dev \
+            libsnappy-dev libbz2-dev \
+            libjson-c-dev libyajl-dev \
+            libcurl4-openssl-dev libssh2-1-dev \
+            libpq-dev libmysqlclient-dev \
+            libsqlite3-dev libodbc1-dev \
+            libpq5 libmysqlclient21 \
+            && echo '✅ 其他 Wine 依赖安装完成'
           
           # 安装语言和区域支持
           apt install -y \
@@ -155,6 +206,10 @@ jobs:
           pkg-config --version
           echo 'X11 库检查:'
           pkg-config --list-all | grep -i x11 | head -10
+          echo 'FreeType 检查:'
+          pkg-config --modversion freetype2 || echo 'FreeType 未找到'
+          echo 'FontConfig 检查:'
+          pkg-config --modversion fontconfig || echo 'FontConfig 未找到'
           echo '=== 验证完成 ==='
         "
         
@@ -240,20 +295,35 @@ jobs:
         
         echo "✅ 源码复制完成"
 
+    - name: 配置前的依赖检查
+      if: env.USE_BOOTSTRAP == 'true'
+      run: |
+        echo "在 Bootstrap 环境中检查关键依赖..."
+        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
+          echo '=== 关键依赖检查 ==='
+          echo 'FreeType:'
+          pkg-config --modversion freetype2 || echo 'FreeType 未找到'
+          echo 'FontConfig:'
+          pkg-config --modversion fontconfig || echo 'FontConfig 未找到'
+          echo 'X11:'
+          pkg-config --modversion x11 || echo 'X11 未找到'
+          echo 'OpenGL:'
+          pkg-config --modversion gl || echo 'OpenGL 未找到'
+          echo 'Vulkan:'
+          pkg-config --modversion vulkan || echo 'Vulkan 未找到'
+          echo 'GStreamer:'
+          pkg-config --modversion gstreamer-1.0 || echo 'GStreamer 未找到'
+          echo 'ALSA:'
+          pkg-config --modversion alsa || echo 'ALSA 未找到'
+          echo 'PulseAudio:'
+          pkg-config --modversion libpulse || echo 'PulseAudio 未找到'
+          echo '=== 检查完成 ==='
+        "
+
     - name: 配置 Wine 构建（Bootstrap 模式 - 修复版）
       if: env.USE_BOOTSTRAP == 'true'
       run: |
         echo "在 Bootstrap 环境中配置 Wine..."
-        
-        # 首先检查 X11 库
-        echo "检查 X11 库:"
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          pkg-config --list-all | grep -i x11 | head -10
-          echo 'Xext 库:'
-          pkg-config --libs xext
-          echo 'Xi 库:'
-          pkg-config --libs xi
-        "
         
         # 使用 chroot 配置
         sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
@@ -324,8 +394,8 @@ jobs:
         cd wine
         echo "当前目录: $(pwd)"
         
-        # 安装宿主系统的 X11 开发包
-        echo "安装宿主系统的 X11 开发包..."
+        # 安装宿主系统的所有必要开发包
+        echo "安装宿主系统的所有必要开发包..."
         sudo apt update
         sudo apt install -y \
           libx11-dev libx11-xcb-dev \
@@ -340,7 +410,52 @@ jobs:
           x11proto-randr-dev x11proto-record-dev \
           x11proto-scrnsaver-dev x11proto-video-dev \
           libgl-dev libglu-dev libosmesa6-dev \
-          libglvnd-dev
+          libglvnd-dev \
+          libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers \
+          libfreetype6-dev libfontconfig1-dev libfribidi-dev \
+          libharfbuzz-dev libharfbuzz-icu0 libharfbuzz-gobject0 \
+          libpng-dev libjpeg-dev libtiff-dev \
+          libgif-dev libwebp-dev \
+          libasound2-dev libpulse-dev \
+          libopenal-dev libaudio-dev \
+          libsndfile1-dev libsoxr-dev \
+          libssl-dev libgnutls28-dev \
+          libpcap-dev libnet1-dev \
+          libldap2-dev libsasl2-dev \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+          gstreamer1.0-libav gstreamer1.0-tools \
+          libavcodec-dev libavformat-dev libavutil-dev \
+          libswscale-dev libpostproc-dev \
+          libmpg123-dev libvorbis-dev libflac-dev \
+          libdbus-1-dev libudev-dev \
+          libcups2-dev libcairo2-dev \
+          libpango1.0-dev libgdk-pixbuf2.0-dev \
+          libatk1.0-dev libgtk-3-dev \
+          libxml2-dev libxslt1-dev \
+          libncurses5-dev libreadline-dev \
+          libbz2-dev liblzma-dev \
+          libgcrypt20-dev libgpg-error-dev \
+          libsystemd-dev libkrb5-dev \
+          libsane-dev libcapi20-dev libgsm1-dev \
+          liblcms2-dev libmp3lame-dev \
+          libopencl-dev libva-dev libvdpau-dev \
+          libegl1-mesa-dev libgles2-mesa-dev \
+          libgbm-dev libdrm-dev \
+          libjack-dev libportaudio2 portaudio19-dev \
+          libusb-1.0-0-dev libpciaccess-dev \
+          libunwind-dev libcap-dev \
+          libattr1-dev libacl1-dev \
+          libblkid-dev libmount-dev \
+          libselinux1-dev libsepol-dev \
+          libffi-dev libpcre3-dev \
+          libzstd-dev liblz4-dev \
+          libsnappy-dev libbz2-dev \
+          libjson-c-dev libyajl-dev \
+          libcurl4-openssl-dev libssh2-1-dev \
+          libpq-dev libmysqlclient-dev \
+          libsqlite3-dev libodbc1-dev
         
         mkdir -p build-wow64
         cd build-wow64
@@ -628,6 +743,9 @@ jobs:
         echo "✓ MF 兼容性修复"
         echo "✓ 完整开发工具链"
         echo "✓ 完整的 X11 支持"
+        echo "✓ 完整的 FreeType 和字体支持"
+        echo "✓ 完整的音频支持"
+        echo "✓ 完整的网络支持"
         echo ""
         echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap-full' || 'direct' }}-termux.tar.gz"
         echo "================"
