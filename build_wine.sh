@@ -81,7 +81,7 @@ export STAGING_VERSION="${STAGING_VERSION:-}"
 
 #######################################################################
 # If you're building specifically for Termux glibc, set this to true.
-export TERMUX_GLIBC="${TERMUX_GLIBC:-false}"
+export TERMUX_GLIBC="${TERMUX_GLIBC:-true}"
 
 # If you want to build Wine for proot/chroot, set this to true.
 # It will incorporate address space adjustment which might improve
@@ -100,7 +100,7 @@ export TERMUX_PROOT="${TERMUX_PROOT:-false}"
 export STAGING_ARGS="${STAGING_ARGS:-}"
 
 # Make 64-bit Wine builds with the new WoW64 mode (32-on-64)
-export EXPERIMENTAL_WOW64="${EXPERIMENTAL_WOW64:-false}"
+export EXPERIMENTAL_WOW64="${EXPERIMENTAL_WOW64:-true}"
 
 # Set this to a path to your Wine source code (for example, /home/username/wine-custom-src).
 # This is useful if you already have the Wine source code somewhere on your
@@ -128,9 +128,7 @@ export USE_CCACHE="${USE_CCACHE:-false}"
 
 export WINE_BUILD_OPTIONS="--disable-winemenubuilder --disable-win16 --enable-win64 --disable-tests --without-capi --without-coreaudio --without-cups --without-gphoto --without-osmesa --without-oss --without-pcap --without-pcsclite --without-sane --without-udev --without-unwind --without-usb --without-v4l2 --without-wayland --without-xinerama"
 
-# A temporary directory where the Wine source code will be stored.
-# Do not set this variable to an existing non-empty directory!
-# This directory is removed and recreated on each script run.
+# 修复构建目录路径 - 使用可写的临时目录
 export BUILD_DIR="/tmp/build_wine"
 
 # 新增：应用 MF 补丁函数
@@ -184,9 +182,9 @@ apply_mf_patches() {
 # variables and they are not compatible with old WoW64 build mode.
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
 
-   export BOOTSTRAP_X64=/opt/chroots/noble64_chroot
+   export BOOTSTRAP_X64="/opt/chroots/noble64_chroot"
 
-   export scriptdir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+   export scriptdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
    export CC="gcc-14"
    export CXX="g++-14"
@@ -231,10 +229,10 @@ if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
 
 else
 
-export BOOTSTRAP_X64=/opt/chroots/bionic64_chroot
-export BOOTSTRAP_X32=/opt/chroots/bionic32_chroot
+export BOOTSTRAP_X64="/opt/chroots/bionic64_chroot"
+export BOOTSTRAP_X32="/opt/chroots/bionic32_chroot"
 
-export scriptdir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+export scriptdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export CC="gcc-9"
 export CXX="g++-9"
@@ -349,6 +347,12 @@ if [ "$(echo "$WINE_VERSION" | cut -c3)" = "0" ]; then
 else
 	WINE_URL_VERSION=$(echo "$WINE_VERSION" | cut -c1).x
 fi
+
+# 确保构建目录存在且有正确权限
+echo "设置构建目录: ${BUILD_DIR}"
+sudo mkdir -p "${BUILD_DIR}"
+sudo chown -R $(whoami):$(whoami) "${BUILD_DIR}"
+sudo chmod -R 755 "${BUILD_DIR}"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
@@ -807,38 +811,62 @@ echo
 echo "编译完成"
 echo "创建并压缩归档文件..."
 
-cd "${BUILD_DIR}" || exit
+cd "${BUILD_DIR}" || exit 1
 
-if touch "${scriptdir}"/write_test; then
-	rm -f "${scriptdir}"/write_test
-	result_dir="${scriptdir}"
-else
-	result_dir="${HOME}"
-fi
+# 调试：列出构建目录内容
+echo "=== 构建目录内容 ==="
+ls -la "${BUILD_DIR}"
+echo "=== 构建目录内容结束 ==="
+
+# 设置结果目录为工作目录
+result_dir="/github/workspace"
 
 export XZ_OPT="-9"
 
 if [ "${EXPERIMENTAL_WOW64}" = "true" ]; then
-	mv wine-${BUILD_NAME}-amd64 wine-${BUILD_NAME}-exp-wow64-amd64
-
-	builds_list="wine-${BUILD_NAME}-exp-wow64-amd64"
+    # 检查目录是否存在
+    if [ -d "wine-${BUILD_NAME}-amd64" ]; then
+        mv "wine-${BUILD_NAME}-amd64" "wine-${BUILD_NAME}-exp-wow64-amd64"
+        builds_list="wine-${BUILD_NAME}-exp-wow64-amd64"
+    else
+        echo "错误: 目录 wine-${BUILD_NAME}-amd64 不存在!"
+        echo "当前目录内容:"
+        ls -la
+        exit 1
+    fi
 else
-	builds_list="wine-${BUILD_NAME}-x86 wine-${BUILD_NAME}-amd64"
+    builds_list="wine-${BUILD_NAME}-x86 wine-${BUILD_NAME}-amd64"
 fi
 
 for build in ${builds_list}; do
-	if [ -d "${build}" ]; then
-		rm -rf "${build}"/include "${build}"/share/applications "${build}"/share/man
+    if [ -d "${build}" ]; then
+        echo "处理构建: ${build}"
+        rm -rf "${build}"/include "${build}"/share/applications "${build}"/share/man
 
-		if [ -f wine/wine-tkg-config.txt ]; then
-			cp wine/wine-tkg-config.txt "${build}"
-		fi
+        if [ -f wine/wine-tkg-config.txt ]; then
+            cp wine/wine-tkg-config.txt "${build}"
+        fi
 
-		tar -Jcf "${build}".tar.xz "${build}"
-		mv "${build}".tar.xz "${result_dir}"
-	fi
+        tar -Jcf "${build}".tar.xz "${build}"
+        # 复制到工作目录
+        cp "${build}".tar.xz "${result_dir}"/
+        echo "已创建: ${build}.tar.xz"
+    else
+        echo "警告: 构建目录 ${build} 不存在!"
+        echo "当前目录内容:"
+        ls -la
+    fi
 done
+
+# 清理临时构建目录
+cd /tmp
+rm -rf "${BUILD_DIR}"
 
 echo
 echo "完成"
-echo "构建产物应该在 ${result_dir} 目录中"
+echo "构建产物已经在 ${result_dir} 目录中"
+
+# 列出最终的工作目录内容
+echo "=== 工作目录内容 ==="
+ls -la "${result_dir}"/*.tar.xz 2>/dev/null || echo "未找到 tar.xz 文件"
+echo "=== 工作目录内容结束 ==="
