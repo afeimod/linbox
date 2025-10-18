@@ -1,5 +1,5 @@
 # build-wine-proton.yml
-name: 构建适用于 Termux 的 Proton WOW64
+name: Build Proton WOW64
 
 on:
   workflow_dispatch:
