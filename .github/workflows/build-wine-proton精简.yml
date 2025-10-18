@@ -127,12 +127,10 @@ jobs:
         export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
         export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
         export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        # 为 GStreamer 相关模块设置优化级别
+        export GST_CFLAGS="-O0"
+        export GST_CXXFLAGS="-O0"
 
-
-        
-        echo "开始配置 Proton WOW64 构建..."
-        echo "CFLAGS: $CFLAGS"
-        echo "CROSSCFLAGS: $CROSSCFLAGS"
         
         # 运行配置
         ../configure \
@@ -166,12 +164,12 @@ jobs:
           --without-unwind \
           --without-usb \
           --without-v4l2 \
-          --without-wayland
+          --without-wayland \
+          CFLAGS="$CFLAGS $GST_CFLAGS" \
+          CXXFLAGS="$CXXFLAGS $GST_CXXFLAGS"
         
         echo "✅ Proton WOW64 配置完成"
-        # 在配置步骤后添加，针对 GStreamer 模块禁用优化
-        echo "应用 GStreamer 优化禁用补丁..."
-        find wine -name "Makefile" -exec grep -l "gst" {} \; | xargs -I {} sed -i 's/^\(.*gst.*\.o:.*\)$/\1\n\t$(CC) -O0 $(CFLAGS) -c -o $@ $</' {} 2>/dev/null || true
+
         # 验证 Makefile
         if [ -f 'Makefile' ]; then
           echo '✅ Makefile 已生成'
