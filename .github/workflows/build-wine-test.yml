@@ -13,15 +13,6 @@ on:
 permissions:
   contents: write
 
-env:
-  CC: gcc
-  CXX: g++
-  CROSSCC_X64: x86_64-w64-mingw32-gcc
-  CROSSCXX_X64: x86_64-w64-mingw32-g++
-  CFLAGS_X64: -march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe
-  LDFLAGS: -Wl,-O1,--sort-common,--as-needed
-  CROSSCFLAGS_X64: -march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe
-  CROSSLDFLAGS: -Wl,-O1,--sort-common,--as-needed
 
 jobs:
   build:
@@ -144,12 +135,12 @@ jobs:
         cd build-wow64
         
         # 设置环境变量
-        export CROSSCC="${{ env.CROSSCC_X64 }}"
-        export CROSSCXX="${{ env.CROSSCXX_X64 }}"
-        export CFLAGS="${{ env.CFLAGS_X64 }}"
-        export CXXFLAGS="${{ env.CFLAGS_X64 }}"
-        export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
-        export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+        export CROSSCC="x86_64-w64-mingw32-gcc"
+        export CROSSCXX="x86_64-w64-mingw32-g++"
+        export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
         
         ../configure \
           --enable-archs=i386,x86_64 \
