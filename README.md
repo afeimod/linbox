@@ -48,7 +48,8 @@
 
 ### 来源链接
 
-* https://dl.winehq.org/wine/source
+* https://github.com/jiaxinchen-max/termux-app
+* https://github.com/wine-mirror/wine
 * https://github.com/olegos2/mobox
 * https://github.com/Waim908/wine-termux
 * https://github.com/wine-staging/wine-staging
