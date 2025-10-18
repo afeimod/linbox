@@ -9,6 +9,11 @@ on:
         required: true
         default: 'proton_10.0'
         type: string
+      use_gcc_variables:
+        description: '是否使用自定义 GCC 编译变量'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -28,11 +33,13 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PROTON_BRANCH: ${{ github.event.inputs.proton_branch }}
+      USE_GCC_VARIABLES: ${{ github.event.inputs.use_gcc_variables }}
 
     steps:
     - name: 检查输入参数
       run: |
         echo "Proton 分支: ${{ env.PROTON_BRANCH }}"
+        echo "使用 GCC 变量: ${{ env.USE_GCC_VARIABLES }}"
 
     - name: 安装基础依赖
       run: |
@@ -126,19 +133,35 @@ jobs:
         mkdir -p build-wow64
         cd build-wow64
         
-        # 设置环境变量
-        export CROSSCC="${{ env.CROSSCC_X64 }}"
-        export CROSSCXX="${{ env.CROSSCXX_X64 }}"
-        export CFLAGS="${{ env.CFLAGS_X64 }}"
-        export CXXFLAGS="${{ env.CFLAGS_X64 }}"
-        export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
-        export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
-        export LDFLAGS="${{ env.LDFLAGS }}"
-        export CROSSLDFLAGS="${{ env.CROSSLDFLAGS }}"
+        # 根据用户选择设置环境变量
+        if [ "${{ env.USE_GCC_VARIABLES }}" = "true" ]; then
+          echo "使用自定义 GCC 编译变量"
+          export CROSSCC="${{ env.CROSSCC_X64 }}"
+          export CROSSCXX="${{ env.CROSSCXX_X64 }}"
+          export CFLAGS="${{ env.CFLAGS_X64 }}"
+          export CXXFLAGS="${{ env.CFLAGS_X64 }}"
+          export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+          export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+          export LDFLAGS="${{ env.LDFLAGS }}"
+          export CROSSLDFLAGS="${{ env.CROSSLDFLAGS }}"
+          
+          echo "CFLAGS: $CFLAGS"
+          echo "CROSSCFLAGS: $CROSSCFLAGS"
+          echo "LDFLAGS: $LDFLAGS"
+        else
+          echo "使用系统默认编译设置"
+          # 清除所有自定义编译变量
+          unset CROSSCC
+          unset CROSSCXX
+          unset CFLAGS
+          unset CXXFLAGS
+          unset CROSSCFLAGS
+          unset CROSSCXXFLAGS
+          unset LDFLAGS
+          unset CROSSLDFLAGS
+        fi
         
         echo "开始配置 Proton WOW64 构建..."
-        echo "CFLAGS: $CFLAGS"
-        echo "CROSSCFLAGS: $CROSSCFLAGS"
         
         # 运行配置
         ../configure \
@@ -195,6 +218,20 @@ jobs:
         cd wine/build-wow64
         echo "开始编译 Proton WOW64..."
         echo "使用 $(nproc) 个核心进行编译"
+        
+        # 根据 GCC 变量选择设置编译环境
+        if [ "${{ env.USE_GCC_VARIABLES }}" = "true" ]; then
+          echo "使用自定义编译变量进行编译"
+          export CFLAGS="${{ env.CFLAGS_X64 }}"
+          export CXXFLAGS="${{ env.CFLAGS_X64 }}"
+          export LDFLAGS="${{ env.LDFLAGS }}"
+        else
+          echo "使用系统默认设置进行编译"
+          unset CFLAGS
+          unset CXXFLAGS
+          unset LDFLAGS
+        fi
+        
         make -j$(nproc)
         echo "✅ Proton WOW64 编译完成"
 
@@ -277,6 +314,7 @@ jobs:
           - **架构**: WOW64 (32/64 位支持)
           - **平台**: Termux (Android)
           - **格式**: tar.xz
+          - **编译选项**: ${{ env.USE_GCC_VARIABLES && '自定义 GCC 优化' || '系统默认设置' }}
           - **目录**: wine-${{ env.VERSION_PROTON }}-proton-wow64
           
           ## 功能特性
@@ -289,11 +327,13 @@ jobs:
           ✓ 完整的中文本地化支持
           ✓ 游戏优化和兼容性改进
           ✓ Termux 路径兼容性修复
+          ${{ env.USE_GCC_VARIABLES && '✓ 自定义 GCC 优化编译' || '✓ 系统默认编译设置' }}
           
           ## 构建详情
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
+          - 编译设置: ${{ env.USE_GCC_VARIABLES && '自定义 GCC 优化' || '系统默认设置' }}
         files: wine-${{ env.PROTON_BRANCH }}-proton-wow64.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -306,6 +346,7 @@ jobs:
         echo "分支: ${{ env.PROTON_BRANCH }}"
         echo "架构: WOW64 (i386/x86_64)"
         echo "平台: Termux"
+        echo "编译设置: ${{ env.USE_GCC_VARIABLES && '自定义 GCC 优化' || '系统默认设置' }}"
         echo "包格式: tar.xz"
         echo "安装目录: wine-${{ env.PROTON_VERSION }}-proton-wow64"
         echo ""
@@ -324,6 +365,14 @@ jobs:
         echo "完整的中文本地化"
         echo "游戏优化"
         echo "Termux 路径兼容性"
+        if [ "${{ env.USE_GCC_VARIABLES }}" = "true" ]; then
+          echo "自定义 GCC 优化编译"
+          echo "优化级别: -O3"
+          echo "架构优化: x86-64 with SSE3"
+          echo "向量化: -ftree-vectorize"
+        else
+          echo "系统默认编译设置"
+        fi
         echo ""
         echo "构建产物: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz"
         echo "安装路径: $PREFIX/opt/wine-${{ env.PROTON_VERSION }}-proton-wow64/"
