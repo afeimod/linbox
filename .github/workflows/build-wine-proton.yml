@@ -9,11 +9,6 @@ on:
         required: true
         default: 'proton_10.0'
         type: string
-      use_bootstrap:
-        description: '使用 Bootstrap 环境构建（减少内存占用）'
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -33,13 +28,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PROTON_BRANCH: ${{ github.event.inputs.proton_branch }}
-      USE_BOOTSTRAP: ${{ github.event.inputs.use_bootstrap }}
 
     steps:
     - name: 检查输入参数
       run: |
         echo "Proton 分支: ${{ env.PROTON_BRANCH }}"
-        echo "使用 Bootstrap: ${{ env.USE_BOOTSTRAP }}"
 
     - name: 安装基础依赖
       run: |
@@ -52,7 +45,7 @@ jobs:
           mingw-w64 \
           gettext libgettextpo-dev \
           locales language-pack-zh-hans \
-          ccache bubblewrap
+          ccache
 
     - name: 设置中文环境
       run: |
@@ -60,110 +53,6 @@ jobs:
         sudo update-locale LANG=zh_CN.UTF-8
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
-
-    - name: 创建精简的 Bootstrap 环境
-      if: env.USE_BOOTSTRAP == 'true'
-      run: |
-        echo "创建精简的 Bootstrap 环境..."
-        sudo apt install -y debootstrap
-        
-        # 创建引导目录
-        sudo mkdir -p /opt/chroots/ubuntu64_chroot
-        
-        # 创建 Ubuntu 22.04 环境
-        echo "创建 Ubuntu 22.04 环境..."
-        sudo debootstrap --arch=amd64 jammy /opt/chroots/ubuntu64_chroot http://archive.ubuntu.com/ubuntu/
-        
-        # 在引导环境中配置基本的 apt 源和更新
-        echo "配置引导环境的软件源..."
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          # 添加 universe 和 multiverse 仓库
-          echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe multiverse' > /etc/apt/sources.list
-          echo 'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe multiverse' >> /etc/apt/sources.list
-          echo 'deb http://archive.ubuntu.com/ubuntu jammy-security main universe multiverse' >> /etc/apt/sources.list
-          
-          # 更新软件包列表
-          apt update
-          apt install -y software-properties-common apt-utils
-          apt upgrade -y
-        "
-        
-        # 根据构建配置安装必要的依赖
-        echo "根据构建配置安装必要的依赖..."
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          # 更新软件包列表
-          apt update
-          
-          # 基础构建工具
-          apt install -y \
-            build-essential \
-            gcc g++ gcc-multilib g++-multilib \
-            mingw-w64 \
-            autoconf automake flex bison \
-            libtool pkg-config \
-            cmake ninja-build \
-            meson nasm yasm
-          
-          # 根据配置选项安装依赖
-          # --with-x 需要的依赖
-          apt install -y \
-            libx11-dev libxext-dev libxi-dev \
-            libxrandr-dev libxcursor-dev \
-            libxrender-dev libxinerama-dev \
-            x11proto-core-dev x11proto-xext-dev
-          
-          # --with-vulkan 需要的依赖
-          apt install -y \
-            libvulkan-dev mesa-vulkan-drivers
-          
-          # --with-alsa 需要的依赖
-          apt install -y \
-            libasound2-dev
-          
-          # --with-pulse 需要的依赖
-          apt install -y \
-            libpulse-dev
-          
-          # --with-freetype --with-fontconfig 需要的依赖
-          apt install -y \
-            libfreetype6-dev libfontconfig1-dev
-          
-          # --with-gstreamer 需要的依赖
-          apt install -y \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-          
-          # --with-gettext --enable-nls 需要的依赖
-          apt install -y \
-            gettext libgettextpo-dev
-          
-          # 其他必要的依赖
-          apt install -y \
-            libjpeg-dev libpng-dev libtiff-dev \
-            libxml2-dev libssl-dev \
-            libudev-dev
-          
-          # 语言支持
-          apt install -y \
-            locales language-pack-zh-hans
-          
-          # 清理缓存
-          apt clean
-          rm -rf /var/lib/apt/lists/*
-          
-          # 验证关键依赖
-          echo '=== 关键依赖验证 ==='
-          pkg-config --modversion freetype2 || echo 'FreeType 未找到'
-          pkg-config --modversion fontconfig || echo 'FontConfig 未找到'
-          pkg-config --modversion x11 || echo 'X11 未找到'
-          pkg-config --modversion vulkan || echo 'Vulkan 未找到'
-          pkg-config --modversion alsa || echo 'ALSA 未找到'
-          pkg-config --modversion libpulse || echo 'PulseAudio 未找到'
-          pkg-config --modversion gstreamer-1.0 || echo 'GStreamer 未找到'
-          echo '=== 验证完成 ==='
-        "
-        
-        echo "✅ 精简的 Bootstrap 环境准备完成"
 
     - name: 克隆 Proton 源码
       run: |
@@ -187,87 +76,7 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 复制源码到 Bootstrap 环境
-      if: env.USE_BOOTSTRAP == 'true'
-      run: |
-        echo "复制 Proton 源码到 Bootstrap 环境..."
-        sudo rm -rf /opt/chroots/ubuntu64_chroot/opt/proton
-        sudo cp -r wine /opt/chroots/ubuntu64_chroot/opt/proton
-        echo "✅ 源码复制完成"
-
-    - name: 配置 Proton 构建（Bootstrap 模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'true'
-      run: |
-        echo "在 Bootstrap 环境中配置 Proton (WOW64 模式)..."
-        
-        # 设置环境变量
-        export CROSSCC="${{ env.CROSSCC_X64 }}"
-        export CROSSCXX="${{ env.CROSSCXX_X64 }}"
-        export CFLAGS="${{ env.CFLAGS_X64 }}"
-        export CXXFLAGS="${{ env.CFLAGS_X64 }}"
-        export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
-        export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
-        
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          set -e
-          cd /opt/proton
-          mkdir -p build-wow64
-          cd build-wow64
-          
-          echo '开始配置 Proton WOW64 构建...'
-          export CROSSCC='${{ env.CROSSCC_X64 }}'
-          export CROSSCXX='${{ env.CROSSCXX_X64 }}'
-          export CFLAGS='${{ env.CFLAGS_X64 }}'
-          export CXXFLAGS='${{ env.CFLAGS_X64 }}'
-          export CROSSCFLAGS='${{ env.CROSSCFLAGS_X64 }}'
-          export CROSSCXXFLAGS='${{ env.CROSSCFLAGS_X64 }}'
-          
-          ../configure \
-            --enable-win64 \
-            --enable-archs=i386,x86_64 \
-            --prefix=/tmp/proton-install \
-            --with-x \
-            --with-vulkan \
-            --with-alsa \
-            --with-pulse \
-            --with-freetype \
-            --with-fontconfig \
-            --with-gstreamer \
-            --with-gettext \
-            --enable-nls \
-            --disable-winemenubuilder \
-            --disable-win16 \
-            --disable-tests \
-            --without-ldap \
-            --without-capi \
-            --without-oss \
-            --without-cups \
-            --without-dbus \
-            --without-coreaudio \
-            --without-gphoto \
-            --without-osmesa \
-            --without-sane \
-            --without-pcap \
-            --without-pcsclite \
-            --without-udev \
-            --without-unwind \
-            --without-usb \
-            --without-v4l2 \
-            --without-wayland
-            
-          echo '✅ Bootstrap 环境 Proton WOW64 配置完成'
-          
-          # 验证 Makefile
-          if [ -f 'Makefile' ]; then
-            echo '✅ Makefile 已生成'
-          else
-            echo '❌ Makefile 未生成，配置失败'
-            exit 1
-          fi
-        "
-
-    - name: 配置 Proton 构建（直接模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'false'
+    - name: 配置 Proton 构建（WOW64）
       run: |
         cd wine
         
@@ -332,7 +141,7 @@ jobs:
           --without-v4l2 \
           --without-wayland
         
-        echo "✅ 直接模式 Proton WOW64 配置完成"
+        echo "✅ Proton WOW64 配置完成"
         
         # 验证 Makefile
         if [ -f 'Makefile' ]; then
@@ -342,45 +151,14 @@ jobs:
           exit 1
         fi
 
-    - name: 编译 Proton（Bootstrap 模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'true'
-      run: |
-        echo "在 Bootstrap 环境中编译 Proton (WOW64 模式)..."
-        
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          set -e
-          cd /opt/proton/build-wow64
-          echo '开始编译 Proton WOW64...'
-          make -j\$(nproc)
-          echo '✅ Bootstrap 环境 Proton WOW64 编译完成'
-        "
-
-    - name: 编译 Proton（直接模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'false'
+    - name: 编译 Proton（WOW64）
       run: |
         cd wine/build-wow64
         echo "开始编译 Proton WOW64..."
         make -j$(nproc)
         echo "✅ Proton WOW64 编译完成"
 
-    - name: 安装 Proton（Bootstrap 模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'true'
-      run: |
-        echo "在 Bootstrap 环境中安装 Proton (WOW64 模式)..."
-        
-        sudo chroot /opt/chroots/ubuntu64_chroot /bin/bash -c "
-          set -e
-          cd /opt/proton/build-wow64
-          make install
-          echo '✅ Bootstrap 环境 Proton WOW64 安装完成'
-        "
-        
-        # 将安装文件复制到主机
-        sudo cp -r /opt/chroots/ubuntu64_chroot/tmp/proton-install /tmp/
-        sudo chown -R $USER:$USER /tmp/proton-install
-
-    - name: 安装 Proton（直接模式 - WOW64）
-      if: env.USE_BOOTSTRAP == 'false'
+    - name: 安装 Proton（WOW64）
       run: |
         cd wine/build-wow64
         make install
@@ -425,16 +203,9 @@ jobs:
 
     - name: 创建压缩包
       run: |
-        # 确定构建类型标签
-        if [ "${{ env.USE_BOOTSTRAP }}" = "true" ]; then
-            BUILD_TYPE="bootstrap"
-        else
-            BUILD_TYPE="direct"
-        fi
-        
         # 创建 tar.xz 压缩包
         cd proton-package/opt
-        tar -cJf ../../wine-${{ env.PROTON_VERSION }}-proton-wow64-$BUILD_TYPE-termux.tar.xz wine-${{ env.PROTON_VERSION }}-proton-wow64/
+        tar -cJf ../../wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz wine-${{ env.PROTON_VERSION }}-proton-wow64/
         cd ../..
         
         echo "创建的包:"
@@ -443,15 +214,15 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.PROTON_VERSION }}-proton-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux
-        path: wine-${{ env.PROTON_VERSION }}-proton-wow64-*-termux.tar.xz
+        name: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux
+        path: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz
         retention-days: 30
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       if: success()
       with:
-        tag_name: wine-${{ env.PROTON_VERSION }}-proton-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}
+        tag_name: wine-${{ env.PROTON_VERSION }}-proton-wow64
         name: Proton ${{ env.PROTON_VERSION }} (适用于 Termux 的 WOW64)
         body: |
           # Proton ${{ env.PROTON_VERSION }} - 适用于 Termux 的 WOW64
@@ -460,7 +231,6 @@ jobs:
           - **版本**: ${{ env.PROTON_VERSION }}
           - **分支**: ${{ env.PROTON_BRANCH }}
           - **架构**: WOW64 (32/64 位支持)
-          - **构建模式**: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
           - **平台**: Termux (Android)
           - **格式**: tar.xz
           - **目录**: wine-${{ env.PROTON_VERSION }}-proton-wow64
@@ -475,28 +245,22 @@ jobs:
           ✓ 完整的中文本地化支持
           ✓ 游戏优化和兼容性改进
           ✓ Termux 路径兼容性修复
+          
           ## 构建详情
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.PROTON_VERSION }}-proton-wow64-*-termux.tar.xz
+        files: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出构建摘要
       run: |
-        if [ "${{ env.USE_BOOTSTRAP }}" = "true" ]; then
-            BUILD_TYPE="bootstrap"
-        else
-            BUILD_TYPE="direct"
-        fi
-        
         echo "=== Proton 构建摘要 ==="
         echo "Proton 构建成功完成"
         echo "版本: ${{ env.PROTON_VERSION }}"
         echo "分支: ${{ env.PROTON_BRANCH }}"
         echo "架构: WOW64 (i386/x86_64)"
-        echo "构建模式: $BUILD_TYPE"
         echo "平台: Termux"
         echo "包格式: tar.xz"
         echo "安装目录: wine-${{ env.PROTON_VERSION }}-proton-wow64"
@@ -517,6 +281,6 @@ jobs:
         echo "游戏优化"
         echo "Termux 路径兼容性"
         echo ""
-        echo "构建产物: wine-${{ env.PROTON_VERSION }}-proton-wow64-$BUILD_TYPE-termux.tar.xz"
+        echo "构建产物: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz"
         echo "安装路径: $PREFIX/opt/wine-${{ env.PROTON_VERSION }}-proton-wow64/"
         echo "================"
