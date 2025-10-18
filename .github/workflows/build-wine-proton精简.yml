@@ -147,7 +147,6 @@ jobs:
           --with-fontconfig \
           --with-gstreamer \
           --with-gettext \
-          --with-sdl \
           --enable-nls \
           --disable-winemenubuilder \
           --disable-win16 \
