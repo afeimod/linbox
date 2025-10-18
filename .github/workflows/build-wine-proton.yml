@@ -242,14 +242,14 @@ jobs:
         mkdir -p proton-package/opt
         
         # 复制 Proton 文件并重命名
-        cp -r /tmp/proton-install proton-package/opt/wine-${{ env.VERSION_PROTON }}-proton-wow64
+        cp -r /tmp/proton-install proton-package/opt/wine-${{ env.PROTON_BRANCH }}-proton-wow64
         echo "✅ 打包准备完成"
 
     - name: 创建压缩包
       run: |
         # 创建 tar.xz 压缩包
         cd proton-package/opt
-        tar -cJf ../../wine-${{ env.VERSION_PROTON }}-proton-wow64.tar.xz wine-${{ env.VERSION_PROTON }}-proton-wow64/
+        tar -cJf ../../wine-${{ env.PROTON_BRANCH }}-proton-wow64.tar.xz wine-${{ env.PROTON_BRANCH }}-proton-wow64/
         cd ../..
         
         echo "创建的包:"
@@ -258,16 +258,16 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.VERSION_PROTON }}-proton-wow64
-        path: wine-${{ env.VERSION_PROTON }}-proton-wow64.tar.xz
+        name: wine-${{ env.PROTON_BRANCH }}-proton-wow64
+        path: wine-${{ env.PROTON_BRANCH }}-proton-wow64.tar.xz
         retention-days: 30
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       if: success()
       with:
-        tag_name: wine-${{ env.VERSION_PROTON }}-proton-wow64
-        name: Proton ${{ env.VERSION_PROTON }} (适用于 Termux 的 WOW64)
+        tag_name: wine-${{ env.PROTON_BRANCH }}-proton-wow64
+        name: Proton ${{ env.PROTON_BRANCH }} (适用于 Termux 的 WOW64)
         body: |
           # Proton ${{ env.PROTON_VERSION }} - 适用于 Termux 的 WOW64
           
@@ -294,7 +294,7 @@ jobs:
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.VERSION_PROTON }}-proton-wow64.tar.xz
+        files: wine-${{ env.PROTON_BRANCH }}-proton-wow64.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
