@@ -1,5 +1,5 @@
 # build-wine-lite.yml
-name: Build LiteWine (Lite WOW64 for Termux Full GStreamer)
+name: Build TestWine (Lite WOW64 for Termux Full GStreamer)
 
 on:
   workflow_dispatch:
@@ -9,6 +9,15 @@ on:
         required: true
         default: '9.21'
         type: string
+      wine_type:
+        description: 'Wine 版本类型'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - beta
+          - wine-tkg
 
 permissions:
   contents: write  # 允许 GITHUB_TOKEN 创建 Release
@@ -21,9 +30,13 @@ jobs:
     - name: 设置版本变量
       run: |
         echo "WINE_VERSION=${{ github.event.inputs.wine_version }}" >> $GITHUB_ENV
+        echo "WINE_TYPE=${{ github.event.inputs.wine_type }}" >> $GITHUB_ENV
         echo "STAGING_VERSION=v${{ github.event.inputs.wine_version }}"
         echo "构建 Wine 版本: ${{ github.event.inputs.wine_version }}"
-        echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
+        echo "Wine 类型: ${{ github.event.inputs.wine_type }}"
+        if [ "${{ github.event.inputs.wine_type }}" = "staging" ]; then
+          echo "Staging 补丁版本: v${{ github.event.inputs.wine_version }}"
+        fi
 
     - name: 安装构建依赖
       run: |
@@ -102,14 +115,30 @@ jobs:
         echo "当前工作目录: $(pwd)"
         ls -la
         echo "构建版本: ${{ env.WINE_VERSION }}"
-          
-    - name: 克隆 Wine 源码
+        echo "Wine 类型: ${{ env.WINE_TYPE }}"
+
+    - name: 克隆 Wine 源码 (Staging/Beta)
+      if: env.WINE_TYPE == 'staging' || env.WINE_TYPE == 'beta'
       run: |
         git clone https://github.com/wine-mirror/wine.git
         cd wine
         git checkout wine-${{ env.WINE_VERSION }}
-        
-    - name: 下载并应用 staging 补丁
+
+    - name: 克隆 Wine-TKG 源码
+      if: env.WINE_TYPE == 'wine-tkg'
+      run: |
+        git clone https://github.com/Kron4ek/wine-tkg.git
+        cd wine-tkg
+        # 检查对应的版本标签或分支
+        if git checkout ${{ env.WINE_VERSION }} 2>/dev/null || git checkout wine-${{ env.WINE_VERSION }} 2>/dev/null; then
+          echo "成功切换到版本 ${{ env.WINE_VERSION }}"
+        else
+          echo "使用默认分支"
+          git checkout master
+        fi
+
+    - name: 下载并应用 staging 补丁 (仅 Staging 版本)
+      if: env.WINE_TYPE == 'staging'
       run: |
         cd wine
         # 下载 staging 补丁集
@@ -125,7 +154,8 @@ jobs:
     
         echo "✅ Staging 补丁应用完成"
 
-    - name: 验证 staging 补丁应用
+    - name: 验证 staging 补丁应用 (仅 Staging 版本)
+      if: env.WINE_TYPE == 'staging'
       run: |
         cd wine
         echo "检查 staging 补丁应用情况..."
@@ -137,13 +167,22 @@ jobs:
 
     - name: 根据版本选择修复方式
       run: |
-        cd wine
+        # 根据 Wine 类型选择正确的目录
+        if [ "${{ env.WINE_TYPE }}" = "wine-tkg" ]; then
+          cd wine-tkg
+          SOURCE_DIR="wine-tkg"
+        else
+          cd wine
+          SOURCE_DIR="wine"
+        fi
         
         # 解析版本号进行比较
         VERSION_MAJOR=$(echo ${{ env.WINE_VERSION }} | cut -d. -f1)
         VERSION_MINOR=$(echo ${{ env.WINE_VERSION }} | cut -d. -f2)
         
         echo "Wine 版本: ${{ env.WINE_VERSION }}"
+        echo "Wine 类型: ${{ env.WINE_TYPE }}"
+        echo "源码目录: $SOURCE_DIR"
         echo "主版本: $VERSION_MAJOR, 次版本: $VERSION_MINOR"
         
         # 判断版本是否 >= 9.10
@@ -154,11 +193,13 @@ jobs:
             echo "使用 9.10 以下版本的修复方式 (fix_wine9.2_mfplat.sh)"
             echo "PATCH_TYPE=fix_wine9_2_mfplat" >> $GITHUB_ENV
         fi
+        
+        echo "SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
 
     - name: 应用 9.10 以下版本修复
       if: env.PATCH_TYPE == 'fix_wine9_2_mfplat'
       run: |
-        cd wine
+        cd ${{ env.SOURCE_DIR }}
         echo "下载并应用 fix_wine9.2_mfplat.sh..."
         wget -O fix_wine9.2_mfplat.sh https://github.com/afeimod/linbox/raw/main/path/fix_wine9.2_mfplat.sh
         chmod +x fix_wine9.2_mfplat.sh
@@ -168,7 +209,7 @@ jobs:
     - name: 应用 9.10 及以上版本修复
       if: env.PATCH_TYPE == 'wine_do_not_create_dxgi_manager2'
       run: |
-        cd wine
+        cd ${{ env.SOURCE_DIR }}
         echo "下载并应用 wine_do_not_create_dxgi_manager2.patch..."
         wget https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
         
@@ -190,7 +231,7 @@ jobs:
 
     - name: 彻底修复 Termux 路径问题
       run: |
-        cd wine
+        cd ${{ env.SOURCE_DIR }}
         
         echo "彻底修复 Termux 路径问题..."
         
@@ -209,7 +250,7 @@ jobs:
 
     - name: 配置和构建真正的 WOW64 Wine（启用 Vulkan 和完整 GStreamer）
       run: |
-        cd wine
+        cd ${{ env.SOURCE_DIR }}
         mkdir -p /tmp/wine-install
         sudo chmod 777 -R /tmp/wine-install
 
@@ -265,14 +306,14 @@ jobs:
 
     - name: 安装 Wine 并获取版本信息
       run: |
-        cd wine/build-wow64
+        cd ${{ env.SOURCE_DIR }}/build-wow64
         # 安装 WOW64 Wine
         make install
 
         # 使用输入版本号
         VERSION="${{ env.WINE_VERSION }}"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "Wine 版本: $VERSION - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
+        echo "Wine 版本: $VERSION - 类型: ${{ env.WINE_TYPE }} - 支持 Vulkan 和完整 GStreamer 的 WOW64 构建"
 
     - name: 验证 Vulkan 和 GStreamer 支持
       run: |
@@ -296,7 +337,7 @@ jobs:
     - name: 准备打包
       run: |
         # 创建打包目录，使用新的目录结构
-        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-linbox-wow64"
+        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64"
         mkdir -p wine-package/$PACKAGE_NAME
         
         # 复制 Wine 安装文件到新的目录
@@ -305,7 +346,7 @@ jobs:
 
     - name: 创建打包文件
       run: |
-        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-linbox-wow64"
+        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64"
         
         echo "最终文件结构:"
         find wine-package -type f | sort
@@ -325,19 +366,20 @@ jobs:
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.WINE_VERSION }}-linbox-wow64
-        path: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz
+        name: wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64
+        path: wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64.tar.xz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ env.WINE_VERSION }}-linbox-wow64
-        name: Wine ${{ env.WINE_VERSION }} (Linbox WOW64 with Vulkan & GStreamer for Termux)
+        tag_name: ${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64
+        name: Wine ${{ env.WINE_VERSION }} ${{ env.WINE_TYPE }} (Linbox WOW64 with Vulkan & GStreamer for Termux)
         body: |
-          # Wine ${{ env.WINE_VERSION }} - Linbox WOW64 with Vulkan & GStreamer for Termux
+          # Wine ${{ env.WINE_VERSION }} ${{ env.WINE_TYPE }} - Linbox WOW64 with Vulkan & GStreamer for Termux
           
           ## 版本信息
           - **Wine 版本**: ${{ env.WINE_VERSION }}
+          - **Wine 类型**: ${{ env.WINE_TYPE }}
           - **架构**: True WOW64 (同时支持 32 位和 64 位 Windows 应用程序)
           - **平台**: Termux (Android)
           - **图形 API**: Vulkan 支持已启用
@@ -352,13 +394,13 @@ jobs:
           ✓ 应用了关键补丁提升兼容性
 
           ## 安装说明
-          解压后，将 `wine-${{ env.WINE_VERSION }}-linbox-wow64` 文件夹放置在 Termux 的合适位置，并设置环境变量。
+          解压后，将 `wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64` 文件夹放置在 Termux 的合适位置，并设置环境变量。
 
           ## 构建信息
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz
+        files: wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -366,7 +408,8 @@ jobs:
       run: |
         echo "✅ Linbox WOW64 Wine with Vulkan and Full GStreamer 构建完成"
         echo "版本号: ${{ env.WINE_VERSION }}"
-        echo "包名称: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz"
+        echo "Wine 类型: ${{ env.WINE_TYPE }}"
+        echo "包名称: wine-${{ env.WINE_VERSION }}-${{ env.WINE_TYPE }}-linbox-wow64.tar.xz"
         echo "架构: x86_64 True WOW64"
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
