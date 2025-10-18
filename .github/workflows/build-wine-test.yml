@@ -1,5 +1,5 @@
-# build-wine-ttt.yml
-name: Build TestWine (Lite WOW64 for Termux with Vulkan and Full GStreamer)
+# build-wine-lite.yml
+name: Build LiteWine (Lite WOW64 for Termux Full GStreamer)
 
 on:
   workflow_dispatch:
@@ -295,15 +295,18 @@ jobs:
 
     - name: 准备打包
       run: |
-        # 创建打包目录
-        mkdir -p wine-package/opt/wine
+        # 创建打包目录，使用新的目录结构
+        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-linbox-wow64"
+        mkdir -p wine-package/$PACKAGE_NAME
         
-        # 复制 Wine 安装文件
-        echo "复制 Wine 文件..."
-        cp -r /tmp/wine-install/* wine-package/opt/wine/
+        # 复制 Wine 安装文件到新的目录
+        echo "复制 Wine 文件到 $PACKAGE_NAME..."
+        cp -r /tmp/wine-install/* wine-package/$PACKAGE_NAME/
 
     - name: 创建打包文件
       run: |
+        PACKAGE_NAME="wine-${{ env.WINE_VERSION }}-linbox-wow64"
+        
         echo "最终文件结构:"
         find wine-package -type f | sort
         echo ""
@@ -313,25 +316,25 @@ jobs:
         echo "检查 GStreamer 相关文件:"
         find wine-package -name "*gst*" | sort
         
-        # 打包
-        tar -czf wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz wine-package/
+        # 使用 tar.xz 格式打包
+        tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
         
         echo "打包完成:"
-        ls -lh wine-*.tar.gz
+        ls -lh *.tar.xz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux
-        path: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+        name: wine-${{ env.WINE_VERSION }}-linbox-wow64
+        path: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz
 
     - name: 发布到 GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ env.WINE_VERSION }}-true-wow64-gstreamer
-        name: Wine ${{ env.WINE_VERSION }} (True WOW64 with Vulkan & GStreamer for Termux)
+        tag_name: ${{ env.WINE_VERSION }}-linbox-wow64
+        name: Wine ${{ env.WINE_VERSION }} (Linbox WOW64 with Vulkan & GStreamer for Termux)
         body: |
-          # Wine ${{ env.WINE_VERSION }} - True WOW64 with Vulkan & GStreamer for Termux
+          # Wine ${{ env.WINE_VERSION }} - Linbox WOW64 with Vulkan & GStreamer for Termux
           
           ## 版本信息
           - **Wine 版本**: ${{ env.WINE_VERSION }}
@@ -348,18 +351,22 @@ jobs:
           ✓ 中文环境支持
           ✓ 应用了关键补丁提升兼容性
 
+          ## 安装说明
+          解压后，将 `wine-${{ env.WINE_VERSION }}-linbox-wow64` 文件夹放置在 Termux 的合适位置，并设置环境变量。
+
           ## 构建信息
           - 构建时间: ${{ github.event.head_commit.timestamp }}
           - 提交: ${{ github.sha }}
           - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.WINE_VERSION }}-true-wow64-bin-gstreamer-termux.tar.gz
+        files: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出版本信息
       run: |
-        echo "✅ True WOW64 Wine with Vulkan and Full GStreamer 构建完成"
+        echo "✅ Linbox WOW64 Wine with Vulkan and Full GStreamer 构建完成"
         echo "版本号: ${{ env.WINE_VERSION }}"
+        echo "包名称: wine-${{ env.WINE_VERSION }}-linbox-wow64.tar.xz"
         echo "架构: x86_64 True WOW64"
         echo "环境: Termux"
         echo "图形 API: Vulkan 支持已启用"
