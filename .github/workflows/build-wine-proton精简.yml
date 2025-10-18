@@ -184,48 +184,67 @@ jobs:
         COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
         PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
         echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
+
+    - name: 准备打包（按照 test.yml 逻辑）
+      run: |
+        # 创建打包目录，使用新的目录结构
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        mkdir -p wine-package/$PACKAGE_NAME
         
-        # 打包 - 确保在正确的工作目录
-        cd $GITHUB_WORKSPACE
-        mkdir -p build-output
-        tar -czf build-output/wine-proton-wow64-$PROTON_VERSION.tar.gz -C /tmp/wine-install-proton .
-        
-        echo "Proton WOW64 构建完成: wine-proton-wow64-$PROTON_VERSION.tar.gz"
+        # 复制 Wine 安装文件到新的目录
+        echo "复制 Wine 文件到 $PACKAGE_NAME..."
+        cp -r /tmp/wine-install-proton/* wine-package/$PACKAGE_NAME/
 
     - name: 检查构建输出中的本地化文件
       run: |
         echo "检查构建的本地化文件..."
-        cd build-output
-        tar -tzf wine-proton-wow64-$PROTON_VERSION.tar.gz | grep -i "zh\|chinese\|locale" | head -20 || echo "未找到相关本地化文件"
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        find wine-package -name "*zh_CN*" -o -name "*chinese*" | head -20 || echo "未找到相关本地化文件"
+
+    - name: 验证 Vulkan 和 GStreamer 支持
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        echo "检查 Vulkan 支持..."
+        find wine-package -name "*vulkan*" | head -10
+        echo ""
+        echo "检查 GStreamer 支持..."
+        find wine-package -name "*gst*" | head -10
+
+    - name: 创建打包文件
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        
+        echo "最终文件结构:"
+        find wine-package -type f | sort | head -20
+        echo ""
+        echo "检查 Vulkan 相关文件:"
+        find wine-package -name "*vulkan*" | sort
+        echo ""
+        echo "检查 GStreamer 相关文件:"
+        find wine-package -name "*gst*" | sort
+        
+        # 使用 tar.xz 格式打包
+        tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
+        
+        echo "打包完成:"
+        ls -lh *.tar.xz
 
     - name: 为 Termux 准备安装包
       run: |
-        # 切换到构建输出目录
-        cd build-output
-        
-        # 使用 Proton WOW64 作为 Termux 包的基础
-        PROTON_FILE=$(ls wine-proton-wow64-*.tar.gz | head -1)
-        if [ -z "$PROTON_FILE" ]; then
-          echo "错误: 找不到 Proton 构建文件!"
-          ls -la
-          exit 1
-        fi
-        
-        echo "使用构建文件: $PROTON_FILE"
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
         
         # 解压构建文件到临时目录
-        mkdir -p /tmp/wine-termux
-        tar -xzf "$PROTON_FILE" -C /tmp/wine-termux
+        tar -xJf "$PACKAGE_NAME.tar.xz" -C /tmp/
         
         # 创建 Termux 包结构
-        mkdir -p wine-package/opt/wine
-        mkdir -p wine-package/bin
+        mkdir -p termux-package/opt/wine
+        mkdir -p termux-package/bin
         
         # 复制 Wine 文件
-        cp -r /tmp/wine-termux/* wine-package/opt/wine/
+        cp -r /tmp/$PACKAGE_NAME/* termux-package/opt/wine/
         
         # 创建包装脚本 - 增强中文支持
-        cat > wine-package/bin/wine << 'EOF'
+        cat > termux-package/bin/wine << 'EOF'
         #!/bin/bash
         # Wine Proton for Termux 启动脚本 - 增强中文支持
         
@@ -274,11 +293,11 @@ jobs:
         exec "$TERMUX_PREFIX/opt/wine/bin/wine" "$@"
         EOF
         
-        chmod +x wine-package/bin/wine
+        chmod +x termux-package/bin/wine
         
         # 创建其他包装脚本
         for bin in wineserver winecfg; do
-          cat > wine-package/bin/$bin << EOF
+          cat > termux-package/bin/$bin << EOF
         #!/bin/bash
         export TERMUX_PREFIX="/data/data/com.termux/files/usr"
         export TMPDIR="\$TERMUX_PREFIX/tmp"
@@ -290,16 +309,13 @@ jobs:
         export WINELANG="zh_CN"
         exec "\$TERMUX_PREFIX/opt/wine/bin/$bin" "\$@"
         EOF
-          chmod +x wine-package/bin/$bin
+          chmod +x termux-package/bin/$bin
         done
 
     - name: 创建安装脚本和配置
       run: |
-        # 切换到构建输出目录
-        cd build-output
-        
         # 创建安装脚本
-        cat > wine-package/install.sh << 'EOF'
+        cat > termux-package/install.sh << 'EOF'
         #!/bin/bash
         set -e
         
@@ -417,24 +433,17 @@ jobs:
         echo "=========================================="
         EOF
         
-        chmod +x wine-package/install.sh
+        chmod +x termux-package/install.sh
 
-    - name: 创建打包文件
+    - name: 创建 Termux 打包文件
       run: |
-        # 切换到构建输出目录
-        cd build-output
-        
-        # 获取版本信息
-        PROTON_FILE=$(ls wine-proton-wow64-*.tar.gz | head -1)
-        PROTON_VERSION=$(echo "$PROTON_FILE" | sed 's/wine-proton-wow64-//' | sed 's/.tar.gz//')
-        
-        echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
         
         # 打包 Termux 版本
-        tar -czf wine-proton-wow64-termux-$PROTON_VERSION.tar.gz wine-package/
+        tar -czf ${PACKAGE_NAME}-termux.tar.gz termux-package/
         
         echo "打包完成:"
-        ls -lh *.tar.gz
+        ls -lh *.tar.*
 
     - name: 设置 Release 标签
       run: |
@@ -447,7 +456,7 @@ jobs:
       with:
         name: wine-proton-wow64-builds
         path: |
-          build-output/wine-*.tar.gz
+          wine-*.tar.*
         retention-days: 7
 
     - name: 发布到 GitHub Release
@@ -456,7 +465,7 @@ jobs:
         tag_name: ${{ env.RELEASE_TAG }}
         name: Wine Proton WOW64 Build ${{ env.RELEASE_TAG }}
         files: |
-          build-output/wine-*.tar.gz
+          wine-*.tar.*
         draft: false
         prerelease: false
       env:
@@ -464,12 +473,15 @@ jobs:
 
     - name: 输出版本信息和使用说明
       run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        
         echo "✅ Wine Proton WOW64 构建完成"
         echo ""
         echo "构建的版本:"
-        echo "- Proton WOW64: $PROTON_VERSION"
-        echo "- Termux 安装包: wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
-        echo "- Release 标签: $RELEASE_TAG"
+        echo "- Proton WOW64: ${{ env.PROTON_VERSION }}"
+        echo "- 主包: ${PACKAGE_NAME}.tar.xz"
+        echo "- Termux 安装包: ${PACKAGE_NAME}-termux.tar.gz"
+        echo "- Release 标签: ${{ env.RELEASE_TAG }}"
         echo ""
         echo "启用的功能:"
         echo "✓ GStreamer 多媒体支持"
@@ -486,13 +498,13 @@ jobs:
         echo "✓ 设置 WINELANG 环境变量"
         echo ""
         echo "文件说明:"
-        echo "wine-proton-wow64-*.tar.gz - Proton WOW64 原始构建文件"
-        echo "wine-proton-wow64-termux-*.tar.gz - Termux 专用安装包"
+        echo "${PACKAGE_NAME}.tar.xz - Proton WOW64 原始构建文件"
+        echo "${PACKAGE_NAME}-termux.tar.gz - Termux 专用安装包"
         echo ""
         echo "使用说明:"
-        echo "1. 下载 wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
-        echo "2. 解压: tar -xzf wine-proton-wow64-termux-$PROTON_VERSION.tar.gz"
-        echo "3. 进入目录: cd wine-package"
+        echo "1. 下载 ${PACKAGE_NAME}-termux.tar.gz"
+        echo "2. 解压: tar -xzf ${PACKAGE_NAME}-termux.tar.gz"
+        echo "3. 进入目录: cd termux-package"
         echo "4. 运行安装: ./install.sh"
         echo "5. 重新加载环境: source ~/.bashrc"
         echo "6. 初始化: wine wineboot"
