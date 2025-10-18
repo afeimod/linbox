@@ -445,32 +445,10 @@ jobs:
     - name: 准备打包
       run: |
         # 创建打包目录结构
-        mkdir -p wine-package/opt/wine
-        mkdir -p wine-package/usr/local/bin
+        mkdir -p wine-package/opt
         
-        # 复制 Wine 文件
-        cp -r /tmp/wine-install/* wine-package/opt/wine/
-        
-        # 创建启动脚本
-        cat > wine-package/usr/local/bin/wine << 'EOF'
-            #!/bin/bash
-            export WINEPREFIX=${WINEPREFIX:-$HOME/.wine}
-            export WINEARCH=${WINEARCH:-win64}
-            /opt/wine/bin/wine "$@"
-        EOF
-        chmod +x wine-package/usr/local/bin/wine
-        
-        # 创建版本信息文件
-        BUILD_TYPE=${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
-        cat > wine-package/version-info.txt << EOF
-            Wine Version: ${{ env.WINE_VERSION }}
-            Build Date: $(date)
-            Build Type: $BUILD_TYPE
-            Architecture: True WOW64 (i386/x86_64)
-            Platform: Termux
-            Features: X11, Vulkan, ALSA, PulseAudio, FreeType, FontConfig, GStreamer
-            Build Mode: Experimental WOW64
-        EOF
+        # 复制 Wine 文件并重命名
+        cp -r /tmp/wine-install wine-package/opt/wine-${{ env.WINE_VERSION }}-linbox-wow64
 
     - name: 创建压缩包
       run: |
@@ -481,17 +459,19 @@ jobs:
             BUILD_TYPE="direct"
         fi
         
-        # 创建压缩包
-        tar -czf wine-${{ env.WINE_VERSION }}-wow64-$BUILD_TYPE-termux.tar.gz wine-package/
+        # 创建 tar.xz 压缩包
+        cd wine-package/opt
+        tar -cJf ../../wine-${{ env.WINE_VERSION }}-linbox-wow64-$BUILD_TYPE-termux.tar.xz wine-${{ env.WINE_VERSION }}-linbox-wow64/
+        cd ../..
         
-        echo "打包完成:"
-        ls -lh wine-*.tar.gz
+        echo "Package created:"
+        ls -lh wine-*.tar.xz
 
     - name: 上传构建产物
       uses: actions/upload-artifact@v4
       with:
-        name: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux
-        path: wine-${{ env.WINE_VERSION }}-wow64-*-termux.tar.gz
+        name: wine-${{ env.WINE_VERSION }}-linbox-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux
+        path: wine-${{ env.WINE_VERSION }}-linbox-wow64-*-termux.tar.xz
         retention-days: 30
 
     - name: 发布到 GitHub Release
@@ -503,56 +483,83 @@ jobs:
         body: |
           # Wine ${{ env.WINE_VERSION }} - True WOW64 for Termux
           
-          ## 构建信息
-          - **版本**: ${{ env.WINE_VERSION }}
-          - **架构**: True WOW64 (同时支持 32/64 位)
-          - **构建模式**: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
-          - **平台**: Termux (Android)
-          - **特性**: X11, Vulkan, ALSA, PulseAudio, FreeType, FontConfig, GStreamer
-          - **构建方式**: 实验性 WOW64 模式
+          ## Build Information
+          - **Version**: ${{ env.WINE_VERSION }}
+          - **Architecture**: True WOW64 (32/64 bit support)
+          - **Build Mode**: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}
+          - **Platform**: Termux (Android)
+          - **Format**: tar.xz
+          - **Directory**: wine-${{ env.WINE_VERSION }}-linbox-wow64
           
-          ## 主要改进
-          ✓ 真正的 WOW64 架构支持 (i386/x86_64)
-          ✓ 实验性 WOW64 构建模式
-          ✓ Vulkan 图形 API 支持
-          ✓ GStreamer 多媒体支持  
-          ✓ Termux 路径兼容性修复
-          ✓ MF 兼容性补丁
+          ## Features
+          ✓ True WOW64 architecture support (i386/x86_64)
+          ✓ Experimental WOW64 build mode
+          ✓ Vulkan graphics API support
+          ✓ GStreamer multimedia support  
+          ✓ Termux path compatibility fixes
+          ✓ MF compatibility patches
           
-          ## 使用说明
-          1. 解压到 Termux 环境
-          2. 添加 `/opt/wine/bin` 到 PATH
-          3. 运行 `wine --version` 测试
+          ## Installation
           
-          ## 构建详情
-          - 构建时间: ${{ github.event.head_commit.timestamp }}
-          - 提交: ${{ github.sha }}
-          - 工作流: ${{ github.workflow }}
-        files: wine-${{ env.WINE_VERSION }}-wow64-*-termux.tar.gz
+          1. **Extract to Termux**:
+             ```bash
+             tar -xf wine-${{ env.WINE_VERSION }}-linbox-wow64-*.tar.xz -C $PREFIX
+             ```
+          
+          2. **Add to PATH**:
+             ```bash
+             echo 'export PATH=$PATH:$PREFIX/opt/wine-${{ env.WINE_VERSION }}-linbox-wow64/bin' >> ~/.bashrc
+             source ~/.bashrc
+             ```
+          
+          3. **Test installation**:
+             ```bash
+             wine --version
+             ```
+          
+          ## Usage Tips
+          - First run will initialize configuration
+          - X11 server required for GUI applications
+          - Recommended to use in proot-distro environment
+          
+          ## Build Details
+          - Build time: ${{ github.event.head_commit.timestamp }}
+          - Commit: ${{ github.sha }}
+          - Workflow: ${{ github.workflow }}
+        files: wine-${{ env.WINE_VERSION }}-linbox-wow64-*-termux.tar.xz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 输出构建摘要
       run: |
-        echo "=== 构建摘要 ==="
-        echo "✅ Wine 构建完成"
-        echo "版本: ${{ env.WINE_VERSION }}"
-        echo "架构: True WOW64 (i386/x86_64)"
-        echo "构建模式: ${{ env.USE_BOOTSTRAP && 'Bootstrap' || 'Direct' }}"
-        echo "构建方式: 实验性 WOW64 模式"
-        echo "平台: Termux"
+        if [ "${{ env.USE_BOOTSTRAP }}" = "true" ]; then
+            BUILD_TYPE="bootstrap"
+        else
+            BUILD_TYPE="direct"
+        fi
+        
+        echo "=== Build Summary ==="
+        echo "Wine build completed successfully"
+        echo "Version: ${{ env.WINE_VERSION }}"
+        echo "Architecture: True WOW64 (i386/x86_64)"
+        echo "Build Mode: $BUILD_TYPE"
+        echo "Build Method: Experimental WOW64 mode"
+        echo "Platform: Termux"
+        echo "Package Format: tar.xz"
+        echo "Install Directory: wine-${{ env.WINE_VERSION }}-linbox-wow64"
         echo ""
-        echo "包含特性:"
-        echo "✓ X11 图形支持"
-        echo "✓ Vulkan 图形 API"
-        echo "✓ ALSA 音频支持"
-        echo "✓ PulseAudio 音频支持"
-        echo "✓ FreeType 字体渲染"
-        echo "✓ FontConfig 字体配置"
-        echo "✓ GStreamer 多媒体"
-        echo "✓ Termux 路径兼容性"
-        echo "✓ MF 兼容性修复"
-        echo "✓ 实验性 WOW64 架构"
+        echo "Features Included:"
+        echo "X11 graphics support"
+        echo "Vulkan graphics API"
+        echo "ALSA audio support"
+        echo "PulseAudio audio support"
+        echo "FreeType font rendering"
+        echo "FontConfig font configuration"
+        echo "GStreamer multimedia"
+        echo "Termux path compatibility"
+        echo "MF compatibility fixes"
+        echo "Experimental WOW64 architecture"
         echo ""
-        echo "构建产物: wine-${{ env.WINE_VERSION }}-wow64-${{ env.USE_BOOTSTRAP && 'bootstrap' || 'direct' }}-termux.tar.gz"
+        echo "Build Artifact: wine-${{ env.WINE_VERSION }}-linbox-wow64-$BUILD_TYPE-termux.tar.xz"
+        echo "Install Path: $PREFIX/opt/wine-${{ env.WINE_VERSION }}-linbox-wow64/"
         echo "================"
