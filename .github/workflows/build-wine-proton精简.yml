@@ -1,0 +1,325 @@
+# build-wine-proton.yml
+name: Build Protonlite WOW64
+
+on:
+  workflow_dispatch:
+    inputs:
+      proton_branch:
+        description: 'Proton 分支 (例如: proton_10.0, proton_9.0, proton_8.0)'
+        required: true
+        default: 'proton_10.0'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      PROTON_BRANCH: ${{ github.event.inputs.proton_branch }}
+
+    steps:
+    - name: 检查输入参数
+      run: |
+        echo "Proton 分支: ${{ env.PROTON_BRANCH }}"
+
+    - name: 安装基础依赖
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git wget xz-utils \
+          autoconf flex bison \
+          make cmake ninja-build \
+          gcc g++ gcc-multilib g++-multilib \
+          mingw-w64 \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libmpg123-dev \
+          libopenal-dev \
+          gettext libgettextpo-dev \
+          locales language-pack-zh-hans \
+          ccache
+
+    - name: 设置中文环境
+      run: |
+        sudo locale-gen zh_CN.UTF-8
+        sudo update-locale LANG=zh_CN.UTF-8
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+
+    - name: 克隆 Proton 源码
+      run: |
+        git clone https://github.com/ValveSoftware/wine.git
+        cd wine
+        git checkout ${{ env.PROTON_BRANCH }}
+        echo "Proton 源码分支: ${{ env.PROTON_BRANCH }}"
+
+    - name: 生成配置脚本
+      run: |
+        cd wine
+        echo "检查源码结构..."
+        ls -la
+        echo "运行 autogen.sh 生成配置脚本..."
+        ./autogen.sh
+        echo "✅ 配置脚本生成完成"
+
+    - name: 修复 Termux 路径问题
+      run: |
+        cd wine
+        echo "彻底修复 Termux 路径问题..."
+        
+        # 修改所有硬编码的 /tmp 路径
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        
+        # 修改 server 目录中的特定路径
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        # 修改其他关键文件
+        find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "loader.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        find . -name "server.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        echo "路径修复完成"
+
+    - name: 安装构建依赖
+      run: |
+        cd wine
+        
+        # 安装宿主系统的必要依赖
+        echo "安装宿主系统的必要依赖..."
+        sudo apt update
+        sudo apt install -y \
+          libx11-dev libxext-dev libxi-dev \
+          libxrandr-dev libxcursor-dev \
+          libxrender-dev libxinerama-dev \
+          x11proto-core-dev x11proto-xext-dev \
+          libvulkan-dev mesa-vulkan-drivers \
+          libasound2-dev libpulse-dev \
+          libfreetype6-dev libfontconfig1-dev \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+          gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+          libjpeg-dev libpng-dev libtiff-dev \
+          libxml2-dev libssl-dev \
+          libudev-dev \
+          libgnutls28-dev \
+          libcups2-dev \
+          libdbus-1-dev \
+          libsane-dev \
+          libv4l-dev \
+          libgsm1-dev \
+          libmpg123-dev \
+          libopenal-dev \
+          liblcms2-dev \
+          libldap2-dev
+
+    - name: 配置 Proton 构建（WOW64）
+      run: |
+        cd wine
+        
+        mkdir -p build-wow64
+        cd build-wow64
+        
+        # 设置环境变量
+        export CROSSCC="x86_64-w64-mingw32-gcc"
+        export CROSSCXX="x86_64-w64-mingw32-g++"
+        export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+        export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse -O3 -ftree-vectorize -pipe"
+
+
+        
+        echo "开始配置 Proton WOW64 构建..."
+        echo "CFLAGS: $CFLAGS"
+        echo "CROSSCFLAGS: $CROSSCFLAGS"
+        
+        # 运行配置
+        ../configure \
+          --enable-win64 \
+          --enable-archs=i386,x86_64 \
+          --prefix=/tmp/proton-install \
+          --with-x \
+          --with-vulkan \
+          --with-alsa \
+          --with-pulse \
+          --with-freetype \
+          --with-fontconfig \
+          --with-gstreamer \
+          --with-gettext \
+          --with-sdl \
+          --enable-nls \
+          --disable-winemenubuilder \
+          --disable-win16 \
+          --disable-tests \
+          --without-ldap \
+          --without-capi \
+          --without-oss \
+          --without-cups \
+          --without-dbus \
+          --without-coreaudio \
+          --without-gphoto \
+          --without-osmesa \
+          --without-sane \
+          --without-pcap \
+          --without-pcsclite \
+          --without-udev \
+          --without-unwind \
+          --without-usb \
+          --without-v4l2 \
+          --without-wayland
+        
+        echo "✅ Proton WOW64 配置完成"
+        # 在配置步骤后添加，针对 GStreamer 模块禁用优化
+        echo "应用 GStreamer 优化禁用补丁..."
+        find wine -name "Makefile" -exec grep -l "gst" {} \; | xargs -I {} sed -i 's/^\(.*gst.*\.o:.*\)$/\1\n\t$(CC) -O0 $(CFLAGS) -c -o $@ $</' {} 2>/dev/null || true
+        # 验证 Makefile
+        if [ -f 'Makefile' ]; then
+          echo '✅ Makefile 已生成'
+          echo "配置摘要:"
+          grep -E "(ENABLED|DISABLED|WITH|WITHOUT)" config.log | tail -20
+        else
+          echo '❌ Makefile 未生成，配置失败'
+          echo "配置日志最后部分:"
+          tail -50 config.log
+          exit 1
+        fi
+
+    - name: 编译 Proton（WOW64）
+      run: |
+        cd wine/build-wow64
+        echo "开始编译 Proton WOW64..."
+        echo "使用 $(nproc) 个核心进行编译"
+        make -j$(nproc)
+        echo "✅ Proton WOW64 编译完成"
+
+    - name: 安装 Proton（WOW64）
+      run: |
+        cd wine/build-wow64
+        make install
+        echo "✅ Proton WOW64 安装完成"
+
+    - name: 验证构建结果
+      run: |
+        echo "验证构建结果..."
+        
+        if [ -f "/tmp/proton-install/bin/wine" ]; then
+            echo "✅ Proton Wine 二进制文件存在"
+            /tmp/proton-install/bin/wine --version || true
+        else
+            echo "❌ 错误: Proton Wine 二进制文件不存在"
+            echo "安装目录内容:"
+            ls -la /tmp/proton-install/ || true
+            ls -la /tmp/proton-install/bin/ || true
+            exit 1
+        fi
+        
+        # 检查关键组件
+        echo "安装目录结构:"
+        ls -la /tmp/proton-install/
+        echo "bin 目录:"
+        ls -la /tmp/proton-install/bin/
+        echo "lib 目录:"
+        ls -la /tmp/proton-install/lib/ | head -10
+
+    - name: 获取版本信息
+      run: |
+        cd wine
+        VERSION_PROTON=$(git describe --tags --abbrev=0 2>/dev/null || echo "${{ env.PROTON_BRANCH }}")
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
+        echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
+        echo "Proton 版本: $PROTON_VERSION"
+
+    - name: 准备打包
+      run: |
+        # 创建打包目录结构
+        mkdir -p proton-package/opt
+        
+        # 复制 Proton 文件并重命名
+        cp -r /tmp/proton-install proton-package/opt/wine-${{ env.PROTON_BRANCH }}-wow64
+        echo "✅ 打包准备完成"
+
+    - name: 创建压缩包
+      run: |
+        # 创建 tar.xz 压缩包
+        cd proton-package/opt
+        tar -cJf ../../wine-${{ env.PROTON_BRANCH }}-wow64.tar.xz wine-${{ env.PROTON_BRANCH }}-wow64/
+        cd ../..
+        
+        echo "创建的包:"
+        ls -lh wine-*.tar.xz
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: wine-${{ env.PROTON_BRANCH }}-wow64
+        path: wine-${{ env.PROTON_BRANCH }}-wow64.tar.xz
+        retention-days: 30
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      if: success()
+      with:
+        tag_name: wine-${{ env.PROTON_BRANCH }}-wow64
+        name: Proton ${{ env.PROTON_BRANCH }} (适用于 Termux 的 WOW64)
+        body: |
+          # Proton ${{ env.PROTON_VERSION }} - 适用于 Termux 的 WOW64
+          
+          ## 构建信息
+          - **版本**: ${{ env.PROTON_VERSION }}
+          - **分支**: ${{ env.PROTON_BRANCH }}
+          - **架构**: WOW64 (32/64 位支持)
+          - **平台**: Termux (Android)
+          - **格式**: tar.xz
+          - **目录**: wine-${{ env.VERSION_PROTON }}-wow64
+          
+          ## 功能特性
+          ✓ WOW64 架构支持 (i386/x86_64)
+          ✓ 基于 Valve Proton ${{ env.PROTON_BRANCH }}
+          ✓ Vulkan 图形 API 支持
+          ✓ GStreamer 多媒体支持
+          ✓ MPG123 音频支持
+          ✓ OpenAL 3D 音频支持
+          ✓ 完整的中文本地化支持
+          ✓ 游戏优化和兼容性改进
+          ✓ Termux 路径兼容性修复
+          
+          ## 构建详情
+          - 构建时间: ${{ github.event.head_commit.timestamp }}
+          - 提交: ${{ github.sha }}
+          - 工作流: ${{ github.workflow }}
+        files: wine-${{ env.PROTON_BRANCH }}-wow64.tar.xz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出构建摘要
+      run: |
+        echo "=== Proton 构建摘要 ==="
+        echo "Proton 构建成功完成"
+        echo "版本: ${{ env.PROTON_VERSION }}"
+        echo "分支: ${{ env.PROTON_BRANCH }}"
+        echo "架构: WOW64 (i386/x86_64)"
+        echo "平台: Termux"
+        echo "包格式: tar.xz"
+        echo "安装目录: wine-${{ env.PROTON_VERSION }}-proton-wow64"
+        echo ""
+        echo "包含的功能:"
+        echo "基于 Valve Proton ${{ env.PROTON_BRANCH }}"
+        echo "WOW64 架构支持"
+        echo "X11 图形支持"
+        echo "Vulkan 图形 API"
+        echo "ALSA 音频支持"
+        echo "PulseAudio 音频支持"
+        echo "FreeType 字体渲染"
+        echo "FontConfig 字体配置"
+        echo "GStreamer 多媒体"
+        echo "MPG123 音频支持"
+        echo "OpenAL 3D 音频支持"
+        echo "完整的中文本地化"
+        echo "游戏优化"
+        echo "Termux 路径兼容性"
+        echo ""
+        echo "构建产物: wine-${{ env.PROTON_VERSION }}-proton-wow64-termux.tar.xz"
+        echo "安装路径: $PREFIX/opt/wine-${{ env.PROTON_VERSION }}-proton-wow64/"
+        echo "================"
