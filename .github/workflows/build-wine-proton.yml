@@ -61,6 +61,15 @@ jobs:
         git checkout ${{ env.PROTON_BRANCH }}
         echo "Proton 源码分支: ${{ env.PROTON_BRANCH }}"
 
+    - name: 生成配置脚本
+      run: |
+        cd wine
+        echo "检查源码结构..."
+        ls -la
+        echo "运行 autogen.sh 生成配置脚本..."
+        ./autogen.sh
+        echo "✅ 配置脚本生成完成"
+
     - name: 修复 Termux 路径问题
       run: |
         cd wine
@@ -76,7 +85,7 @@ jobs:
         
         echo "路径修复完成"
 
-    - name: 配置 Proton 构建（WOW64）
+    - name: 安装构建依赖
       run: |
         cd wine
         
@@ -95,7 +104,21 @@ jobs:
           gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
           libjpeg-dev libpng-dev libtiff-dev \
           libxml2-dev libssl-dev \
-          libudev-dev
+          libudev-dev \
+          libgnutls28-dev \
+          libcups2-dev \
+          libdbus-1-dev \
+          libsane-dev \
+          libv4l-dev \
+          libgsm1-dev \
+          libmpg123-dev \
+          libopenal-dev \
+          liblcms2-dev \
+          libldap2-dev
+
+    - name: 配置 Proton 构建（WOW64）
+      run: |
+        cd wine
         
         mkdir -p build-wow64
         cd build-wow64
@@ -107,7 +130,14 @@ jobs:
         export CXXFLAGS="${{ env.CFLAGS_X64 }}"
         export CROSSCFLAGS="${{ env.CROSSCFLAGS_X64 }}"
         export CROSSCXXFLAGS="${{ env.CROSSCFLAGS_X64 }}"
+        export LDFLAGS="${{ env.LDFLAGS }}"
+        export CROSSLDFLAGS="${{ env.CROSSLDFLAGS }}"
         
+        echo "开始配置 Proton WOW64 构建..."
+        echo "CFLAGS: $CFLAGS"
+        echo "CROSSCFLAGS: $CROSSCFLAGS"
+        
+        # 运行配置
         ../configure \
           --enable-win64 \
           --enable-archs=i386,x86_64 \
@@ -119,6 +149,8 @@ jobs:
           --with-freetype \
           --with-fontconfig \
           --with-gstreamer \
+          --with-mpg123 \
+          --with-openal \
           --with-gettext \
           --enable-nls \
           --disable-winemenubuilder \
@@ -146,8 +178,12 @@ jobs:
         # 验证 Makefile
         if [ -f 'Makefile' ]; then
           echo '✅ Makefile 已生成'
+          echo "配置摘要:"
+          grep -E "(ENABLED|DISABLED|WITH|WITHOUT)" config.log | tail -20
         else
           echo '❌ Makefile 未生成，配置失败'
+          echo "配置日志最后部分:"
+          tail -50 config.log
           exit 1
         fi
 
@@ -155,6 +191,7 @@ jobs:
       run: |
         cd wine/build-wow64
         echo "开始编译 Proton WOW64..."
+        echo "使用 $(nproc) 个核心进行编译"
         make -j$(nproc)
         echo "✅ Proton WOW64 编译完成"
 
@@ -173,6 +210,9 @@ jobs:
             /tmp/proton-install/bin/wine --version || true
         else
             echo "❌ 错误: Proton Wine 二进制文件不存在"
+            echo "安装目录内容:"
+            ls -la /tmp/proton-install/ || true
+            ls -la /tmp/proton-install/bin/ || true
             exit 1
         fi
         
@@ -200,6 +240,7 @@ jobs:
         
         # 复制 Proton 文件并重命名
         cp -r /tmp/proton-install proton-package/opt/wine-${{ env.PROTON_VERSION }}-proton-wow64
+        echo "✅ 打包准备完成"
 
     - name: 创建压缩包
       run: |
