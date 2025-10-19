@@ -424,6 +424,8 @@ jobs:
             --prefix=/tmp/wine-install-proton \
             --with-alsa \
             --with-pulse \
+            --without-freetype \
+            --without-x \
             --disable-winemenubuilder \
             --disable-win16 \
             --disable-tests \
