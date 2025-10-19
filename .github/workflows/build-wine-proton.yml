@@ -358,13 +358,6 @@ jobs:
             --enable-win64 \
             --enable-archs=i386,x86_64 \
             --prefix=/tmp/wine-install-proton \
-            --with-x \
-            --with-alsa \
-            --with-pulse \
-            --with-freetype \
-            --with-fontconfig \
-            --with-gettext \
-            --with-sdl \
             --enable-nls \
             --disable-winemenubuilder \
             --disable-win16 \
@@ -401,14 +394,6 @@ jobs:
           CONFIGURE_OPTS="\
             --enable-win64 \
             --prefix=/tmp/wine-install-proton \
-            --with-x \
-            --with-alsa \
-            --with-pulse \
-            --with-freetype \
-            --with-fontconfig \
-            --with-gettext \
-            --with-sdl \
-            --enable-nls \
             --disable-winemenubuilder \
             --disable-win16 \
             --disable-tests \
