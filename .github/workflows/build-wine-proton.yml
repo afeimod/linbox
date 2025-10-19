@@ -175,7 +175,7 @@ jobs:
         fi
         
         sudo apt install -y $BASE_DEPS
-        - name: 安装32位依赖
+    - name: 安装32位依赖
       run: |
         sudo dpkg --add-architecture i386
         sudo apt update
