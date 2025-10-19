@@ -49,7 +49,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: 解析输入参数和版本检测
@@ -105,12 +105,42 @@ jobs:
         echo "PROTON_BRANCH=${{ github.event.inputs.proton_branch }}" >> $GITHUB_ENV
         echo "OPT_LEVEL=${{ github.event.inputs.optimization_level }}" >> $GITHUB_ENV
 
+    - name: 启用多架构支持
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+
+    - name: 修复包管理器
+      run: |
+        sudo apt-get update
+        sudo apt-get install -f -y
+        sudo apt-get autoremove -y
+
+    - name: 安装基本依赖
+      run: |
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          meson \
+          ninja-build \
+          autoconf \
+          wget \
+          xz-utils \
+          gettext \
+          fontconfig \
+          libfreetype6 \
+          libfreetype6-dev
+
     - name: 安装构建依赖
       run: |
         sudo apt update
+        # 先修复损坏的依赖
         sudo apt --fix-broken install -y
-        
-        BASE_DEPS="\
+        sudo apt install -y \
           debootstrap \
           perl \
           git \
@@ -134,7 +164,6 @@ jobs:
           libxrender-dev \
           libxinerama-dev \
           libgl-dev \
-          libsdl2-dev \
           libglu-dev \
           libosmesa6-dev \
           libfreetype6-dev \
@@ -150,31 +179,59 @@ jobs:
           libpng-dev \
           libtiff-dev \
           libxml2-dev \
+          libvulkan-dev \
+          vulkan-tools \
+          libvulkan1 \
+          mesa-vulkan-drivers \
           mingw-w64 \
-          gettext \
-          libgettextpo-dev \
-          locales \
-          language-pack-zh-hans"
-          # 32位X11开发库
-        X11_32_DEPS="\
-          libx11-dev:i386 \
-          libxext-dev:i386 \
-          libxi-dev:i386 \
-          libxrandr-dev:i386 \
-          libxcursor-dev:i386 \
-          libxcomposite-dev:i386 \
-          libxdamage-dev:i386 \
-          libxfixes-dev:i386 \
-          libxxf86vm-dev:i386 \
-          libxrender-dev:i386 \
-          libxinerama-dev:i386 \
-          libgl-dev:i386 \
-          libglu-dev:i386"
-        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_VULKAN" = "1" ]; then
-          BASE_DEPS="$BASE_DEPS libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers"
-        fi
+          wine
+
+    - name: 安装完整的 GStreamer 和 FFmpeg 依赖
+      run: |
+        # 先安装 libunwind-dev 解决依赖问题
+        sudo apt install -y libunwind-dev
         
-        sudo apt install -y $BASE_DEPS
+        # 安装完整的 GStreamer 核心和插件
+        sudo apt install -y \
+          gstreamer1.0-tools \
+          gstreamer1.0-plugins-base \
+          gstreamer1.0-plugins-good \
+          gstreamer1.0-plugins-bad \
+          gstreamer1.0-plugins-ugly \
+          gstreamer1.0-libav \
+          gstreamer1.0-gl \
+          gstreamer1.0-pulseaudio \
+          gstreamer1.0-alsa \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libgstreamer-plugins-good1.0-dev \
+          libgstreamer-plugins-bad1.0-dev
+
+        # 安装 FFmpeg 开发库
+        sudo apt install -y \
+          ffmpeg \
+          libavcodec-dev \
+          libavformat-dev \
+          libavutil-dev \
+          libavfilter-dev \
+          libswscale-dev \
+          libswresample-dev \
+          libpostproc-dev \
+          libavdevice-dev
+
+        # 安装多媒体和音频依赖
+        sudo apt install -y \
+          libmpg123-dev \
+          libopenal-dev \
+          libvorbis-dev \
+          libflac-dev \
+          libopus-dev \
+          libmad0-dev \
+          libtwolame-dev \
+          libshout3-dev \
+          libsoup2.4-dev \
+          libcurl4-openssl-dev
+
     - name: 安装32位依赖
       run: |
         sudo dpkg --add-architecture i386
@@ -208,27 +265,6 @@ jobs:
           libtiff-dev:i386 \
           libxml2-dev:i386 \
           libvulkan-dev:i386
-          
-
-    - name: 安装多媒体和音频依赖
-      run: |
-        AUDIO_DEPS="libunwind-dev"
-        
-        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_GSTREAMER" = "1" ]; then
-          AUDIO_DEPS="$AUDIO_DEPS libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev"
-        fi
-        
-        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_OPENAL" = "1" ]; then
-          AUDIO_DEPS="$AUDIO_DEPS libopenal-dev"
-        fi
-        
-        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_MPG123" = "1" ]; then
-          AUDIO_DEPS="$AUDIO_DEPS libmpg123-dev"
-        fi
-        
-        echo "安装音频依赖: $AUDIO_DEPS"
-        sudo apt install -y $AUDIO_DEPS
-
     - name: 设置中文语言环境
       run: |
         sudo locale-gen zh_CN.UTF-8
