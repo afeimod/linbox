@@ -1,0 +1,634 @@
+# build-wine-proton精简.yml
+name: Build Proton for Termux
+
+on:
+  workflow_dispatch:
+    inputs:
+      proton_branch:
+        description: 'Proton 分支版本'
+        required: true
+        default: 'proton_10.0'
+        type: choice
+        options:
+        - proton_10.0
+        - proton_9.0
+        - proton_8.0
+        - proton_7.0
+        - proton_6.3
+        - proton_5.13
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'standard'
+        type: choice
+        options:
+        - minimal
+        - standard
+        - full
+      enable_features:
+        description: '启用额外功能'
+        required: false
+        default: 'vulkan,gstreamer,openal,mpg123'
+        type: string
+      optimization_level:
+        description: '优化级别'
+        required: true
+        default: 'O3'
+        type: choice
+        options:
+        - O1
+        - O2
+        - O3
+        - Os
+
+permissions:
+  contents: write
+
+env:
+  BUILD_DIR: "/tmp/build_wine"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: 解析输入参数和版本检测
+      run: |
+        echo "选择的 Proton 分支: ${{ github.event.inputs.proton_branch }}"
+        echo "构建类型: ${{ github.event.inputs.build_type }}"
+        echo "启用功能: ${{ github.event.inputs.enable_features }}"
+        echo "优化级别: ${{ github.event.inputs.optimization_level }}"
+        
+        # 提取版本号并判断是否使用 WOW64
+        VERSION_NUM=$(echo "${{ github.event.inputs.proton_branch }}" | sed 's/proton_//')
+        MAJOR_VERSION=$(echo "$VERSION_NUM" | cut -d. -f1)
+        
+        echo "版本号: $VERSION_NUM"
+        echo "主版本: $MAJOR_VERSION"
+        
+        if [ "$MAJOR_VERSION" -ge 10 ]; then
+          echo "使用 WOW64 构建 (版本 >= 10.0)"
+          echo "USE_WOW64=1" >> $GITHUB_ENV
+          echo "BUILD_ARCH=WOW64" >> $GITHUB_ENV
+        else
+          echo "使用分离构建 64位和32位 (版本 <= 9.0)"
+          echo "USE_WOW64=0" >> $GITHUB_ENV
+          echo "BUILD_ARCH=separate" >> $GITHUB_ENV
+        fi
+        
+        # 设置功能标志
+        if echo "${{ github.event.inputs.enable_features }}" | grep -q "vulkan"; then
+          echo "ENABLE_VULKAN=1" >> $GITHUB_ENV
+        else
+          echo "ENABLE_VULKAN=0" >> $GITHUB_ENV
+        fi
+        
+        if echo "${{ github.event.inputs.enable_features }}" | grep -q "gstreamer"; then
+          echo "ENABLE_GSTREAMER=1" >> $GITHUB_ENV
+        else
+          echo "ENABLE_GSTREAMER=0" >> $GITHUB_ENV
+        fi
+        
+        if echo "${{ github.event.inputs.enable_features }}" | grep -q "openal"; then
+          echo "ENABLE_OPENAL=1" >> $GITHUB_ENV
+        else
+          echo "ENABLE_OPENAL=0" >> $GITHUB_ENV
+        fi
+        
+        if echo "${{ github.event.inputs.enable_features }}" | grep -q "mpg123"; then
+          echo "ENABLE_MPG123=1" >> $GITHUB_ENV
+        else
+          echo "ENABLE_MPG123=0" >> $GITHUB_ENV
+        fi
+        
+        echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
+        echo "PROTON_BRANCH=${{ github.event.inputs.proton_branch }}" >> $GITHUB_ENV
+        echo "OPT_LEVEL=${{ github.event.inputs.optimization_level }}" >> $GITHUB_ENV
+
+    - name: 安装构建依赖
+      run: |
+        sudo apt update
+        sudo apt --fix-broken install -y
+        
+        BASE_DEPS="\
+          debootstrap \
+          perl \
+          git \
+          wget \
+          xz-utils \
+          bubblewrap \
+          autoconf \
+          flex \
+          bison \
+          gcc-multilib \
+          g++-multilib \
+          libx11-dev \
+          libxext-dev \
+          libxi-dev \
+          libxrandr-dev \
+          libxcursor-dev \
+          libxcomposite-dev \
+          libxdamage-dev \
+          libxfixes-dev \
+          libxxf86vm-dev \
+          libxrender-dev \
+          libxinerama-dev \
+          libgl-dev \
+          libsdl2-dev \
+          libglu-dev \
+          libosmesa6-dev \
+          libfreetype6-dev \
+          libfontconfig1-dev \
+          libpcap-dev \
+          libdbus-1-dev \
+          libssl-dev \
+          libasound2-dev \
+          libpulse-dev \
+          libudev-dev \
+          libcups2-dev \
+          libjpeg-dev \
+          libpng-dev \
+          libtiff-dev \
+          libxml2-dev \
+          mingw-w64 \
+          gettext \
+          libgettextpo-dev \
+          locales \
+          language-pack-zh-hans"
+        
+        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_VULKAN" = "1" ]; then
+          BASE_DEPS="$BASE_DEPS libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers"
+        fi
+        
+        sudo apt install -y $BASE_DEPS
+
+    - name: 安装多媒体和音频依赖
+      run: |
+        AUDIO_DEPS="libunwind-dev"
+        
+        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_GSTREAMER" = "1" ]; then
+          AUDIO_DEPS="$AUDIO_DEPS libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev"
+        fi
+        
+        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_OPENAL" = "1" ]; then
+          AUDIO_DEPS="$AUDIO_DEPS libopenal-dev"
+        fi
+        
+        if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_MPG123" = "1" ]; then
+          AUDIO_DEPS="$AUDIO_DEPS libmpg123-dev"
+        fi
+        
+        echo "安装音频依赖: $AUDIO_DEPS"
+        sudo apt install -y $AUDIO_DEPS
+
+    - name: 设置中文语言环境
+      run: |
+        sudo locale-gen zh_CN.UTF-8
+        sudo update-locale LANG=zh_CN.UTF-8
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+
+    - name: 检查工作目录和构建配置
+      run: |
+        echo "当前工作目录: $(pwd)"
+        echo "构建配置:"
+        echo "  - Proton 分支: $PROTON_BRANCH"
+        echo "  - 构建类型: $BUILD_TYPE"
+        echo "  - 优化级别: $OPT_LEVEL"
+        echo "  - 构建架构: $BUILD_ARCH"
+        echo "  - 使用 WOW64: $USE_WOW64"
+        echo "  - 启用功能: Vulkan=$ENABLE_VULKAN, GStreamer=$ENABLE_GSTREAMER, OpenAL=$ENABLE_OPENAL, MPG123=$ENABLE_MPG123"
+
+    - name: 构建 Proton (根据版本选择构建方式)
+      run: |
+        set -e
+        
+        echo "开始构建 Proton..."
+        echo "配置:"
+        echo "  - 分支: $PROTON_BRANCH"
+        echo "  - 构建类型: $BUILD_TYPE"
+        echo "  - 优化级别: $OPT_LEVEL"
+        echo "  - 构建架构: $BUILD_ARCH"
+        echo "  - 使用 WOW64: $USE_WOW64"
+        
+        # 设置中文构建环境
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+        export LANGUAGE=zh_CN:zh:en_US:en
+        
+        # 清理并创建构建目录
+        rm -rf $BUILD_DIR/proton
+        mkdir -p $BUILD_DIR/proton
+        cd $BUILD_DIR/proton
+        
+        # 克隆 Proton 源码
+        git clone https://github.com/ValveSoftware/wine
+        cd wine
+        
+        # 切换到指定的 Proton 分支
+        echo "切换到分支: $PROTON_BRANCH"
+        git checkout $PROTON_BRANCH
+        
+        # 修复 Termux 路径问题
+        echo "修复 Termux 路径问题..."
+        find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g'
+        find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} +
+        
+        # 生成 configure 脚本
+        echo "生成 configure 脚本..."
+        ./autogen.sh
+        
+        # 配置编译标志
+        case "$OPT_LEVEL" in
+          "O1")
+            OPT_FLAGS="-O1 -pipe"
+            ;;
+          "O2")
+            OPT_FLAGS="-O2 -pipe"
+            ;;
+          "O3")
+            OPT_FLAGS="-O3 -ftree-vectorize -pipe"
+            ;;
+          "Os")
+            OPT_FLAGS="-Os -pipe"
+            ;;
+          *)
+            OPT_FLAGS="-O2 -pipe"
+            ;;
+        esac
+        
+        # 根据 USE_WOW64 选择构建方式
+        if [ "$USE_WOW64" = "1" ]; then
+          echo "使用 WOW64 模式构建..."
+          # WOW64 构建 (Proton 10.0+)
+          mkdir -p build64
+          cd build64
+          export CROSSCC="x86_64-w64-mingw32-gcc"
+          export CROSSCXX="x86_64-w64-mingw32-g++"
+          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          
+          CONFIGURE_OPTS="\
+            --enable-win64 \
+            --enable-archs=i386,x86_64 \
+            --prefix=/tmp/wine-install-proton \
+            --with-x \
+            --with-alsa \
+            --with-pulse \
+            --with-freetype \
+            --with-fontconfig \
+            --with-gettext \
+            --with-sdl \
+            --enable-nls \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --without-ldap \
+            --without-capi \
+            --without-oss \
+            --without-cups \
+            --without-dbus \
+            --without-coreaudio \
+            --without-gphoto \
+            --without-osmesa \
+            --without-sane \
+            --without-pcap \
+            --without-pcsclite \
+            --without-udev \
+            --without-unwind \
+            --without-usb \
+            --without-v4l2 \
+            --without-wayland"
+        else
+          echo "使用分离构建模式 (64位 + 32位)..."
+          # 分离构建 (Proton 9.0-)
+          # 先构建64位
+          mkdir -p build64
+          cd build64
+          export CROSSCC="x86_64-w64-mingw32-gcc"
+          export CROSSCXX="x86_64-w64-mingw32-g++"
+          export CFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCXXFLAGS="-march=x86-64 -msse3 -mfpmath=sse $OPT_FLAGS"
+          
+          CONFIGURE_OPTS="\
+            --enable-win64 \
+            --prefix=/tmp/wine-install-proton \
+            --with-x \
+            --with-alsa \
+            --with-pulse \
+            --with-freetype \
+            --with-fontconfig \
+            --with-gettext \
+            --with-sdl \
+            --enable-nls \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --without-ldap \
+            --without-capi \
+            --without-oss \
+            --without-cups \
+            --without-dbus \
+            --without-coreaudio \
+            --without-gphoto \
+            --without-osmesa \
+            --without-sane \
+            --without-pcap \
+            --without-pcsclite \
+            --without-udev \
+            --without-unwind \
+            --without-usb \
+            --without-v4l2 \
+            --without-wayland"
+        fi
+        
+        # 根据功能添加配置选项
+        if [ "$ENABLE_VULKAN" = "1" ]; then
+          CONFIGURE_OPTS="$CONFIGURE_OPTS --with-vulkan"
+        else
+          CONFIGURE_OPTS="$CONFIGURE_OPTS --without-vulkan"
+        fi
+        
+        if [ "$ENABLE_GSTREAMER" = "1" ]; then
+          CONFIGURE_OPTS="$CONFIGURE_OPTS --with-gstreamer"
+        else
+          CONFIGURE_OPTS="$CONFIGURE_OPTS --without-gstreamer"
+        fi
+        
+        # 根据构建类型调整配置
+        case "$BUILD_TYPE" in
+          "minimal")
+            CONFIGURE_OPTS="$CONFIGURE_OPTS --without-openal --without-mpg123"
+            ;;
+          "standard")
+            if [ "$ENABLE_OPENAL" = "1" ]; then
+              CONFIGURE_OPTS="$CONFIGURE_OPTS --with-openal"
+            else
+              CONFIGURE_OPTS="$CONFIGURE_OPTS --without-openal"
+            fi
+            if [ "$ENABLE_MPG123" = "1" ]; then
+              CONFIGURE_OPTS="$CONFIGURE_OPTS --with-mpg123"
+            else
+              CONFIGURE_OPTS="$CONFIGURE_OPTS --without-mpg123"
+            fi
+            ;;
+          "full")
+            CONFIGURE_OPTS="$CONFIGURE_OPTS --with-openal --with-mpg123"
+            ;;
+        esac
+        
+        echo "配置参数: $CONFIGURE_OPTS"
+        ../configure $CONFIGURE_OPTS
+        
+        # 构建并安装
+        make -j$(nproc)
+        make install
+        
+        # 如果是分离构建，继续构建32位
+        if [ "$USE_WOW64" = "0" ]; then
+          echo "开始构建32位版本..."
+          cd ..
+          mkdir -p build32
+          cd build32
+          
+          # 设置32位编译环境
+          export CC="gcc -m32"
+          export CXX="g++ -m32"
+          export CROSSCC="i686-w64-mingw32-gcc"
+          export CROSSCXX="i686-w64-mingw32-g++"
+          export CFLAGS="-march=i686 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CXXFLAGS="-march=i686 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCFLAGS="-march=i686 -msse3 -mfpmath=sse $OPT_FLAGS"
+          export CROSSCXXFLAGS="-march=i686 -msse3 -mfpmath=sse $OPT_FLAGS"
+          
+          CONFIGURE_OPTS_32="\
+            --with-wine64=../build64 \
+            --prefix=/tmp/wine-install-proton \
+            --with-x \
+            --with-alsa \
+            --with-pulse \
+            --with-freetype \
+            --with-fontconfig \
+            --with-gettext \
+            --with-sdl \
+            --enable-nls \
+            --disable-winemenubuilder \
+            --disable-win16 \
+            --disable-tests \
+            --without-ldap \
+            --without-capi \
+            --without-oss \
+            --without-cups \
+            --without-dbus \
+            --without-coreaudio \
+            --without-gphoto \
+            --without-osmesa \
+            --without-sane \
+            --without-pcap \
+            --without-pcsclite \
+            --without-udev \
+            --without-unwind \
+            --without-usb \
+            --without-v4l2 \
+            --without-wayland"
+          
+          # 复制功能配置到32位
+          if [ "$ENABLE_VULKAN" = "1" ]; then
+            CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --with-vulkan"
+          else
+            CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --without-vulkan"
+          fi
+          
+          if [ "$ENABLE_GSTREAMER" = "1" ]; then
+            CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --with-gstreamer"
+          else
+            CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --without-gstreamer"
+          fi
+          
+          case "$BUILD_TYPE" in
+            "minimal")
+              CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --without-openal --without-mpg123"
+              ;;
+            "standard")
+              if [ "$ENABLE_OPENAL" = "1" ]; then
+                CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --with-openal"
+              else
+                CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --without-openal"
+              fi
+              if [ "$ENABLE_MPG123" = "1" ]; then
+                CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --with-mpg123"
+              else
+                CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --without-mpg123"
+              fi
+              ;;
+            "full")
+              CONFIGURE_OPTS_32="$CONFIGURE_OPTS_32 --with-openal --with-mpg123"
+              ;;
+          esac
+          
+          echo "32位配置参数: $CONFIGURE_OPTS_32"
+          ../configure $CONFIGURE_OPTS_32
+          
+          make -j$(nproc)
+          make install
+        fi
+        
+        cd ../..
+        
+        # 获取版本信息
+        VERSION_PROTON=$(cd wine && git describe --tags --abbrev=0 2>/dev/null || echo "$PROTON_BRANCH")
+        COMMIT_HASH=$(cd wine && git rev-parse --short HEAD)
+        PROTON_VERSION="${VERSION_PROTON}-${COMMIT_HASH}"
+        echo "PROTON_VERSION=$PROTON_VERSION" >> $GITHUB_ENV
+
+    - name: 准备打包
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-$BUILD_ARCH"
+        mkdir -p wine-package/$PACKAGE_NAME
+        
+        echo "复制 Wine 文件到 $PACKAGE_NAME..."
+        cp -r /tmp/wine-install-proton/* wine-package/$PACKAGE_NAME/
+
+    - name: 为 Termux 准备安装包
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-$BUILD_ARCH"
+        
+        # 解压构建文件到临时目录
+        tar -xJf "$PACKAGE_NAME.tar.xz" -C /tmp/
+        
+        # 创建 Termux 包结构
+        mkdir -p termux-package/opt/wine
+        mkdir -p termux-package/bin
+        
+        # 复制 Wine 文件
+        cp -r /tmp/$PACKAGE_NAME/* termux-package/opt/wine/
+        
+
+
+    - name: 创建打包文件
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-$BUILD_ARCH"
+        
+        echo "最终文件结构:"
+        find wine-package -type f | sort | head -20
+        
+        # 使用 tar.xz 格式打包
+        tar -cJf $PACKAGE_NAME.tar.xz -C wine-package $PACKAGE_NAME
+        
+        echo "打包完成:"
+        ls -lh *.tar.xz
+
+    - name: 创建 Termux 打包文件
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-$BUILD_ARCH"
+        
+        # 打包 Termux 版本
+        tar -czf ${PACKAGE_NAME}-termux.tar.gz termux-package/
+        
+        echo "打包完成:"
+        ls -lh *.tar.*
+
+    - name: 设置 Release 标签
+      run: |
+        CURRENT_DATE=$(date +%Y%m%d)
+        echo "RELEASE_TAG=proton-$PROTON_BRANCH-$BUILD_ARCH-$BUILD_TYPE-$CURRENT_DATE" >> $GITHUB_ENV
+        echo "Release 标签设置为: $RELEASE_TAG"
+
+    - name: 上传所有构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: wine-builds-${{ env.RELEASE_TAG }}
+        path: |
+          wine-*.tar.*
+        retention-days: 7
+
+    - name: 发布到 GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        name: Wine Proton Build ${{ env.RELEASE_TAG }}
+        body: |
+          # Wine Proton for Termux
+          
+          ## 构建信息
+          - **版本**: ${{ env.PROTON_VERSION }}
+          - **Proton 分支**: ${{ github.event.inputs.proton_branch }}
+          - **构建架构**: ${{ env.BUILD_ARCH }}
+          - **构建类型**: ${{ github.event.inputs.build_type }}
+          - **优化级别**: ${{ github.event.inputs.optimization_level }}
+          - **启用功能**: ${{ github.event.inputs.enable_features }}
+          
+          ## 包含的功能
+          ${{ env.ENABLE_VULKAN == '1' && '- ✅ Vulkan 图形 API 支持' || '- ❌ Vulkan 图形 API 支持' }}
+          ${{ env.ENABLE_GSTREAMER == '1' && '- ✅ GStreamer 多媒体支持' || '- ❌ GStreamer 多媒体支持' }}
+          ${{ env.ENABLE_OPENAL == '1' && '- ✅ OpenAL 3D 音频支持' || '- ❌ OpenAL 3D 音频支持' }}
+          ${{ env.ENABLE_MPG123 == '1' && '- ✅ MPG123 音频支持' || '- ❌ MPG123 音频支持' }}
+          - ✅ 完整中文语言支持
+          ${{ env.USE_WOW64 == '1' && '- ✅ WOW64 架构 (同时支持 32/64 位应用)' || '- ✅ 分离构建 (同时包含 32位和64位版本)' }}
+          - ✅ 游戏优化和兼容性改进
+          
+        files: |
+          wine-*.tar.*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出版本信息和使用说明
+      run: |
+        PACKAGE_NAME="wine-${{ env.PROTON_VERSION }}-$BUILD_ARCH"
+        
+        echo "✅ Wine Proton 构建完成"
+        echo ""
+        echo "构建配置:"
+        echo "- Proton 分支: $PROTON_BRANCH"
+        echo "- 构建类型: $BUILD_TYPE"
+        echo "- 构建架构: $BUILD_ARCH"
+        echo "- 使用 WOW64: $USE_WOW64"
+        echo "- 优化级别: $OPT_LEVEL"
+        echo "- 启用功能: Vulkan=$ENABLE_VULKAN, GStreamer=$ENABLE_GSTREAMER, OpenAL=$ENABLE_OPENAL, MPG123=$ENABLE_MPG123"
+        echo ""
+        echo "构建产物:"
+        echo "- 主包: ${PACKAGE_NAME}.tar.xz"
+        echo "- Termux 安装包: ${PACKAGE_NAME}-termux.tar.gz"
+        echo "- Release 标签: ${{ env.RELEASE_TAG }}"
+        echo ""
+        echo "启用的功能:"
+        [ "$ENABLE_VULKAN" = "1" ] && echo "✓ Vulkan 图形 API 支持"
+        [ "$ENABLE_GSTREAMER" = "1" ] && echo "✓ GStreamer 多媒体支持"
+        [ "$ENABLE_OPENAL" = "1" ] && echo "✓ OpenAL 3D 音频支持"
+        [ "$ENABLE_MPG123" = "1" ] && echo "✓ MPG123 音频支持"
+        echo "✓ 完整中文语言支持 (NLS 已启用)"
+        echo "✓ 游戏优化和兼容性改进"
+        if [ "$USE_WOW64" = "1" ]; then
+          echo "✓ WOW64 架构 (同时支持 32/64 位应用)"
+        else
+          echo "✓ 分离构建 (同时包含 32位和64位版本)"
+        fi
+        echo ""
+        echo "使用说明:"
+        echo "1. 下载 ${PACKAGE_NAME}-termux.tar.gz"
+        echo "2. 解压: tar -xzf ${PACKAGE_NAME}-termux.tar.gz"
+        echo "3. 进入目录: cd termux-package"
+        echo "4. 运行安装: ./install.sh"
+        echo "5. 重新加载环境: source ~/.bashrc"
+        echo "6. 初始化: wine wineboot"
+        echo ""
+        if [ "$USE_WOW64" = "1" ]; then
+          echo "架构说明:"
+          echo "- WOW64 模式自动处理 32/64 位应用"
+        else
+          echo "架构说明:"
+          echo "- 设置 WINEARCH=win32 运行32位应用"
+          echo "- 设置 WINEARCH=win64 运行64位应用(默认)"
+        fi
+        echo ""
+        echo "注意:"
+        echo "- 这是基于 Valve Proton 的构建"
+        echo "- 已修复 Termux 路径问题"
+        echo "- 专为游戏和兼容性优化"
+        echo "- 强制启用中文界面支持"
