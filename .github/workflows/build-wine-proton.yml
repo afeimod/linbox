@@ -422,8 +422,6 @@ jobs:
           CONFIGURE_OPTS_32="\
             --with-wine64=../build64 \
             --prefix=/tmp/wine-install-proton \
-            --with-alsa \
-            --with-pulse \
             --without-freetype \
             --without-x \
             --disable-winemenubuilder \
