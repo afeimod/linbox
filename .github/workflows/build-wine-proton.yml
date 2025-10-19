@@ -155,7 +155,21 @@ jobs:
           libgettextpo-dev \
           locales \
           language-pack-zh-hans"
-        
+          # 32位X11开发库
+        X11_32_DEPS="\
+          libx11-dev:i386 \
+          libxext-dev:i386 \
+          libxi-dev:i386 \
+          libxrandr-dev:i386 \
+          libxcursor-dev:i386 \
+          libxcomposite-dev:i386 \
+          libxdamage-dev:i386 \
+          libxfixes-dev:i386 \
+          libxxf86vm-dev:i386 \
+          libxrender-dev:i386 \
+          libxinerama-dev:i386 \
+          libgl-dev:i386 \
+          libglu-dev:i386"
         if [ "$BUILD_TYPE" = "full" ] || [ "$ENABLE_VULKAN" = "1" ]; then
           BASE_DEPS="$BASE_DEPS libvulkan-dev vulkan-tools libvulkan1 mesa-vulkan-drivers"
         fi
