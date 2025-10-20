@@ -85,23 +85,17 @@ jobs:
     - name: 构建 Box64
       run: |
         cd box64
-        unset LD_PRELOAD
-        export GLIBC_PREFIX=/data/data/com.termux/files/usr/glibc
-        export PATH=$GLIBC_PREFIX/bin:$PATH
-        # 替换路径以适配 GLIBC
-        sed -i 's/\/usr/\/data\/data\/com.termux\/files\/usr\/glibc/g' CMakeLists.txt
-        sed -i 's/\/etc/\/data\/data\/com.termux\/files\/usr\/glibc\/etc/g' CMakeLists.txt
         mkdir build && cd build
-        cmake --install-prefix $GLIBC_PREFIX .. \
-                -DARM_DYNAREC=ON \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DBAD_SIGNAL=ON \
-                -DARM64=ON \
-                -DSD845=ON \
-                -DSD8G2=ON \
-                -DNOLOADADDR=ON
+        cmake .. \
+            -DARM_DYNAREC=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWINLATOR_GLIBC=ON \
+            -DARM64=ON \
+            -DBAD_SIGN=ON \
+            -DSD8G2=ON
 
         make -j4
+        patchelf --set-interpreter /data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 box64 || true
 
         # 打包只包含可执行文件，使用 xz 压缩
         tar -cJf box64-${BOX64_VERSION}-${BUILD_DATE}.tar.xz box64
