@@ -1,0 +1,584 @@
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 4f8b0e8..3c3cda2 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -1697,6 +1697,7 @@ size_t server_init_process(void)
+  */
+ void server_init_process_done(void)
+ {
++    struct cpu_topology_override *cpu_override = get_cpu_topology_override();
+     void *teb;
+     unsigned int status;
+     int suspend;
+@@ -1721,6 +1722,8 @@ void server_init_process_done(void)
+     /* Signal the parent process to continue */
+     SERVER_START_REQ( init_process_done )
+     {
++        if (cpu_override)
++            wine_server_add_data( req, cpu_override, sizeof(*cpu_override) );
+         req->teb      = wine_server_client_ptr( teb );
+         req->peb      = NtCurrentTeb64() ? NtCurrentTeb64()->Peb : wine_server_client_ptr( peb );
+ #ifdef __i386__
+diff --git a/dlls/ntdll/unix/system.c b/dlls/ntdll/unix/system.c
+index e9ed8b6..23aac48 100644
+--- a/dlls/ntdll/unix/system.c
++++ b/dlls/ntdll/unix/system.c
+@@ -33,6 +33,7 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ #include <errno.h>
++#include <assert.h>
+ #include <sys/time.h>
+ #include <time.h>
+ #include <dirent.h>
+@@ -257,6 +258,13 @@ static ULONG_PTR system_cpu_mask;
+ 
+ static pthread_mutex_t timezone_mutex = PTHREAD_MUTEX_INITIALIZER;
+ 
++static struct
++{
++    struct cpu_topology_override mapping;
++    BOOL smt;
++}
++cpu_override;
++
+ /*******************************************************************************
+  * Architecture specific feature detection for CPUs
+  *
+@@ -673,6 +681,91 @@ static void get_cpuinfo( SYSTEM_CPU_INFORMATION *info )
+ 
+ #endif /* End architecture specific feature detection for CPUs */
+ 
++static void fill_cpu_override(unsigned int host_cpu_count)
++{
++    const char *env_override = getenv("WINE_CPU_TOPOLOGY");
++    unsigned int i;
++    char *s;
++
++    if (!env_override)
++        return;
++
++    cpu_override.mapping.cpu_count = strtol(env_override, &s, 10);
++    if (s == env_override)
++        goto error;
++
++    if (!cpu_override.mapping.cpu_count || cpu_override.mapping.cpu_count > MAXIMUM_PROCESSORS)
++    {
++        ERR("Invalid logical CPU count %u, limit %u.\n", cpu_override.mapping.cpu_count, MAXIMUM_PROCESSORS);
++        goto error;
++    }
++
++    if (tolower(*s) == 's')
++    {
++        cpu_override.mapping.cpu_count *= 2;
++        if (cpu_override.mapping.cpu_count > MAXIMUM_PROCESSORS)
++        {
++            ERR("Logical CPU count exceeds limit %u.\n", MAXIMUM_PROCESSORS);
++            goto error;
++        }
++        cpu_override.smt = TRUE;
++        ++s;
++    }
++    if (*s != ':')
++        goto error;
++    ++s;
++    for (i = 0; i < cpu_override.mapping.cpu_count; ++i)
++    {
++        char *next;
++
++        if (i)
++        {
++            if (*s != ',')
++            {
++                if (!*s)
++                    ERR("Incomplete host CPU mapping string, %u CPUs mapping required.\n",
++                            cpu_override.mapping.cpu_count);
++                goto error;
++            }
++            ++s;
++        }
++
++        cpu_override.mapping.host_cpu_id[i] = strtol(s, &next, 10);
++        if (next == s)
++            goto error;
++        if (cpu_override.mapping.host_cpu_id[i] >= host_cpu_count)
++        {
++            ERR("Invalid host CPU index %u (host_cpu_count %u).\n",
++                    cpu_override.mapping.host_cpu_id[i], host_cpu_count);
++            goto error;
++        }
++        s = next;
++    }
++    if (*s)
++        goto error;
++
++    if (ERR_ON(ntdll))
++    {
++        MESSAGE("wine: overriding CPU configuration, %u logical CPUs, host CPUs ", cpu_override.mapping.cpu_count);
++        for (i = 0; i < cpu_override.mapping.cpu_count; ++i)
++        {
++            if (i)
++                MESSAGE(",");
++            MESSAGE("%u", cpu_override.mapping.host_cpu_id[i]);
++        }
++        MESSAGE(".\n");
++    }
++    return;
++error:
++    cpu_override.mapping.cpu_count = 0;
++    ERR("Invalid WINE_CPU_TOPOLOGY string %s (%s).\n", debugstr_a(env_override), debugstr_a(s));
++}
++
++struct cpu_topology_override *get_cpu_topology_override(void)
++{
++    return cpu_override.mapping.cpu_count ? &cpu_override.mapping : NULL;
++}
++
+ static BOOL grow_logical_proc_buf(void)
+ {
+     SYSTEM_LOGICAL_PROCESSOR_INFORMATION *new_data;
+@@ -724,6 +817,7 @@ static DWORD count_bits( ULONG_PTR mask )
+ static BOOL logical_proc_info_ex_add_by_id( LOGICAL_PROCESSOR_RELATIONSHIP rel, DWORD id, ULONG_PTR mask )
+ {
+     SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *dataex;
++    unsigned int phys_cpu_id;
+     unsigned int ofs = 0;
+ 
+     while (ofs < logical_proc_info_ex_size)
+@@ -753,8 +847,10 @@ static BOOL logical_proc_info_ex_add_by_id( LOGICAL_PROCESSOR_RELATIONSHIP rel,
+         dataex->Processor.Flags = count_bits( mask ) > 1 ? LTP_PC_SMT : 0;
+     else
+         dataex->Processor.Flags = 0;
+-    if (rel == RelationProcessorCore && id / 32 < performance_cores_capacity)
+-        dataex->Processor.EfficiencyClass = (performance_cores[id / 32] >> (id % 32)) & 1;
++
++    phys_cpu_id = cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[id] : id;
++    if (rel == RelationProcessorCore && phys_cpu_id / 32 < performance_cores_capacity)
++        dataex->Processor.EfficiencyClass = (performance_cores[phys_cpu_id / 32] >> (phys_cpu_id % 32)) & 1;
+     else
+         dataex->Processor.EfficiencyClass = 0;
+     dataex->Processor.GroupCount = 1;
+@@ -1003,11 +1099,13 @@ static NTSTATUS create_logical_proc_info(void)
+     static const char core_info[] = "/sys/devices/system/cpu/cpu%u/topology/%s";
+     static const char cache_info[] = "/sys/devices/system/cpu/cpu%u/cache/index%u/%s";
+     static const char numa_info[] = "/sys/devices/system/node/node%u/cpumap";
+-
++    const char *env_fake_logical_cores = getenv("WINE_LOGICAL_CPUS_AS_CORES");
++    BOOL fake_logical_cpus_as_cores = env_fake_logical_cores && atoi(env_fake_logical_cores);
+     FILE *fcpu_list, *fnuma_list, *f;
+     unsigned int beg, end, i, j, r, num_cpus = 0, max_cpus = 0;
+     char op, name[MAX_PATH];
+     ULONG_PTR all_cpus_mask = 0;
++    unsigned int cpu_id;
+ 
+     /* On systems with a large number of CPU cores (32 or 64 depending on 32-bit or 64-bit),
+      * we have issues parsing processor information:
+@@ -1034,6 +1132,12 @@ static NTSTATUS create_logical_proc_info(void)
+         if (op == '-') fscanf(fcpu_list, "%u%c ", &end, &op);
+         else end = beg;
+ 
++        if (cpu_override.mapping.cpu_count)
++        {
++            beg = 0;
++            end = cpu_override.mapping.cpu_count - 1;
++        }
++
+         for(i = beg; i <= end; i++)
+         {
+             unsigned int phys_core = 0;
+@@ -1041,7 +1145,7 @@ static NTSTATUS create_logical_proc_info(void)
+ 
+             if (i > 8 * sizeof(ULONG_PTR)) break;
+ 
+-            snprintf(name, sizeof(name), core_info, i, "physical_package_id");
++            snprintf(name, sizeof(name), core_info, cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[i] : i, "physical_package_id");
+             f = fopen(name, "r");
+             if (f)
+             {
+@@ -1068,19 +1172,32 @@ static NTSTATUS create_logical_proc_info(void)
+ 
+             /* Mask of logical threads sharing same physical core in kernel core numbering. */
+             snprintf(name, sizeof(name), core_info, i, "thread_siblings");
+-            if(!sysfs_parse_bitmap(name, &thread_mask)) thread_mask = 1<<i;
+-
++            if (cpu_override.mapping.cpu_count)
++            {
++                thread_mask = cpu_override.smt ? (ULONG_PTR)0x3 << (i & ~1) : (ULONG_PTR)1 << i;
++            }
++            else
++            {
++                if(fake_logical_cpus_as_cores || !sysfs_parse_bitmap(name, &thread_mask)) thread_mask = (ULONG_PTR)1<<i;
++            }
+             /* Needed later for NumaNode and Group. */
+             all_cpus_mask |= thread_mask;
+ 
+-            snprintf(name, sizeof(name), core_info, i, "thread_siblings_list");
+-            f = fopen(name, "r");
+-            if (f)
++            if (cpu_override.mapping.cpu_count)
+             {
+-                fscanf(f, "%d%c", &phys_core, &op);
+-                fclose(f);
++                phys_core = cpu_override.smt ? i / 2 : i;
++            }
++            else
++            {
++                snprintf(name, sizeof(name), core_info, i, "thread_siblings_list");
++                f = fake_logical_cpus_as_cores ? NULL : fopen(name, "r");
++                if (f)
++                {
++                    fscanf(f, "%d%c", &phys_core, &op);
++                    fclose(f);
++                }
++                else phys_core = i;
+             }
+-            else phys_core = i;
+ 
+             if (!logical_proc_info_add_by_id( RelationProcessorCore, phys_core, thread_mask ))
+             {
+@@ -1088,22 +1205,24 @@ static NTSTATUS create_logical_proc_info(void)
+                 return STATUS_NO_MEMORY;
+             }
+ 
+-            for (j = 0; j < 4; j++)
++            cpu_id = cpu_override.mapping.cpu_count ? cpu_override.mapping.host_cpu_id[i] : i;
++
++            for(j = 0; j < 4; j++)
+             {
+                 CACHE_DESCRIPTOR cache = { .Associativity = 8, .LineSize = 64, .Type = CacheUnified, .Size = 64 * 1024 };
+                 ULONG_PTR mask = 0;
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "shared_cpu_map");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "shared_cpu_map");
+                 if(!sysfs_parse_bitmap(name, &mask)) continue;
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "level");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "level");
+                 f = fopen(name, "r");
+                 if(!f) continue;
+                 fscanf(f, "%u", &r);
+                 fclose(f);
+                 cache.Level = r;
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "ways_of_associativity");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "ways_of_associativity");
+                 if ((f = fopen(name, "r")))
+                 {
+                     fscanf(f, "%u", &r);
+@@ -1111,7 +1230,7 @@ static NTSTATUS create_logical_proc_info(void)
+                     cache.Associativity = r;
+                 }
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "coherency_line_size");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "coherency_line_size");
+                 if ((f = fopen(name, "r")))
+                 {
+                     fscanf(f, "%u", &r);
+@@ -1119,7 +1238,7 @@ static NTSTATUS create_logical_proc_info(void)
+                     cache.LineSize = r;
+                 }
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "size");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "size");
+                 if ((f = fopen(name, "r")))
+                 {
+                     fscanf(f, "%u%c", &r, &op);
+@@ -1129,7 +1248,7 @@ static NTSTATUS create_logical_proc_info(void)
+                     cache.Size = (op=='K' ? r*1024 : r);
+                 }
+ 
+-                snprintf(name, sizeof(name), cache_info, i, j, "type");
++                snprintf(name, sizeof(name), cache_info, cpu_id, j, "type");
+                 if ((f = fopen(name, "r")))
+                 {
+                     fscanf(f, "%s", name);
+@@ -1142,6 +1261,19 @@ static NTSTATUS create_logical_proc_info(void)
+                         cache.Type = CacheUnified;
+                 }
+ 
++                if (cpu_override.mapping.cpu_count)
++                {
++                    ULONG_PTR host_mask = mask;
++                    unsigned int id;
++
++                    mask = 0;
++                    for (id = 0; id < cpu_override.mapping.cpu_count; ++id)
++                        if (host_mask & ((ULONG_PTR)1 << cpu_override.mapping.host_cpu_id[id]))
++                            mask |= (ULONG_PTR)1 << id;
++
++                    assert(mask);
++                }
++
+                 if (!logical_proc_info_add_cache( mask, &cache ))
+                 {
+                     fclose(fcpu_list);
+@@ -1149,6 +1281,9 @@ static NTSTATUS create_logical_proc_info(void)
+                 }
+             }
+         }
++
++        if (cpu_override.mapping.cpu_count)
++            break;
+     }
+     fclose(fcpu_list);
+ 
+@@ -1401,7 +1536,12 @@ void init_cpu_info(void)
+     num = 1;
+     FIXME("Detecting the number of processors is not supported.\n");
+ #endif
+-    peb->NumberOfProcessors = cpu_info.MaximumProcessors = num;
++
++    fill_cpu_override(num);
++
++    peb->NumberOfProcessors = cpu_info.MaximumProcessors =
++        cpu_override.mapping.cpu_count ? cpu_override.mapping.cpu_count : num;
++
+     get_cpuinfo( &cpu_info );
+     TRACE( "<- CPU arch %d, level %d, rev %d, features 0x%x\n",
+            (int)cpu_info.ProcessorArchitecture, (int)cpu_info.ProcessorLevel,
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index a711482..a69305d 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -2562,7 +2562,20 @@ ULONG WINAPI NtGetCurrentProcessorNumber(void)
+ 
+ #if defined(__linux__) && defined(__NR_getcpu)
+     int res = syscall(__NR_getcpu, &processor, NULL, NULL);
+-    if (res != -1) return processor;
++    if (res != -1)
++    {
++        struct cpu_topology_override *override = get_cpu_topology_override();
++        unsigned int i;
++
++        if (!override)
++            return processor;
++
++        for (i = 0; i < override->cpu_count; ++i)
++            if (override->host_cpu_id[i] == processor)
++                return i;
++
++        WARN("Thread is running on processor which is not in the defined override.\n");
++    }
+ #endif
+ 
+     if (peb->NumberOfProcessors > 1)
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 33a0c03..ae0e412 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -364,6 +364,7 @@ extern void file_complete_async( HANDLE handle, unsigned int options, HANDLE eve
+                                  IO_STATUS_BLOCK *io, NTSTATUS status, ULONG_PTR information );
+ extern void set_async_direct_result( HANDLE *async_handle, unsigned int options, IO_STATUS_BLOCK *io,
+                                      NTSTATUS status, ULONG_PTR information, BOOL mark_pending );
++extern struct cpu_topology_override *get_cpu_topology_override(void);
+ 
+ extern NTSTATUS unixcall_wine_dbg_write( void *args );
+ extern NTSTATUS unixcall_wine_server_call( void *args );
+diff --git a/server/process.c b/server/process.c
+index 30555d5..e13cf8b 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -98,6 +98,7 @@ static struct list *process_get_kernel_obj_list( struct object *obj );
+ static void process_destroy( struct object *obj );
+ static int process_get_esync_fd( struct object *obj, enum esync_type *type );
+ static void terminate_process( struct process *process, struct thread *skip, int exit_code );
++static void set_process_affinity( struct process *process, affinity_t affinity );
+ 
+ static const struct object_ops process_ops =
+ {
+@@ -690,6 +691,7 @@ struct process *create_process( int fd, struct process *parent, unsigned int fla
+     process->rawinput_mouse  = NULL;
+     process->rawinput_kbd    = NULL;
+     memset( &process->image_info, 0, sizeof(process->image_info) );
++    process->cpu_override.cpu_count = 0;
+     list_init( &process->rawinput_entry );
+     process->esync_fd        = -1;
+     list_init( &process->kernel_object );
+@@ -1432,6 +1434,26 @@ DECL_HANDLER(get_startup_info)
+ DECL_HANDLER(init_process_done)
+ {
+     struct process *process = current->process;
++    const struct cpu_topology_override *cpu_override = get_req_data();
++    unsigned int have_cpu_override = get_req_data_size() / sizeof(*cpu_override);
++    unsigned int i;
++
++    if (have_cpu_override)
++    {
++        if (cpu_override->cpu_count > ARRAY_SIZE(process->wine_cpu_id_from_host))
++        {
++            set_error( STATUS_INVALID_PARAMETER );
++            return;
++        }
++        for (i = 0; i < cpu_override->cpu_count; ++i)
++        {
++            if (cpu_override->host_cpu_id[i] >= ARRAY_SIZE(process->wine_cpu_id_from_host))
++            {
++                set_error( STATUS_INVALID_PARAMETER );
++                return;
++            }
++        }
++    }
+ 
+     if (is_process_init_done(process))
+     {
+@@ -1453,6 +1475,17 @@ DECL_HANDLER(init_process_done)
+         process->idle_event = create_event( NULL, NULL, 0, 1, 0, NULL );
+     if (process->debug_obj) set_process_debug_flag( process, 1 );
+     reply->suspend = (current->suspend || process->suspend);
++
++    if (have_cpu_override)
++    {
++        process->cpu_override = *cpu_override;
++        memset( process->wine_cpu_id_from_host, 0, sizeof(process->wine_cpu_id_from_host) );
++        for (i = 0; i < process->cpu_override.cpu_count; ++i)
++            process->wine_cpu_id_from_host[process->cpu_override.host_cpu_id[i]] = i;
++
++        if (!process->parent_id)
++            process->affinity = current->affinity = get_thread_affinity( current );
++    }
+ }
+ 
+ /* open a handle to a process */
+diff --git a/server/process.h b/server/process.h
+index ec74ba0..2c48471 100644
+--- a/server/process.h
++++ b/server/process.h
+@@ -87,6 +87,8 @@ struct process
+     struct list          kernel_object;   /* list of kernel object pointers */
+     struct pe_image_info image_info;      /* main exe image info */
+     int                  esync_fd;        /* esync file descriptor (signaled on exit) */
++    struct cpu_topology_override cpu_override; /* Overridden CPUs to host CPUs mapping. */
++    unsigned char   wine_cpu_id_from_host[64]; /* Host to overridden CPU mapping. */
+ };
+ 
+ /* process functions */
+diff --git a/server/protocol.def b/server/protocol.def
+index 6a8196d..55dada7 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -966,6 +966,12 @@ union udp_endpoint
+ /****************************************************************/
+ /* shared session mapping structures */
+ 
++struct cpu_topology_override
++{
++    unsigned int cpu_count;
++    unsigned char host_cpu_id[64];
++};
++
+ struct shared_cursor
+ {
+     int                  x;                /* cursor position */
+@@ -1091,6 +1097,7 @@ struct obj_locator
+     client_ptr_t peb;          /* PEB of new process (in process address space) */
+     client_ptr_t ldt_copy;     /* address of LDT copy (in process address space) */
+ @REPLY
++    VARARG(cpu_override,cpu_topology_override); /* Overridden CPUs to host CPUs mapping. */
+     int          suspend;      /* is process suspended? */
+ @END
+ 
+diff --git a/server/request_trace.h b/server/request_trace.h
+index cfefd49..fc0ad73 100644
+--- a/server/request_trace.h
++++ b/server/request_trace.h
+@@ -130,7 +130,8 @@ static void dump_init_process_done_request( const struct init_process_done_reque
+ 
+ static void dump_init_process_done_reply( const struct init_process_done_reply *req )
+ {
+-    fprintf( stderr, " suspend=%d", req->suspend );
++    dump_varargs_cpu_topology_override( " cpu_override=", cur_size );
++    fprintf( stderr, ", suspend=%d", req->suspend );
+ }
+ 
+ static void dump_init_first_thread_request( const struct init_first_thread_request *req )
+diff --git a/server/thread.c b/server/thread.c
+index 75bec00..3b84f77 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -603,8 +603,19 @@ int set_thread_affinity( struct thread *thread, affinity_t affinity )
+ 
+         CPU_ZERO( &set );
+         for (i = 0, mask = 1; mask; i++, mask <<= 1)
+-            if (affinity & mask) CPU_SET( i, &set );
+-
++            if (affinity & mask)
++            {
++                if (thread->process->cpu_override.cpu_count)
++                {
++                    if (i >= thread->process->cpu_override.cpu_count)
++                        break;
++                    CPU_SET( thread->process->cpu_override.host_cpu_id[i], &set );
++                }
++                else
++                {
++                    CPU_SET( i, &set );
++                }
++            }
+         ret = sched_setaffinity( thread->unix_tid, sizeof(set), &set );
+     }
+ #endif
+@@ -622,8 +633,21 @@ affinity_t get_thread_affinity( struct thread *thread )
+         unsigned int i;
+ 
+         if (!sched_getaffinity( thread->unix_tid, sizeof(set), &set ))
++        {
+             for (i = 0; i < 8 * sizeof(mask); i++)
+-                if (CPU_ISSET( i, &set )) mask |= (affinity_t)1 << i;
++                if (CPU_ISSET( i, &set ))
++                {
++                    if (thread->process->cpu_override.cpu_count)
++                    {
++                        if (i < ARRAY_SIZE(thread->process->wine_cpu_id_from_host))
++                            mask |= (affinity_t)1 << thread->process->wine_cpu_id_from_host[i];
++                    }
++                    else
++                    {
++                        mask |= (affinity_t)1 << i;
++                    }
++                }
++        }
+     }
+ #endif
+     if (!mask) mask = ~(affinity_t)0;
+diff --git a/server/thread.h b/server/thread.h
+index 52bcabb..188d8ff 100644
+--- a/server/thread.h
++++ b/server/thread.h
+@@ -126,6 +126,7 @@ extern int thread_add_inflight_fd( struct thread *thread, int client, int server
+ extern int thread_get_inflight_fd( struct thread *thread, int client );
+ extern struct token *thread_get_impersonation_token( struct thread *thread );
+ extern int set_thread_affinity( struct thread *thread, affinity_t affinity );
++extern affinity_t get_thread_affinity( struct thread *thread );
+ extern int suspend_thread( struct thread *thread );
+ extern int resume_thread( struct thread *thread );
+ 
+diff --git a/server/trace.c b/server/trace.c
+index 77a9143..4d21270 100644
+--- a/server/trace.c
++++ b/server/trace.c
+@@ -1540,6 +1540,25 @@ static void dump_varargs_directory_entries( const char *prefix, data_size_t size
+     fputc( '}', stderr );
+ }
+ 
++static void dump_varargs_cpu_topology_override( const char *prefix, data_size_t size )
++{
++    const struct cpu_topology_override *cpu_topology = cur_data;
++    unsigned int i;
++
++    if (size < sizeof(*cpu_topology))
++        return;
++
++    fprintf( stderr,"%s{", prefix );
++    for (i = 0; i < cpu_topology->cpu_count; ++i)
++    {
++        if (i) fputc( ',', stderr );
++        fprintf( stderr, "%u", cpu_topology->host_cpu_id[i] );
++    }
++    fputc( '}', stderr );
++    remove_data( size );
++
++}
++
+ static void dump_varargs_monitor_infos( const char *prefix, data_size_t size )
+ {
+     const struct monitor_info *monitor = cur_data;

@@ -1,0 +1,50 @@
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index 3d151e7..7951f54 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1565,25 +1565,36 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
+ /*******************************************************************
+  *		NtRaiseException (NTDLL.@)
+  */
+-NTSTATUS WINAPI NtRaiseException( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance )
++NTSTATUS WINAPI NtRaiseException(EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance)
+ {
+-    NTSTATUS status = send_debug_event( rec, context, first_chance, !(is_win64 || is_wow64() || is_old_wow64()) );
++    // Attempt to send a debug event, with a more lenient check condition
++    NTSTATUS status = send_debug_event(rec, context, first_chance, !(is_win64 || is_wow64() || is_old_wow64()));
+ 
++    // If the debug event handler has dealt with the exception, continue execution
+     if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
+-        return NtContinue( context, FALSE );
++        return NtContinue(context, FALSE);
+ 
+-    if (first_chance) return call_user_exception_dispatcher( rec, context );
++    // If this is the first chance exception, try to call the user exception dispatcher
++    if (first_chance) return call_user_exception_dispatcher(rec, context);
+ 
++    // More lenient handling: Log the exception but allow continuation unless it's noncontinuable
+     if (rec->ExceptionFlags & EXCEPTION_STACK_INVALID)
+-        ERR_(seh)("Exception frame is not in stack limits => unable to dispatch exception.\n");
++        WARN_(seh)("Exception frame is not in stack limits => attempting to continue.\n");
+     else if (rec->ExceptionCode == STATUS_NONCONTINUABLE_EXCEPTION)
+         ERR_(seh)("Process attempted to continue execution after noncontinuable exception.\n");
+     else
+-        ERR_(seh)("Unhandled exception code %x flags %x addr %p\n",
+-                  (int)rec->ExceptionCode, (int)rec->ExceptionFlags, rec->ExceptionAddress );
++        WARN_(seh)("Unhandled exception code %x flags %x addr %p\n",
++                  (int)rec->ExceptionCode, (int)rec->ExceptionFlags, rec->ExceptionAddress);
+ 
+-    NtTerminateProcess( NtCurrentProcess(), rec->ExceptionCode );
+-    return STATUS_SUCCESS;
++    // Only terminate the process if the exception is noncontinuable
++    if (rec->ExceptionCode == STATUS_NONCONTINUABLE_EXCEPTION)
++    {
++        NtTerminateProcess(NtCurrentProcess(), rec->ExceptionCode);
++        return STATUS_SUCCESS;
++    }
++
++    // Attempt to continue execution, even if the exception was not handled
++    return NtContinue(context, FALSE);
+ }
+ 
+ 
