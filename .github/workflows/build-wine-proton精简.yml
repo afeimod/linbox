@@ -10,6 +10,7 @@ on:
         default: 'proton_10.0'
         type: choice
         options:
+        - proton_10.0-rc
         - proton_10.0
         - proton_9.0
         - proton_8.0
