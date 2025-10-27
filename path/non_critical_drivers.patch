@@ -1,3 +1,10 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Termux Compatibility <termux@patch>
+Date: $(date +"%a, %d %b %Y %H:%M:%S %z")
+Subject: [PATCH] Add non-critical driver fallback
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 1234567..890abcd 100644
 --- a/dlls/ntdll/unix/server.c
 +++ b/dlls/ntdll/unix/server.c
 @@ -200,6 +200,36 @@

@@ -1,3 +1,10 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Termux Compatibility <termux@patch>
+Date: $(date +"%a, %d %b %Y %H:%M:%S %z")
+Subject: [PATCH] Add SHAPE extension fallback
+
+diff --git a/dlls/winex11.drv/shape.c b/dlls/winex11.drv/shape.c
+index 1234567..890abcd 100644
 --- a/dlls/winex11.drv/shape.c
 +++ b/dlls/winex11.drv/shape.c
 @@ -25,6 +25,8 @@
