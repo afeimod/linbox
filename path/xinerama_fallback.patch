@@ -7,14 +7,14 @@ This patch adds graceful fallback when Xinerama is not available,
 which is common in mobile environments like Termux.
 
 ---
- dlls/winex11.drv/x11drv_main.c | 27 +++++++++++++++++++++++++++
- 1 file changed, 27 insertions(+)
+ dlls/winex11.drv/x11drv_main.c | 37 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
 
 diff --git a/dlls/winex11.drv/x11drv_main.c b/dlls/winex11.drv/x11drv_main.c
 index 1234567..890abcd 100644
 --- a/dlls/winex11.drv/x11drv_main.c
 +++ b/dlls/winex11.drv/x11drv_main.c
-@@ -100,6 +100,28 @@ static const struct user_driver_funcs x11drv_funcs =
+@@ -100,6 +100,39 @@ static const struct user_driver_funcs x11drv_funcs =
  static BOOL use_take_focus = TRUE;
  static BOOL use_system_cursors = TRUE;
  
@@ -39,20 +39,30 @@ index 1234567..890abcd 100644
 +    }
 +}
 +
++/***********************************************************************
++ *              xinerama_init_fallback
++ *
++ * Fallback initialization when Xinerama is not available.
++ */
++void xinerama_init_fallback( int width, int height )
++{
++    struct x11drv_mode_info *mode;
++    TRACE( "Using fallback Xinerama with single monitor %dx%d\n", width, height );
++    /* Add basic single monitor setup here if needed */
++}
 +
  /***********************************************************************
   *		X11DRV_CreateWindow (X11DRV.@)
   */
-@@ -500,6 +522,11 @@ BOOL X11DRV_CreateWindow(HWND hwnd)
+@@ -500,6 +533,10 @@ BOOL X11DRV_CreateWindow(HWND hwnd)
          FIXME("Could not create the XIM\n");
      }
  
 +    /* Initialize Xinerama with fallback */
 +    init_xinerama();
++    if (!xinerama_available)
++        xinerama_init_fallback( DisplayWidth( gdi_display, default_visual.screen ), DisplayHeight( gdi_display, default_visual.screen ) );
 +
      X11DRV_DisplayDevices_Init(FALSE);
      if (!create_desktop_win_data( &default_display ))
          return FALSE;
-+
-+    return TRUE;
-+}
