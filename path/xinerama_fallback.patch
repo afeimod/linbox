@@ -53,5 +53,3 @@ index 1234567..890abcd 100644
      X11DRV_DisplayDevices_Init(FALSE);
      if (!create_desktop_win_data( &default_display ))
          return FALSE;
--- 
-2.34.1
