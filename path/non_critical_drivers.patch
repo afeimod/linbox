@@ -1,0 +1,39 @@
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -200,6 +200,36 @@
+     return ret;
+ }
+ 
++static BOOL is_non_critical_driver( const WCHAR *name )
++{
++    static const WCHAR *non_critical_drivers[] = {
++        L"winebus",
++        L"SharedGpuResources", 
++        L"winebth",
++        NULL
++    };
++    
++    for (int i = 0; non_critical_drivers[i]; i++) {
++        if (strcmpW(name, non_critical_drivers[i]) == 0)
++            return TRUE;
++    }
++    return FALSE;
++}
++
++static NTSTATUS load_driver_with_fallback( const WCHAR *name )
++{
++    NTSTATUS status = orig_load_driver(name);
++    
++    if (!NT_SUCCESS(status)) {
++        if (is_non_critical_driver(name)) {
++            WARN("Failed to load non-critical driver %s: %x, continuing...\n", debugstr_w(name), status);
++            return STATUS_SUCCESS;
++        }
++    }
++    
++    return status;
++}
++
+ /**********************************************************************
+  *           wine_server_call
+  */

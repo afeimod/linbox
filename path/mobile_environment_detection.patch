@@ -1,0 +1,21 @@
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -50,6 +50,18 @@
+ extern int CDECL call_signal_handler( int signal, EXCEPTION_RECORD *rec, CONTEXT *context );
+ extern void CDECL set_signal_handler( int signal, void (*handler)(int) );
+ 
++static inline BOOL is_mobile_environment(void)
++{
++    static int mobile_env = -1;
++    
++    if (mobile_env == -1) {
++        const char *android_env = getenv("ANDROID_ROOT");
++        mobile_env = (android_env != NULL);
++    }
++    
++    return mobile_env;
++}
++
+ /* server support */
+ extern int server_fd;
+ extern void CDECL server_init_process_done(void);

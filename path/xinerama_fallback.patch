@@ -1,0 +1,41 @@
+--- a/dlls/winex11.drv/x11drv_main.c
++++ b/dlls/winex11.drv/x11drv_main.c
+@@ -100,6 +100,28 @@
+ static BOOL use_take_focus = TRUE;
+ static BOOL use_system_cursors = TRUE;
+ 
++static BOOL xinerama_available = FALSE;
++
++static void init_xinerama(void)
++{
++    void *xinerama_handle;
++    
++    xinerama_handle = dlopen("libXinerama.so.1", RTLD_NOW);
++    if (!xinerama_handle) {
++        xinerama_handle = dlopen("libXinerama.so", RTLD_NOW);
++    }
++    
++    if (xinerama_handle) {
++        xinerama_available = TRUE;
++        dlclose(xinerama_handle);
++    } else {
++        WARN("libXinerama not available, continuing without multi-monitor support\n");
++        xinerama_available = FALSE;
++    }
++}
++
++
++
+ /***********************************************************************
+  *		X11DRV_CreateWindow (X11DRV.@)
+  */
+@@ -500,6 +522,9 @@
+         FIXME("Could not create the XIM\n");
+     }
+ 
++    /* Initialize Xinerama with fallback */
++    init_xinerama();
++
+     X11DRV_DisplayDevices_Init(FALSE);
+     if (!create_desktop_win_data( &default_display ))
+         return FALSE;

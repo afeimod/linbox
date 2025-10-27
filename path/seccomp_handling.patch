@@ -1,0 +1,18 @@
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2500,6 +2500,16 @@
+ 
+ int install_bpf(struct sigaction *old_act)
+ {
++    if (are_libs_in_low_addresses()) {
++        static int warned = 0;
++        if (!warned) {
++            WARN("Native libraries loaded in low addresses, disabling seccomp for compatibility\n");
++            warned = 1;
++        }
++        return 0;
++    }
++    
+     struct sock_filter filter[] = {
+         /* TODO: add more syscalls. */
+         VALIDATE_SYSCALL(rt_sigreturn),

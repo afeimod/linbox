@@ -1,0 +1,42 @@
+--- a/dlls/winex11.drv/shape.c
++++ b/dlls/winex11.drv/shape.c
+@@ -25,6 +25,8 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(x11drv);
+ 
++static BOOL shape_available = FALSE;
++
+ /***********************************************************************
+  *           X11DRV_GetShapeData
+  */
+@@ -39,6 +41,18 @@
+     return data;
+ }
+ 
++void init_shape_extension(Display *display)
++{
++    int event_base, error_base;
++    
++    if (XShapeQueryExtension(display, &event_base, &error_base)) {
++        shape_available = TRUE;
++        TRACE("SHAPE extension available\n");
++    } else {
++        WARN("SHAPE extension not available, continuing without shaped windows\n");
++        shape_available = FALSE;
++    }
++}
+ 
+ /***********************************************************************
+  *           X11DRV_SetWindowShape
+@@ -47,6 +61,11 @@
+ void X11DRV_SetWindowShape( Display *display, Window window, HRGN shape_region,
+                             int shape_type )
+ {
++    if (!shape_available) {
++        TRACE("SHAPE extension disabled, skipping window shaping\n");
++        return;
++    }
++    
+     if (shape_region)
+         XShapeCombineRegion( display, window, shape_type, 0, 0,
+                              x11_region_to_xregion( shape_region ), ShapeSet );
