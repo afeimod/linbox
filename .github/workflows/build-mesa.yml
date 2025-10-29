@@ -137,6 +137,7 @@ jobs:
           -Dglvnd=disabled \
           -Degl=enabled \
           -Dllvm=disabled \
+          -Doptimization=3 \
           -Dshared-llvm=disabled \
           -Dshader-cache=enabled \
           -Dxlib-lease=enabled \
