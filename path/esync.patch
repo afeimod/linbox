@@ -1,5 +1,5 @@
-diff -uraN wine/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
---- wine/dlls/ntdll/unix/esync.c	2024-01-15 04:26:12.000000000 -0500
+diff -uraN dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+--- dlls/ntdll/unix/esync.c	2024-01-15 04:26:12.000000000 -0500
 +++ b/dlls/ntdll/unix/esync.c	2024-01-15 06:27:30.967565423 -0500
 @@ -97,7 +97,8 @@
  };
@@ -42,8 +42,8 @@ diff -uraN wine/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
      {
          /* probably the server isn't running with WINEESYNC, tell the user and bail */
          if (errno == ENOENT)
-diff -uraN wine/programs/winebrowser/main.c b/programs/winebrowser/main.c
---- wine/programs/winebrowser/main.c	2024-01-15 04:26:14.000000000 -0500
+diff -uraN programs/winebrowser/main.c b/programs/winebrowser/main.c
+--- programs/winebrowser/main.c	2024-01-15 04:26:14.000000000 -0500
 +++ b/programs/winebrowser/main.c	2024-01-15 05:58:50.272054376 -0500
 @@ -116,7 +116,7 @@
  {
@@ -63,8 +63,8 @@ diff -uraN wine/programs/winebrowser/main.c b/programs/winebrowser/main.c
          "xdg-email\0"
          "mozilla-thunderbird\0"
          "thunderbird\0"
-diff -uraN wine/server/esync.c b/server/esync.c
---- wine/server/esync.c	2024-01-15 04:26:14.000000000 -0500
+diff -uraN server/esync.c b/server/esync.c
+--- server/esync.c	2024-01-15 04:26:14.000000000 -0500
 +++ b/server/esync.c	2024-01-15 06:27:55.759726857 -0500
 @@ -59,17 +59,18 @@
  #endif
@@ -122,10 +122,10 @@ diff -uraN wine/server/esync.c b/server/esync.c
      if (shm_fd == -1)
          perror( "shm_open" );
  
-diff --git a/wine/server/unicode.c b/server/unicode.c
+diff --git a/server/unicode.c b/server/unicode.c
 index b486431..d5c556d 100644
---- a/wine/server/unicode.c
-+++ b/wine/server/unicode.c
+--- a/server/unicode.c
++++ b/server/unicode.c
 @@ -313,7 +313,7 @@ static char *get_nls_dir(void)
  /* load the case mapping table */
  struct fd *load_intl_file(void)
