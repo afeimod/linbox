@@ -1,5 +1,5 @@
-diff -uraN wine-src/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
---- wine-src/dlls/ntdll/unix/esync.c	2024-01-15 04:26:12.000000000 -0500
+diff -uraN wine/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+--- wine/dlls/ntdll/unix/esync.c	2024-01-15 04:26:12.000000000 -0500
 +++ b/dlls/ntdll/unix/esync.c	2024-01-15 06:27:30.967565423 -0500
 @@ -97,7 +97,8 @@
  };
@@ -11,7 +11,7 @@ diff -uraN wine-src/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
  static int shm_fd;
  static void **shm_addrs;
  static int shm_addrs_size;  /* length of the allocated shm_addrs array */
-@@ -1332,13 +1332,25 @@
+@@ -1332,13 +1333,25 @@
  
      if (stat( config_dir, &st ) == -1)
          ERR("Cannot stat %s\n", config_dir);
@@ -42,8 +42,8 @@ diff -uraN wine-src/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
      {
          /* probably the server isn't running with WINEESYNC, tell the user and bail */
          if (errno == ENOENT)
-diff -uraN wine-src/programs/winebrowser/main.c b/programs/winebrowser/main.c
---- wine-src/programs/winebrowser/main.c	2024-01-15 04:26:14.000000000 -0500
+diff -uraN wine/programs/winebrowser/main.c b/programs/winebrowser/main.c
+--- wine/programs/winebrowser/main.c	2024-01-15 04:26:14.000000000 -0500
 +++ b/programs/winebrowser/main.c	2024-01-15 05:58:50.272054376 -0500
 @@ -116,7 +116,7 @@
  {
@@ -63,8 +63,8 @@ diff -uraN wine-src/programs/winebrowser/main.c b/programs/winebrowser/main.c
          "xdg-email\0"
          "mozilla-thunderbird\0"
          "thunderbird\0"
-diff -uraN wine-src/server/esync.c b/server/esync.c
---- wine-src/server/esync.c	2024-01-15 04:26:14.000000000 -0500
+diff -uraN wine/server/esync.c b/server/esync.c
+--- wine/server/esync.c	2024-01-15 04:26:14.000000000 -0500
 +++ b/server/esync.c	2024-01-15 06:27:55.759726857 -0500
 @@ -59,17 +59,18 @@
  #endif
@@ -122,10 +122,10 @@ diff -uraN wine-src/server/esync.c b/server/esync.c
      if (shm_fd == -1)
          perror( "shm_open" );
  
-diff --git a/server/unicode.c b/server/unicode.c
+diff --git a/wine/server/unicode.c b/server/unicode.c
 index b486431..d5c556d 100644
---- a/server/unicode.c
-+++ b/server/unicode.c
+--- a/wine/server/unicode.c
++++ b/wine/server/unicode.c
 @@ -313,7 +313,7 @@ static char *get_nls_dir(void)
  /* load the case mapping table */
  struct fd *load_intl_file(void)
