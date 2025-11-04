@@ -118,7 +118,7 @@ jobs:
       run: |
         cd mesa
         sudo mkdir -p /opt/mesa
-        sudo chmod 777 -R /data
+        sudo chmod 777 -R /opt
 
         mkdir -p builddir
         
