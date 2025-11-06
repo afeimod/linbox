@@ -1,0 +1,17 @@
+--- a/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
++++ b/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
+@@ -149,8 +149,12 @@
+ 
+ const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
+     .name      = "pcm_reorder",
+-    .init      = init,
+-    .priv_class = &pcm_byte_order_reverse_bsf_class,
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 35, 0)
++    .priv_class = NULL,
++#else
++    .priv_class = &pcm_byte_order_reverse_bsf_class,
++#endif
++    .init      = init,
+ };
+ 
+ #endif /* HAVE_GSTREAMER */
