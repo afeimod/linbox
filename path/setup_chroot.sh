@@ -42,7 +42,9 @@ apt install -y \
   libasound2-dev libasound2-dev:i386 \
   libpulse-dev libpulse-dev:i386 \
   libvulkan-dev libvulkan-dev:i386
-
+apt update
+apt install -f liborc-0.4-dev -y
+apt install -y libunwind-dev
 # 安装 GStreamer（因为配置中有 --with-gstreamer）
 apt install -y \
   libgstreamer1.0-dev \
