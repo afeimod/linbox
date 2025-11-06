@@ -44,6 +44,7 @@ apt install -y \
   libvulkan-dev libvulkan-dev:i386
 apt update
 apt install -f liborc-0.4-dev -y
+apt install -f liborc-0.4-dev:i386 -y
 apt install -y libunwind-dev
 # 安装 GStreamer（因为配置中有 --with-gstreamer）
 apt install -y \
