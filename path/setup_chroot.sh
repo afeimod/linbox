@@ -39,6 +39,10 @@ apt install -y \
   libpcsclite-dev libacl1-dev libxml2-dev libxslt1-dev \
   libvulkan-dev
 
+# 安装 ORC 工具（解决依赖问题）- 使用正确的包名
+echo "安装 ORC 工具..."
+apt install -y liborc-0.4-0 liborc-0.4-dev
+
 # 安装多媒体相关库（64位）
 echo "安装多媒体库（64位）..."
 apt install -y \
@@ -52,9 +56,6 @@ apt install -y \
   gstreamer1.0-libav \
   libmpg123-dev \
   libopenal-dev
-
-# 安装 ORC 工具（解决依赖问题）
-apt install -y orc liborc-0.4-0 liborc-0.4-dev
 
 # 安装 GCC 11 和构建工具
 echo "安装 GCC 11..."
@@ -77,6 +78,9 @@ apt install -y \
   libcups2-dev:i386 libosmesa6-dev:i386 \
   libxml2-dev:i386 libxslt1-dev:i386
 
+# 安装32位 ORC 工具
+apt install -y liborc-0.4-0:i386 liborc-0.4-dev:i386
+
 # 安装32位多媒体库
 echo "安装32位多媒体库..."
 apt install -y \
@@ -85,9 +89,6 @@ apt install -y \
   libgstreamer-plugins-good1.0-dev:i386 \
   libmpg123-dev:i386 \
   libopenal-dev:i386
-
-# 安装32位 ORC 工具
-apt install -y liborc-0.4-0:i386 liborc-0.4-dev:i386
 
 # 安装交叉编译器
 echo "安装交叉编译器..."
