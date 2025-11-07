@@ -57,8 +57,7 @@ apt install -y ccache bubblewrap
 echo "验证安装..."
 gcc --version
 g++ --version
-x86_64-w64-mingw32-gcc --version
-i686-w64-mingw32-gcc --version
+
 
 echo "验证 GStreamer 安装..."
 pkg-config --modversion gstreamer-1.0
