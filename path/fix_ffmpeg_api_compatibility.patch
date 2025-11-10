@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Build Fix <build@github.com>
+Date: $(date)
+Subject: [PATCH] Fix FFmpeg API compatibility for PCM byte order reverse BSF
+
+Add priv_class field to AVBitStreamFilter structure for newer FFmpeg versions
+
+diff --git a/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c b/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
+index 1234567..abcdefg 100644
+--- a/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
++++ b/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
+@@ -146,10 +146,17 @@ static const enum AVCodecID codec_ids[] = {
+     AV_CODEC_ID_NONE,
+ };
+ 
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 35, 100)
++const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
++    .name           = "pcm_byte_order_reverse",
++    .filter         = byte_order_reverse_filter,
++    .init           = init,
++    .codec_ids      = codec_ids,
++    .priv_class     = NULL,
++};
++#else
+ const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
+     .name           = "pcm_byte_order_reverse",
+     .filter         = byte_order_reverse_filter,
+     .init           = init,
+     .codec_ids      = codec_ids,
+ };
+-
+-#endif /* HAVE_FFMPEG */
++#endif
