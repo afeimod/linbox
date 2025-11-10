@@ -1,21 +1,117 @@
 --- a/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
 +++ b/dlls/winedmo/libavcodec/pcm_byte_order_reverse_bsf.c
-@@ -149,7 +149,15 @@ static const enum AVCodecID codec_ids[] = {
+@@ -24,19 +24,37 @@
+ 
+ #ifdef HAVE_FFMPEG
+ 
+-#define IS_EMPTY(pkt) (!(pkt)->data && !(pkt)->side_data_elems)
++/* FFmpeg API 兼容性修复 */
++#if LIBAVCODEC_VERSION_MAJOR >= 59
++/* FFmpeg 5.0+ 使用新的 BSF API */
+ 
+-struct AVBSFInternal {
+-    AVPacket *buffer_pkt;
+-    int eof;
+-};
++static int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
++{
++    return av_bsf_receive_packet(ctx, *pkt);
++}
+ 
+-/* From FFmpeg */
+-int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
++#else
++/* 旧版 FFmpeg API */
++
++#define IS_EMPTY(pkt) (!(pkt)->data && !(pkt)->side_data_elems)
++
++#if LIBAVCODEC_VERSION_MAJOR >= 58
++/* FFmpeg 4.0+ */
++struct AVBSFInternal {
++    AVPacket *buffer_pkt;
++    int eof;
++};
++
++static int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
+ {
+     AVBSFInternal *bsfi = ctx->internal;
+     AVPacket *tmp_pkt;
+ 
++    /* 如果 internal 不存在，使用新的 API */
++    if (!bsfi) {
++        return av_bsf_receive_packet(ctx, *pkt);
++    }
++
+     if (bsfi->eof)
+         return AVERROR_EOF;
+ 
+@@ -53,6 +71,28 @@ int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
+ 
+     return 0;
+ }
++#else
++/* FFmpeg 3.x 及更早版本 */
++static int ff_bsf_get_packet(AVBSFContext *ctx, AVPacket **pkt)
++{
++    /* 对于旧版本，我们直接使用简单的数据复制 */
++    AVPacket *tmp_pkt = av_packet_alloc();
++    if (!tmp_pkt)
++        return AVERROR(ENOMEM);
++    
++    int ret = av_bsf_receive_packet(ctx, tmp_pkt);
++    if (ret < 0) {
++        av_packet_free(&tmp_pkt);
++        return ret;
++    }
++    
++    *pkt = tmp_pkt;
++    return 0;
++}
++#endif
++
++#endif
++
+ 
+ static enum AVCodecID reverse_codec_id(enum AVCodecID codec_id)
+ {
+@@ -77,7 +117,11 @@ static enum AVCodecID reverse_codec_id(enum AVCodecID codec_id)
+ 
+ static int init(AVBSFContext *ctx)
+ {
++#if LIBAVCODEC_VERSION_MAJOR >= 59
++    if (ctx->par_in->ch_layout.nb_channels <= 0 || ctx->par_in->sample_rate <= 0)
++#else
+     if (ctx->par_in->channels <= 0 || ctx->par_in->sample_rate <= 0)
++#endif
+         return AVERROR(EINVAL);
+     if (ctx->par_in->bits_per_coded_sample % 8u)
+         return AVERROR(EINVAL);
+@@ -149,10 +193,25 @@ static const enum AVCodecID codec_ids[] = {
      AV_CODEC_ID_NONE,
  };
  
-+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 35, 100)
-+const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
-+    .name           = "pcm_byte_order_reverse",
-+    .filter         = byte_order_reverse_filter,
-+    .init           = init,
-+    .codec_ids      = codec_ids,
-+    .priv_class     = NULL,
-+#else
++#if LIBAVCODEC_VERSION_MAJOR >= 58
++/* FFmpeg 4.0+ 使用新的过滤器结构 */
  const AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
      .name           = "pcm_byte_order_reverse",
-     .filter         = byte_order_reverse_filter,
-     .init           = init,
+-    .filter         = byte_order_reverse_filter,
+-    .init           = init,
      .codec_ids      = codec_ids,
-+#endif
+     .priv_class     = NULL,
  };
++#else
++/* FFmpeg 3.x 及更早版本 */
++AVBitStreamFilter ff_pcm_byte_order_reverse_bsf = {
++    .name           = "pcm_byte_order_reverse",
++    .codec_ids      = codec_ids,
++};
++#endif
++
++/* 手动注册过滤函数 */
++void register_pcm_byte_order_reverse_bsf(void)
++{
++    ff_pcm_byte_order_reverse_bsf.filter = byte_order_reverse_filter;
++    ff_pcm_byte_order_reverse_bsf.init = init;
++}
+ 
++#endif /* HAVE_FFMPEG */
