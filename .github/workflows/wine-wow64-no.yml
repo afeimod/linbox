@@ -154,7 +154,7 @@ jobs:
           cd $BUILD_DIR/proton
           
           # 克隆 Proton 源码
-          git clone https://github.com/ValveSoftware/wine
+          git clone https://github.com/afeimod/wine
           cd wine
           
           # 切换到指定的 Proton 分支
