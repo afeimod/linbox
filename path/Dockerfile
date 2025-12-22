@@ -112,10 +112,6 @@ COPY wine_do_not_create_dxgi_manager2.patch $BUILD_DIR/
 RUN cd wine-source && \
     patch -p1 < ../wine_do_not_create_dxgi_manager2.patch || echo "补丁可能已应用或不需要"
 
-# 生成configure脚本
-RUN cd wine-source && \
-    ./autogen.sh
-
 # 构建64位工具链
 RUN mkdir -p $BUILD_DIR/wine64-build && \
     cd $BUILD_DIR/wine64-build && \
