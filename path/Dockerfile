@@ -7,8 +7,9 @@ ENV INSTALL_DIR=/opt/wine-arm64
 ENV LLVMMINGW_NAME=llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
 ENV WINE_VERSION=wine-10.16
 
-# 添加ARM64架构并更新源
+# 添加所有需要的架构
 RUN dpkg --add-architecture arm64 && \
+    dpkg --add-architecture amd64 && \
     echo "deb [arch=amd64] http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list && \
     echo "deb [arch=amd64] http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list && \
     echo "deb [arch=amd64] http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list && \
@@ -16,7 +17,7 @@ RUN dpkg --add-architecture arm64 && \
     echo "deb [arch=arm64] http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list && \
     echo "deb [arch=arm64] http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
 
-# 安装基础工具
+# 安装基础工具（amd64架构）
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
@@ -45,7 +46,56 @@ RUN apt-get install -y \
     binutils-aarch64-linux-gnu \
     libc-dev-arm64-cross
 
-# 安装Wine依赖（ARM64版本）
+# 安装amd64架构的依赖（用于构建64位工具链）
+RUN apt-get install -y \
+    libx11-dev:amd64 \
+    libfreetype-dev:amd64 \
+    libfontconfig-dev:amd64 \
+    libxinerama-dev:amd64 \
+    libxcursor-dev:amd64 \
+    libxi-dev:amd64 \
+    libxrandr-dev:amd64 \
+    libxrender-dev:amd64 \
+    libxfixes-dev:amd64 \
+    libxcomposite-dev:amd64 \
+    libxshmfence-dev:amd64 \
+    libxxf86vm-dev:amd64 \
+    libwayland-dev:amd64 \
+    libxkbcommon-dev:amd64 \
+    libxkbregistry-dev:amd64 \
+    libdbus-1-dev:amd64 \
+    libsane-dev:amd64 \
+    libusb-1.0-0-dev:amd64 \
+    libv4l-dev:amd64 \
+    libpulse-dev:amd64 \
+    libgstreamer1.0-dev:amd64 \
+    libgstreamer-plugins-base1.0-dev:amd64 \
+    libgstreamer-plugins-bad1.0-dev:amd64 \
+    libudev-dev:amd64 \
+    libunwind-dev:amd64 \
+    libsdl2-dev:amd64 \
+    libfontconfig1-dev:amd64 \
+    libkrb5-dev:amd64 \
+    libvulkan-dev:amd64 \
+    libgl-dev:amd64 \
+    libgnutls28-dev:amd64 \
+    libcups2-dev:amd64 \
+    libepoxy-dev:amd64 \
+    libgphoto2-dev:amd64 \
+    liblcms2-dev:amd64 \
+    libldap2-dev:amd64 \
+    libopenal-dev:amd64 \
+    libcapi20-dev:amd64 \
+    libgsm1-dev:amd64 \
+    libmpg123-dev:amd64 \
+    libosmesa6-dev:amd64 \
+    libpcap-dev:amd64 \
+    libpng-dev:amd64 \
+    libvkd3d-dev:amd64 \
+    libva-dev:amd64 \
+    libvpx-dev:amd64
+
+# 安装ARM64架构的依赖（用于交叉编译）
 RUN apt-get install -y \
     libx11-dev:arm64 \
     libfreetype-dev:arm64 \
