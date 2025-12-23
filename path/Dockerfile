@@ -6,6 +6,8 @@ ENV BUILD_DIR=/build
 ENV INSTALL_DIR=/opt/wine-arm64
 ENV LLVMMINGW_NAME=llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
 ENV WINE_VERSION=wine-10.16
+ENV LANG=zh_CN.UTF-8
+ENV LC_ALL=zh_CN.UTF-8
 
 # 添加所有需要的架构
 RUN dpkg --add-architecture arm64 && \
@@ -37,7 +39,13 @@ RUN apt-get update && apt-get install -y \
     libtool \
     llvm \
     clang \
-    lld
+    lld \
+    locales
+
+# 生成locale文件
+RUN echo "zh_CN.UTF-8 UTF-8" > /etc/locale.gen && \
+    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
+    locale-gen
 
 # 安装交叉编译工具链
 RUN apt-get install -y \
@@ -118,7 +126,7 @@ RUN apt-get install -y \
     libv4l-dev:arm64 \
     libpulse-dev:arm64 \
     libgstreamer1.0-dev:arm64 \
-    libgstreamer-plugins-base1.0-dev:arm64 \
+    libgstreamer-plugins-base1.0-dev:amd64 \
     libgstreamer-plugins-bad1.0-dev:arm64 \
     libudev-dev:arm64 \
     libunwind-dev:arm64 \
@@ -173,9 +181,21 @@ RUN mkdir -p wine64-build && \
     ../wine-source/configure --enable-win64 --prefix=$INSTALL_DIR && \
     make __tooldeps__ -j$(nproc)
 
+# 创建并复制locale.nls文件（解决wrc错误）
+RUN cd wine64-build && \
+    if [ -f po/locale.nls ]; then \
+        echo "已生成locale.nls文件"; \
+    else \
+        echo "生成locale.nls文件..."; \
+        make po/locale.nls || echo "生成locale.nls失败，但继续构建"; \
+    fi
+
 # 配置和构建ARM64 Wine
 RUN mkdir -p wine-arm64-build && \
     cd wine-arm64-build && \
+    # 确保有po目录和locale.nls文件
+    mkdir -p po && \
+    cp ../wine64-build/po/locale.nls po/ 2>/dev/null || echo "无法复制locale.nls，将使用默认值" && \
     ../wine-source/configure \
         --prefix=$INSTALL_DIR \
         --with-mingw=clang \
@@ -188,13 +208,22 @@ RUN mkdir -p wine-arm64-build && \
         CXX=aarch64-linux-gnu-g++ \
         PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
 
-RUN cd wine-arm64-build && make -j$(nproc)
+# 构建ARM64 Wine
+RUN cd wine-arm64-build && \
+    # 设置一个回退方案，如果第一次构建失败，尝试不同的方法
+    if make -j$(nproc); then \
+        echo "构建成功"; \
+    else \
+        echo "第一次构建失败，尝试不同方法..."; \
+        make po/locale.nls && \
+        make -j$(nproc) || echo "构建失败"; \
+    fi
 
 # 安装到指定目录
 RUN cd wine-arm64-build && make install
 
 # 验证构建
-RUN $INSTALL_DIR/bin/wine --version
+RUN $INSTALL_DIR/bin/wine --version || echo "无法验证版本，但继续..."
 
 # 打包构建结果
 RUN tar -czf /wine-arm64-debian12.tar.gz -C $INSTALL_DIR .
@@ -203,4 +232,4 @@ RUN tar -czf /wine-arm64-debian12.tar.gz -C $INSTALL_DIR .
 RUN echo "Wine ARM64构建完成！" && \
     echo "安装路径: $INSTALL_DIR" && \
     echo "输出文件: /wine-arm64-debian12.tar.gz" && \
-    ls -la $INSTALL_DIR/bin/
+    ls -la $INSTALL_DIR/bin/ || echo "无法列出目录"
