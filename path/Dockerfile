@@ -39,13 +39,7 @@ RUN apt-get update && apt-get install -y \
     libtool \
     llvm \
     clang \
-    lld \
-    locales
-
-# 生成locale文件
-RUN echo "zh_CN.UTF-8 UTF-8" > /etc/locale.gen && \
-    echo "en_US.UTF-8 UTF-8" >> /etc/locale.gen && \
-    locale-gen
+    lld
 
 # 安装交叉编译工具链
 RUN apt-get install -y \
@@ -126,7 +120,7 @@ RUN apt-get install -y \
     libv4l-dev:arm64 \
     libpulse-dev:arm64 \
     libgstreamer1.0-dev:arm64 \
-    libgstreamer-plugins-base1.0-dev:amd64 \
+    libgstreamer-plugins-base1.0-dev:arm64 \
     libgstreamer-plugins-bad1.0-dev:arm64 \
     libudev-dev:arm64 \
     libunwind-dev:arm64 \
