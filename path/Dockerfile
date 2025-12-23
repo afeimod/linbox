@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV BUILD_DIR=/build
 ENV INSTALL_DIR=/opt/wine-arm64
 ENV LLVMMINGW_NAME=llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
+ENV WINE_VERSION=wine-10.16
 
 # 添加ARM64架构并更新源
 RUN dpkg --add-architecture arm64 && \
@@ -104,24 +105,28 @@ ENV PATH="/opt/$LLVMMINGW_NAME/bin:$PATH"
 # 创建工作目录
 WORKDIR $BUILD_DIR
 
-# 复制Wine源代码和补丁
-COPY wine/ $BUILD_DIR/wine/
-COPY wine_do_not_create_dxgi_manager2.patch $BUILD_DIR/
+# 下载Wine源代码
+RUN echo "下载Wine源代码 (版本: $WINE_VERSION)..." && \
+    git clone --depth 1 --branch $WINE_VERSION https://github.com/wine-mirror/wine.git wine-source
+
+# 下载补丁
+RUN echo "下载补丁文件..." && \
+    wget -O wine_do_not_create_dxgi_manager2.patch https://github.com/afeimod/linbox/raw/main/path/wine_do_not_create_dxgi_manager2.patch
 
 # 应用补丁
-RUN cd wine && \
+RUN cd wine-source && \
     patch -p1 < ../wine_do_not_create_dxgi_manager2.patch || echo "补丁可能已应用或不需要"
 
-# 构建64位工具链 - 修复路径：使用正确的configure路径
-RUN mkdir -p $BUILD_DIR/wine64-build && \
-    cd $BUILD_DIR/wine64-build && \
-    $BUILD_DIR/wine/configure --enable-win64 --prefix=$INSTALL_DIR && \
+# 构建64位工具链
+RUN mkdir -p wine64-build && \
+    cd wine64-build && \
+    ../wine-source/configure --enable-win64 --prefix=$INSTALL_DIR && \
     make __tooldeps__ -j$(nproc)
 
 # 配置和构建ARM64 Wine
-RUN mkdir -p $BUILD_DIR/wine-arm64-build && \
-    cd $BUILD_DIR/wine-arm64-build && \
-    $BUILD_DIR/wine/configure \
+RUN mkdir -p wine-arm64-build && \
+    cd wine-arm64-build && \
+    ../wine-source/configure \
         --prefix=$INSTALL_DIR \
         --with-mingw=clang \
         --enable-archs=arm64ec,aarch64,i386 \
@@ -133,10 +138,10 @@ RUN mkdir -p $BUILD_DIR/wine-arm64-build && \
         CXX=aarch64-linux-gnu-g++ \
         PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
 
-RUN cd $BUILD_DIR/wine-arm64-build && make -j$(nproc)
+RUN cd wine-arm64-build && make -j$(nproc)
 
 # 安装到指定目录
-RUN cd $BUILD_DIR/wine-arm64-build && make install
+RUN cd wine-arm64-build && make install
 
 # 验证构建
 RUN $INSTALL_DIR/bin/wine --version
