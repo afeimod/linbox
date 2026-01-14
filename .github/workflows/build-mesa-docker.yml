@@ -1,5 +1,5 @@
 # build-mesa-docker.yml
-name: Build Mesa for Linbox (aarch64) with Docker
+name: docker(aarch64) with Docker
 
 on:
   workflow_dispatch:
