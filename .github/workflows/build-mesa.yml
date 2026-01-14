@@ -148,7 +148,7 @@ jobs:
           -Doptimization=3 \
           -Dcpp_args="-O3 -march=native -mtune=native" \
           -Dc_args="-O3 -march=native -mtune=native" \
-          -Db_lto=true \
+          -Db_lto=flase \
           -Dplatforms=x11 \
           -Degl-native-platform=x11 \
           -Dglx=dri \
