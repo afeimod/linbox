@@ -148,7 +148,7 @@ jobs:
           -Doptimization=3 \
           -Dcpp_args="-O3 -march=native -mtune=native" \
           -Dc_args="-O3 -march=native -mtune=native" \
-          -Db_lto=false \
+          -Db_lto=true \
           -Dplatforms=x11 \
           -Degl-native-platform=x11 \
           -Dglx=dri \
@@ -169,10 +169,10 @@ jobs:
           -Dmicrosoft-clc=disabled \
           -Dgallium-rusticl=false \
           -Dgallium-extra-hud=true \
-          -Dgallium-drivers=freedreno,llvmpipe \
+          -Dgallium-drivers=zink,freedreno,llvmpipe,softpipe \
           -Dgallium-rusticl-enable-drivers=freedreno \
           -Dshader-cache-default=true \
-          -Dvulkan-drivers=freedreno \
+          -Dvulkan-drivers=freedreno,swrast \
           -Dfreedreno-kmds=msm,kgsl \
           -Dvideo-codecs=all \
           -Dmediafoundation-codecs=all \

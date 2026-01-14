@@ -1,0 +1,373 @@
+# build-mesa-docker.yml
+name: docker (aarch64) with Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_branch:
+        description: 'Mesa 分支 (可选，默认为 adreno-main)'
+        required: false
+        default: 'adreno-main'
+        type: string
+      use_upstream:
+        description: '是否使用上游官方 Mesa (而不是 lfdevs 的分支)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: write
+
+env:
+  # 使用多阶段构建的 Docker 镜像
+  DOCKER_BUILDKIT: 1
+  DOCKER_IMAGE: ghcr.io/debian/triplet:bookworm-slim
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  # 使用标准 x86_64 runner，通过 Docker 交叉编译
+    
+    steps:
+    - name: 设置构建参数
+      id: setup
+      run: |
+        # 设置默认参数
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "MESA_BRANCH=${{ github.event.inputs.mesa_branch }}" >> $GITHUB_ENV
+          echo "USE_UPSTREAM=${{ github.event.inputs.use_upstream }}" >> $GITHUB_ENV
+        else
+          echo "MESA_BRANCH=adreno-main" >> $GITHUB_ENV
+          echo "USE_UPSTREAM=false" >> $GITHUB_ENV
+        fi
+        
+        BUILD_DATE=$(date +%Y%m%d)
+        echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+        
+        # 设置目标架构
+        echo "TARGET_ARCH=aarch64-linux-gnu" >> $GITHUB_ENV
+        echo "HOST_ARCH=$(uname -m)" >> $GITHUB_ENV
+        
+        echo "使用的 Mesa 分支: $MESA_BRANCH"
+        echo "是否使用上游: $USE_UPSTREAM"
+        echo "构建日期: $BUILD_DATE"
+        echo "目标架构: $TARGET_ARCH"
+        echo "主机架构: $HOST_ARCH"
+
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 设置 QEMU 用于跨架构编译
+      uses: docker/setup-qemu-action@v3
+
+    - name: 设置 Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 创建构建脚本
+      run: |
+        cat > build-mesa-docker.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🔧 配置交叉编译环境..."
+        
+        # 更新系统并安装必要工具
+        apt-get update
+        apt-get install -y \
+            git build-essential python3 python3-pip python3-setuptools \
+            meson ninja-build pkg-config bison flex libwayland-dev \
+            wayland-protocols libwayland-egl-backend-dev libx11-dev \
+            libx11-xcb-dev libxext-dev libxdamage-dev libxfixes-dev \
+            libxcb-glx0-dev libxcb-dri2-0-dev libxcb-dri3-dev \
+            libxcb-present-dev libxcb-shm0-dev libxcb-sync-dev \
+            libxrandr-dev libxxf86vm-dev libdrm-dev x11proto-dri2-dev \
+            x11proto-dri3-dev x11proto-present-dev x11proto-xext-dev \
+            x11proto-xf86vidmode-dev libxshmfence-dev libvulkan-dev \
+            libelf-dev libexpat1-dev libxml2-dev libz-dev libunwind-dev \
+            libgles2-mesa-dev libegl1-mesa-dev libgbm-dev \
+            llvm-19 llvm-19-dev clang-19 libclang-19-dev \
+            crossbuild-essential-arm64
+        
+        # 安装 Python 构建工具
+        pip3 install meson mako
+        
+        echo "📥 克隆 Mesa 仓库..."
+        
+        if [ "$USE_UPSTREAM" = "true" ]; then
+          echo "使用上游官方 Mesa 仓库"
+          git clone https://gitlab.freedesktop.org/mesa/mesa.git
+          cd mesa
+        else
+          echo "使用 lfdevs 的 Mesa for Android Container 仓库"
+          git clone https://github.com/lfdevs/mesa-for-android-container.git mesa
+          cd mesa
+          
+          # 检出指定分支
+          if [ -n "$MESA_BRANCH" ] && [ "$MESA_BRANCH" != "main" ]; then
+            echo "检出分支: $MESA_BRANCH"
+            git checkout $MESA_BRANCH
+          fi
+        fi
+        
+        # 获取版本信息
+        GIT_HASH=$(git rev-parse --short HEAD)
+        if [ -f "VERSION" ]; then
+          OFFICIAL_VERSION=$(cat VERSION)
+        else
+          OFFICIAL_VERSION="git-$GIT_HASH"
+        fi
+        
+        echo "MESA_VERSION=$OFFICIAL_VERSION" >> /tmp/build_env.txt
+        echo "MESA_GIT_HASH=$GIT_HASH" >> /tmp/build_env.txt
+        
+        echo "🔨 配置交叉编译..."
+        
+        # 创建构建目录
+        mkdir -p build
+        
+        # 设置交叉编译环境变量
+        export CC="aarch64-linux-gnu-gcc"
+        export CXX="aarch64-linux-gnu-g++"
+        export AR="aarch64-linux-gnu-ar"
+        export LD="aarch64-linux-gnu-ld"
+        export STRIP="aarch64-linux-gnu-strip"
+        export PKG_CONFIG="aarch64-linux-gnu-pkg-config"
+        export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+        export CFLAGS="-O3 -march=armv8-a -mtune=cortex-a76 -fPIC"
+        export CXXFLAGS="-O3 -march=armv8-a -mtune=cortex-a76 -fPIC"
+        
+        # 配置 Mesa
+        meson setup build \
+          --prefix=/opt/mesa \
+          --cross-file=/usr/share/meson/cross/aarch64-linux-gnu.txt \
+          -Dbuildtype=release \
+          -Doptimization=3 \
+          -Db_lto=true \
+          -Dplatforms=x11,wayland \
+          -Ddri-drivers= \
+          -Dgallium-drivers=zink,freedreno,llvmpipe,softpipe \
+          -Dvulkan-drivers=freedreno,swrast \
+          -Dgallium-opencl=disabled \
+          -Dopencl-spirv=false \
+          -Dllvm=enabled \
+          -Dshared-llvm=enabled \
+          -Dglvnd=false \
+          -Degl=enabled \
+          -Dgbm=enabled \
+          -Dglx=disabled \
+          -Degl-native-platform=x11 \
+          -Dgles1=enabled \
+          -Dgles2=enabled \
+          -Dopengl=true \
+          -Dshared-glapi=enabled \
+          -Dlibunwind=disabled \
+          -Dvalgrind=disabled \
+          -Dtools=freedreno
+        
+        echo "🏗️  开始构建 Mesa..."
+        
+        # 构建
+        ninja -C build -j$(nproc)
+        
+        echo "📦 安装到临时目录..."
+        
+        # 安装到临时目录
+        DESTDIR=/tmp/mesa-install ninja -C build install
+        
+        echo "✅ 构建完成!"
+        
+        # 创建打包目录
+        mkdir -p /tmp/mesa-package/opt/mesa
+        cp -r /tmp/mesa-install/opt/mesa/* /tmp/mesa-package/opt/mesa/
+        
+        # 创建环境设置脚本
+        cat > /tmp/mesa-package/env.sh << 'ENVEOF'
+        #!/bin/bash
+        export MESA_PATH=/opt/mesa
+        export LD_LIBRARY_PATH=\$MESA_PATH/lib/aarch64-linux-gnu:\$MESA_PATH/lib:\$LD_LIBRARY_PATH
+        export LIBGL_DRIVERS_PATH=\$MESA_PATH/lib/aarch64-linux-gnu/dri
+        export VK_ICD_FILENAMES=\$MESA_PATH/share/vulkan/icd.d/freedreno_icd.aarch64.json
+        export EGL_PLATFORM=x11
+        export GALLIUM_DRIVER=zink
+        export MESA_LOADER_DRIVER_OVERRIDE=zink
+        ENVEOF
+        
+        chmod +x /tmp/mesa-package/env.sh
+        EOF
+        
+        chmod +x build-mesa-docker.sh
+
+    - name: 在 Docker 容器中构建 Mesa
+      run: |
+        echo "🐳 启动 Docker 容器进行交叉编译..."
+        
+        # 创建输出目录
+        mkdir -p mesa-output
+        
+        # 运行 Docker 容器进行构建
+        docker run --rm \
+          --platform linux/arm64 \
+          -v $(pwd)/build-mesa-docker.sh:/build.sh:ro \
+          -v $(pwd)/mesa-output:/output \
+          -e MESA_BRANCH="${{ env.MESA_BRANCH }}" \
+          -e USE_UPSTREAM="${{ env.USE_UPSTREAM }}" \
+          debian:bookworm-slim \
+          /bin/bash -c "
+            apt-get update && apt-get install -y wget
+            chmod +x /build.sh
+            /build.sh
+            cp -r /tmp/mesa-package/* /output/
+            cp /tmp/build_env.txt /output/build_env.txt 2>/dev/null || true
+          "
+        
+        # 读取构建环境信息
+        if [ -f "mesa-output/build_env.txt" ]; then
+          source mesa-output/build_env.txt
+          echo "MESA_VERSION=${MESA_VERSION}" >> $GITHUB_ENV
+          echo "MESA_GIT_HASH=${MESA_GIT_HASH}" >> $GITHUB_ENV
+        fi
+
+    - name: 验证构建结果
+      run: |
+        echo "🔍 验证构建结果..."
+        
+        cd mesa-output
+        
+        if [ ! -d "opt/mesa" ]; then
+          echo "❌ 构建失败: opt/mesa 目录不存在"
+          exit 1
+        fi
+        
+        echo "✅ 构建目录结构:"
+        find opt/mesa -type f -name "*.so" | head -20
+        
+        # 检查关键文件
+        REQUIRED_FILES=(
+          "opt/mesa/lib/aarch64-linux-gnu/libGL.so"
+          "opt/mesa/lib/aarch64-linux-gnu/libEGL.so"
+          "opt/mesa/lib/aarch64-linux-gnu/libglapi.so"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            echo "✅ 找到: $file"
+          else
+            echo "⚠️  缺少: $file"
+          fi
+        done
+
+    - name: 打包构建产物
+      run: |
+        echo "📦 打包构建产物..."
+        
+        cd mesa-output
+        
+        # 创建版本化的包名
+        PACKAGE_NAME="glibcmesa-${MESA_VERSION:-custom}-aarch64"
+        
+        # 打包整个目录
+        tar -czvf "../${PACKAGE_NAME}-full.tar.gz" .
+        
+        cd ..
+        
+        # 创建校验和
+        sha256sum ${PACKAGE_NAME}-full.tar.gz > checksums.txt
+        
+        # 设置输出变量
+        echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+        echo "FULL_PACKAGE=${PACKAGE_NAME}-full.tar.gz" >> $GITHUB_ENV
+        
+        echo "📦 打包完成:"
+        ls -lh *.tar.gz
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: glibcmesa-${{ env.MESA_VERSION }}-aarch64
+        path: |
+          ${{ env.PACKAGE_NAME }}-*.tar.gz
+          checksums.txt
+
+    - name: 创建轻量级发布
+      uses: softprops/action-gh-release@v1
+      if: ${{ github.event_name == 'workflow_dispatch' }}
+      with:
+        tag_name: glibcmesa-${{ env.MESA_VERSION }}-${{ env.BUILD_DATE }}
+        name: Mesa Proot ${{ env.MESA_VERSION }} (aarch64)
+        body: |
+          Mesa 3D Graphics Library for Termux Proot (glibc) on aarch64
+          
+          **使用 Docker 交叉编译，避免环境依赖问题**
+          
+          构建信息:
+          - **版本**: ${{ env.MESA_VERSION }}
+          - **Git 哈希**: ${{ env.MESA_GIT_HASH }}
+          - **构建日期**: ${{ env.BUILD_DATE }}
+          - **分支**: ${{ env.MESA_BRANCH }}
+          - **仓库**: $(if [ "${{ env.USE_UPSTREAM }}" = "true" ]; then echo "上游官方"; else echo "lfdevs/android-container"; fi)
+          - **编译方式**: Docker 交叉编译 (x86_64 → aarch64)
+          
+          包含文件:
+          - `${{ env.FULL_PACKAGE }}` - 完整 Mesa 安装包
+          - `checksums.txt` - 校验和文件
+          
+          安装说明:
+          1. 下载完整的 tar.gz 包
+          2. 解压到 Proot 环境的根目录: `tar -xzf package.tar.gz -C /`
+          3. 设置环境变量 (已包含 env.sh 脚本):
+             ```bash
+             source /opt/mesa/env.sh
+             ```
+          
+          或手动设置:
+          ```bash
+          export LD_LIBRARY_PATH=/opt/mesa/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH
+          export LIBGL_DRIVERS_PATH=/opt/mesa/lib/aarch64-linux-gnu/dri
+          export VK_ICD_FILENAMES=/opt/mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json
+          ```
+          
+          包含的驱动:
+          - **Gallium**: zink, freedreno, llvmpipe, softpipe
+          - **Vulkan**: freedreno, swrast
+          - **OpenGL**: 3.0+ (通过 zink)
+          - **OpenGL ES**: 1.x, 2.x
+          - **EGL**: 支持
+          - **GBM**: 支持
+          
+          注意:
+          - 需要 Termux 的 glibc 环境 (如 glibcdistro 的 Ubuntu/Debian)
+          - 推荐在 Proot 容器中使用
+          - 使用 zink 作为主要的 OpenGL 实现
+        files: |
+          ${{ env.PACKAGE_NAME }}-*.tar.gz
+          checksums.txt
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 输出总结
+      run: |
+        echo "✅ Mesa Proot 交叉编译完成!"
+        echo "================================"
+        echo "版本: ${MESA_VERSION:-未知}"
+        echo "提交: ${MESA_GIT_HASH:-未知}"
+        echo "构建日期: $BUILD_DATE"
+        echo "分支: $MESA_BRANCH"
+        echo "目标架构: aarch64"
+        echo "编译架构: x86_64 (交叉编译)"
+        echo "编译方式: Docker 容器"
+        echo "环境: Termux Proot (glibc)"
+        echo ""
+        echo "📦 生成的文件:"
+        ls -1 *.tar.gz | while read file; do
+          echo "  - $file"
+        done
+        echo ""
+        echo "驱动支持:"
+        echo "  ✓ Gallium: zink, freedreno, llvmpipe, softpipe"
+        echo "  ✓ Vulkan: freedreno, swrast"
+        echo "  ✓ OpenGL (通过 zink), OpenGL ES 1.x/2.x"
+        echo "  ✓ EGL, GBM"
