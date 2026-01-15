@@ -147,8 +147,8 @@ jobs:
             -Dbuildtype=release \
             -Doptimization=3 \
             -Db_lto=true \
-            -Dplatforms=x11,wayland \
-            -Degl-native-platform=wayland \
+            -Dplatforms=x11 \
+            -Degl-native-platform=x11 \
             -Dglx=dri \
             -Dglx-direct=true \
             -Dopengl=true \
