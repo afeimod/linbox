@@ -49,6 +49,7 @@
 
 * https://github.com/jiaxinchen-max/termux-app
 * https://github.com/Waim908/wine-termux *补丁参考
+* https://github.com/lfdevs/mesa-for-android-container
 * https://github.com/wine-mirror/wine
 * https://github.com/olegos2/mobox
 * https://github.com/Waim908/wine-termux
