@@ -1,4 +1,4 @@
-# build-mesaproot.yml
+# build-mesa.yml
 name: Build Mesa for Linbox (aarch64)
 
 on:
@@ -142,41 +142,42 @@ jobs:
         
         # 配置构建选项
         meson setup builddir \
-            --libdir=lib \
-            -Dprefix=/data/data/com.termux/files/usr/glibc \
-            -Dbuildtype=release \
-            -Doptimization=3 \
-            -Db_lto=true \
-            -Dplatforms=x11 \
-            -Degl-native-platform=x11 \
-            -Dglx=dri \
-            -Dglx-direct=true \
-            -Dopengl=true \
-            -Dgles1=enabled \
-            -Dgles2=enabled \
-            -Dglvnd=disabled \
-            -Degl=enabled \
-            -Dllvm=disabled \
-            -Dshared-llvm=disabled \
-            -Dshader-cache=enabled \
-            -Dshared-glapi=enabled \
-            -Dxlib-lease=enabled \
-            -Dvulkan-beta=true \
-            -Dlibunwind=disabled \
-            -Dvalgrind=disabled \
-            -Dmicrosoft-clc=disabled \
-            -Dgallium-rusticl=false \
-            -Dgallium-extra-hud=true \
-            -Dgallium-drivers=zink,freedreno \
-            -Dshader-cache-default=true \
-            -Dvulkan-drivers=freedreno \
-            -Dfreedreno-kmds=msm,kgsl \
-            -Dvideo-codecs=all \
-            -Dgbm=enabled \
-            -Dtools=drm-shim,freedreno \
-            -Db_ndebug=true \
-            -Db_lto=true \
-            -Dstrip=true
+          --libdir=lib \
+          -Dprefix=/data/data/com.termux/files/usr/glibc \
+          -Dbuildtype=release \
+          -Doptimization=3 \
+          -Dcpp_args="-O3 -march=native -mtune=native" \
+          -Dc_args="-O3 -march=native -mtune=native" \
+          -Db_lto=true \
+          -Dplatforms=x11 \
+          -Degl-native-platform=x11 \
+          -Dglx=dri \
+          -Dglx-direct=true \
+          -Dopengl=true \
+          -Dgles1=enabled \
+          -Dgles2=enabled \
+          -Dglvnd=disabled \
+          -Degl=enabled \
+          -Dllvm=enabled \
+          -Dshared-llvm=enabled \
+          -Dshader-cache=enabled \
+          -Dshared-glapi=enabled \
+          -Dxlib-lease=enabled \
+          -Dvulkan-beta=true \
+          -Dlibunwind=disabled \
+          -Dvalgrind=disabled \
+          -Dmicrosoft-clc=disabled \
+          -Dgallium-rusticl=false \
+          -Dgallium-extra-hud=true \
+          -Dgallium-drivers=zink,freedreno,llvmpipe,softpipe \
+          -Dgallium-rusticl-enable-drivers=freedreno \
+          -Dshader-cache-default=true \
+          -Dvulkan-drivers=freedreno,swrast \
+          -Dfreedreno-kmds=msm,kgsl \
+          -Dvideo-codecs=all \
+          -Dmediafoundation-codecs=all \
+          -Dgbm=enabled \
+          -Dtools=drm-shim,freedreno
         
         # 检查配置状态
         echo "配置状态检查:"
@@ -249,9 +250,9 @@ jobs:
       if: ${{ github.event_name == 'workflow_dispatch' }}
       with:
         tag_name: glibcmesa-${{ env.MESA_VERSION }}-${{ env.BUILD_DATE }}
-        name: Mesa Proot ${{ env.MESA_VERSION }} (aarch64)
+        name: Mesa glibc ${{ env.MESA_VERSION }} (aarch64)
         body: |
-          Mesa 3D Graphics Library for Termux Proot (glibc) on aarch64
+          Mesa 3D Graphics Library for Termux glibc (glibc) on aarch64
           
           构建信息:
           - **版本**: ${{ env.MESA_VERSION }}
@@ -268,7 +269,7 @@ jobs:
           
           安装说明:
           1. 下载完整的 tar.gz 包
-          2. 在 Proot 环境中解压到根目录: `tar -xzf package.tar.gz -C /`
+          2. 在 glibc 环境中解压到根目录: `tar -xzf package.tar.gz -C /`
           3. 或者解压到自定义目录并设置环境变量:
              ```bash
              export LD_LIBRARY_PATH=/path/to/mesa/lib:$LD_LIBRARY_PATH
@@ -277,7 +278,7 @@ jobs:
           
           注意:
           - 需要 Termux 的 glibc 环境 (如 glibcdistro 的 Ubuntu/Debian)
-          - 推荐在 Proot 容器中使用
+          - 推荐在 glibc 容器中使用
         files: |
           ${{ env.PACKAGE_NAME }}-*.tar.gz
           checksums.txt
@@ -288,14 +289,14 @@ jobs:
 
     - name: 输出总结
       run: |
-        echo "✅ Mesa Proot 构建完成!"
+        echo "✅ Mesa glibc 构建完成!"
         echo "================================"
         echo "版本: $MESA_VERSION"
         echo "提交: $MESA_GIT_HASH"
         echo "构建日期: $BUILD_DATE"
         echo "分支: $MESA_BRANCH"
         echo "目标架构: aarch64"
-        echo "环境: Termux Proot (glibc)"
+        echo "环境: Termux (glibc)"
         echo ""
         echo "📦 生成的文件:"
         ls -1 *.tar.gz | while read file; do
