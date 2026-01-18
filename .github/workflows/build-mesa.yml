@@ -207,7 +207,7 @@ jobs:
         
         # 打包完整安装目录
         cd /data/data/com.termux/files/usr/
-        tar -czvf "${HOME}/${PACKAGE_NAME}-full.tar.gz" /glibc
+        tar -czvf "${HOME}/${PACKAGE_NAME}-full.tar.gz" glibc
         
         # 仅打包 Vulkan 驱动（可选）
         cd /data/data/com.termux/files/usr/glibc
