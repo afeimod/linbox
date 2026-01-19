@@ -1,0 +1,38 @@
+--- a/src/gpu.cpp
++++ b/src/gpu.cpp
+@@ -1,11 +1,19 @@
+ #include "gpu.h"
+ #include "file_utils.h"
+ #include "hud_elements.h"
+
+ namespace fs = ghc::filesystem;
+
+ GPUS::GPUS(const overlay_params* early_params) {
+     std::set<std::string> gpu_entries;
+     auto params = early_params ? early_params : get_params().get();
+
+-    for (const auto& entry : fs::directory_iterator("/sys/class/drm")) {
++    try {
++        for (const auto& entry : fs::directory_iterator("/sys/class/drm")) {
+             if (!entry.is_directory())
+                 continue;
+
+             std::string node_name = entry.path().filename().string();
+
+             // Check if the directory is a render node (e.g., renderD128, renderD129, etc.)
+             if (node_name.find("renderD") == 0 && node_name.length() > 7) {
+                 // Ensure the rest of the string after "renderD" is numeric
+                 std::string render_number = node_name.substr(7);
+                 if (std::all_of(render_number.begin(), render_number.end(), ::isdigit)) {
+                     gpu_entries.insert(node_name);  // Store the render entry
+                 }
+             }
+         }
++    } catch (const fs::filesystem_error& e) {
++        // 如果无法访问 /sys/class/drm，则跳过 GPU 检测
++        SPDLOG_WARN("Failed to access /sys/class/drm, GPU detection will be disabled: {}", e.what());
++        return;  // 提前返回，不处理 GPU 信息
+     }
+
+     // Now process the sorted GPU entries
+     uint8_t idx = 0, total_active = 0;
