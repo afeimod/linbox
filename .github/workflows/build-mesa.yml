@@ -142,43 +142,31 @@ jobs:
         
         # 配置构建选项
         meson setup builddir \
-          --libdir=lib \
-          -Dprefix=/data/data/com.termux/files/usr/glibc \
-          -Dbuildtype=release \
-          -Doptimization=3 \
-          -Dcpp_args="-O3 -march=native -mtune=native" \
-          -Dc_args="-O3 -march=native -mtune=native" \
-          -Db_lto=true \
-          -Dplatforms=x11 \
-          -Degl-native-platform=x11 \
-          -Dglx=dri \
-          -Dglx-direct=true \
-          -Dopengl=true \
-          -Dgles1=enabled \
-          -Dgles2=enabled \
-          -Dglvnd=disabled \
-          -Degl=enabled \
-          -Dllvm=enabled \
-          -Dshared-llvm=enabled \
-          -Dshader-cache=enabled \
-          -Dshared-glapi=enabled \
-          -Dxlib-lease=enabled \
-          -Dvulkan-beta=true \
-          -Dlibunwind=disabled \
-          -Dvalgrind=disabled \
-          -Dmicrosoft-clc=disabled \
-          -Dgallium-rusticl=false \
-          -Dgallium-extra-hud=true \
-          -Dgallium-drivers=zink,freedreno,llvmpipe,softpipe \
-          -Dgallium-rusticl-enable-drivers=freedreno \
-          -Dshader-cache-default=true \
-          -Dvulkan-drivers=freedreno,swrast \
-          -Dfreedreno-kmds=msm,kgsl \
-          -Dvideo-codecs=all \
-          -Dmediafoundation-codecs=all \
-          -Dgbm=enabled \
-          -Dtools=drm-shim,freedreno
-        
+           --libdir=lib \
+           -Dprefix=/data/data/com.termux/files/usr/glibc \
+           -Dplatforms=x11 \
+           -Dbuildtype=release \
+           -Degl-native-platform=x11 \
+           -Dvulkan-beta=true \
+           -Dgallium-extra-hud=true \
+           -Dgallium-drivers=freedreno,zink \
+           -Dmediafoundation-codecs=all \
+           -Dvulkan-drivers=freedreno \
+           -Dfreedreno-kmds=kgsl \
+           -Dshader-cache=enabled \
+           -Dgles1=enabled \
+           -Dgles2=enabled \
+           -Dopengl=true \
+           -Dgbm=enabled \
+           -Dglx=dri \
+           -Degl=enabled \
+           -Dglvnd=enabled \
+           -Dmicrosoft-clc=disabled \
+           -Dllvm=enabled \
+           -Dshared-llvm=enabled \
+           -Dvulkan-beta=true \
+           -Dvideo-codecs=all
+
         # 检查配置状态
         echo "配置状态检查:"
         meson configure builddir || true
