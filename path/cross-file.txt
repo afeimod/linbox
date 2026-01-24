@@ -1,13 +1,23 @@
 [binaries]
-c = 'arm-linux-gnueabihf-gcc'
-cpp = 'arm-linux-gnueabihf-g++'
-ar = 'arm-linux-gnueabihf-ar'
-strip = 'arm-linux-gnueabihf-strip'
-pkgconfig = 'pkg-config'
-cmake = 'cmake'
+c              = 'arm-linux-gnueabihf-gcc'
+cpp            = 'arm-linux-gnueabihf-g++'
+ar             = 'arm-linux-gnueabihf-ar'
+strip          = 'arm-linux-gnueabihf-strip'
+pkg-config     = 'pkg-config'
+llvm-config    = '/usr/bin/llvm-config-15'
 
 [host_machine]
-system = 'linux'
+system     = 'linux'
 cpu_family = 'arm'
-cpu = 'armv7l'
-endian = 'little'
+cpu        = 'armv7hl'
+endian     = 'little'
+
+[built-in options]
+c_args   = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
+cpp_args = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
+c_link_args   = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
+cpp_link_args = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
+
+[properties]
+needs_exe_wrapper = true
+pkg_config_libdir = ['/usr/lib/arm-linux-gnueabihf/pkgconfig', '/usr/share/pkgconfig']
