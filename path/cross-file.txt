@@ -1,0 +1,38 @@
+[binaries]
+c = 'arm-linux-gnueabihf-gcc'
+cpp = 'arm-linux-gnueabihf-g++'
+ar = 'arm-linux-gnueabihf-ar'
+strip = 'arm-linux-gnueabihf-strip'
+pkgconfig = 'pkg-config'
+cmake = 'cmake'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'armv7l'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+pkg_config_libdir = [
+    '/usr/lib/arm-linux-gnueabihf/pkgconfig',
+    '/usr/share/pkgconfig',
+    '/usr/local/lib/pkgconfig',
+    '/usr/local/share/pkgconfig'
+]
+c_args = [
+    '-I/usr/include/arm-linux-gnueabihf',
+    '-march=armv7-a',
+    '-mfpu=neon',
+    '-mfloat-abi=hard'
+]
+c_link_args = [
+    '-L/usr/lib/arm-linux-gnueabihf',
+    '-Wl,-rpath-link=/usr/lib/arm-linux-gnueabihf'
+]
+
+[paths]
+prefix = '$INSTALL_PREFIX'
+libdir = 'lib'
+bindir = 'bin'
+includedir = 'include'
