@@ -310,32 +310,26 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
+           -Dplatforms=x11 \
            -Dbuildtype=release \
-            -Doptimization=3 \
-            -Dplatforms=x11 \
-            -Degl-native-platform=x11 \
-            -Dglx=dri \
-            -Dopengl=true \
-            -Dgles1=enabled \
-            -Dgles2=enabled \
-            -Dglvnd=disabled \
-            -Degl=enabled \
-            -Dllvm=enabled \
-            -Dshared-llvm=enabled \
-            -Dshader-cache=enabled \
-            -Dxlib-lease=enabled \
-            -Dvulkan-beta=true \
-            -Dlibunwind=disabled \
-            -Dvalgrind=disabled \
-            -Dmicrosoft-clc=disabled \
-            -Dgallium-extra-hud=true \
-            -Dgallium-drivers=zink,freedreno,llvmpipe \
-            -Dshader-cache-default=true \
-            -Dvulkan-drivers=freedreno \
-            -Dfreedreno-kmds=msm,kgsl \
-            -Dvideo-codecs=all \
-            -Dmediafoundation-codecs=all \
-            -Dgbm=enabled
+           -Degl-native-platform=x11 \
+           -Dgallium-drivers=freedreno,zink \
+           -Dmediafoundation-codecs=all \
+           -Dvulkan-drivers=freedreno \
+           -Dfreedreno-kmds=kgsl \
+           -Dshader-cache=enabled \
+           -Dgles1=enabled \
+           -Dgles2=enabled \
+           -Dopengl=true \
+           -Dgbm=enabled \
+           -Dglx=dri \
+           -Degl=enabled \
+           -Dglvnd=disabled \
+           -Dmicrosoft-clc=disabled \
+           -Dllvm=disabled \
+           -Dshared-llvm=disabled \
+           -Dvulkan-beta=true \
+           -Dvideo-codecs=all
         
         if [ $? -eq 0 ]; then
           echo "✅ 配置成功"
@@ -350,32 +344,26 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
+           -Dplatforms=x11 \
            -Dbuildtype=release \
-            -Doptimization=3 \
-            -Dplatforms=x11 \
-            -Degl-native-platform=x11 \
-            -Dglx=dri \
-            -Dopengl=true \
-            -Dgles1=enabled \
-            -Dgles2=enabled \
-            -Dglvnd=disabled \
-            -Degl=enabled \
-            -Dllvm=enabled \
-            -Dshared-llvm=enabled \
-            -Dshader-cache=enabled \
-            -Dxlib-lease=enabled \
-            -Dvulkan-beta=true \
-            -Dlibunwind=disabled \
-            -Dvalgrind=disabled \
-            -Dmicrosoft-clc=disabled \
-            -Dgallium-extra-hud=true \
-            -Dgallium-drivers=zink,freedreno,llvmpipe \
-            -Dshader-cache-default=true \
-            -Dvulkan-drivers=freedreno \
-            -Dfreedreno-kmds=msm,kgsl \
-            -Dvideo-codecs=all \
-            -Dmediafoundation-codecs=all \
-            -Dgbm=enabled
+           -Degl-native-platform=x11 \
+           -Dgallium-drivers=freedreno,zink \
+           -Dmediafoundation-codecs=all \
+           -Dvulkan-drivers=freedreno \
+           -Dfreedreno-kmds=kgsl \
+           -Dshader-cache=enabled \
+           -Dgles1=enabled \
+           -Dgles2=enabled \
+           -Dopengl=true \
+           -Dgbm=enabled \
+           -Dglx=dri \
+           -Degl=enabled \
+           -Dglvnd=disabled \
+           -Dmicrosoft-clc=disabled \
+           -Dllvm=disabled \
+           -Dshared-llvm=disabled \
+           -Dvulkan-beta=true \
+           -Dvideo-codecs=all
         
         
           if [ $? -eq 0 ]; then
