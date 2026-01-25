@@ -87,7 +87,7 @@ jobs:
           libxcb-present-dev libxcb-randr0-dev libxcb-sync-dev libxcb-xfixes0-dev \
           libxshmfence-dev libdrm-dev libgbm-dev libegl1-mesa-dev libexpat1-dev \
           python3-pip python3-setuptools python3-wheel ninja-build \
-          flex bison libtool pkg-config build-essential libatomic1 \
+          flex bison libtool libclc-dev libclc-16-dev pkg-config build-essential libatomic1 \
           gcc g++ make cmake
         
         # 如果包含 armhf 构建，安装交叉编译工具链
