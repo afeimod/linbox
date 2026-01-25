@@ -240,17 +240,14 @@ jobs:
             -Dlibunwind=disabled \
             -Dvalgrind=disabled \
             -Dmicrosoft-clc=disabled \
-            -Dgallium-rusticl=false \
             -Dgallium-extra-hud=true \
             -Dgallium-drivers=zink,freedreno,llvmpipe \
-            -Dgallium-rusticl-enable-drivers=freedreno \
             -Dshader-cache-default=true \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm,kgsl \
             -Dvideo-codecs=all \
             -Dmediafoundation-codecs=all \
-            -Dgbm=enabled \
-            -Dtools=drm-shim,freedreno
+            -Dgbm=enabled
         
         echo "🏗️  正在构建 aarch64..."
         ninja -C build-aarch64 -j$(nproc)
