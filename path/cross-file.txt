@@ -9,14 +9,14 @@ llvm-config    = '/usr/bin/llvm-config-15'
 [host_machine]
 system     = 'linux'
 cpu_family = 'arm'
-cpu        = 'armv7hl'
+cpu        = 'armv8.2l'
 endian     = 'little'
 
 [built-in options]
-c_args   = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
-cpp_args = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
-c_link_args   = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
-cpp_link_args = ['-march=armv7-a', '-mfpu=neon', '-mfloat-abi=hard']
+c_args   = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
+cpp_args = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
+c_link_args   = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
+cpp_link_args = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
 
 [properties]
 needs_exe_wrapper = true
