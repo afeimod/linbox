@@ -220,7 +220,7 @@ jobs:
         
         # 配置 aarch64 构建
         meson setup build-aarch64 \
-            --libdir=lib
+            --libdir=lib \
             -Dprefix=$INSTALL_PREFIX \
             -Dbuildtype=release \
             -Doptimization=3 \
