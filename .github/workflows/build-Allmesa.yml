@@ -1,4 +1,4 @@
-# build-mesaproot.yml
+# build-mesaglibc.yml
 name: Build Mesa glibc(Multi-arch)
 
 on:
@@ -310,26 +310,32 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
-           -Dplatforms=x11 \
            -Dbuildtype=release \
-           -Degl-native-platform=x11 \
-           -Dgallium-drivers=freedreno,zink \
-           -Dmediafoundation-codecs=all \
-           -Dvulkan-drivers=freedreno \
-           -Dfreedreno-kmds=kgsl \
-           -Dshader-cache=enabled \
-           -Dgles1=enabled \
-           -Dgles2=enabled \
-           -Dopengl=true \
-           -Dgbm=enabled \
-           -Dglx=dri \
-           -Degl=enabled \
-           -Dglvnd=disabled \
-           -Dmicrosoft-clc=disabled \
-           -Dllvm=disabled \
-           -Dshared-llvm=disabled \
-           -Dvulkan-beta=true \
-           -Dvideo-codecs=all
+            -Doptimization=3 \
+            -Dplatforms=x11 \
+            -Degl-native-platform=x11 \
+            -Dglx=dri \
+            -Dopengl=true \
+            -Dgles1=enabled \
+            -Dgles2=enabled \
+            -Dglvnd=disabled \
+            -Degl=enabled \
+            -Dllvm=enabled \
+            -Dshared-llvm=enabled \
+            -Dshader-cache=enabled \
+            -Dxlib-lease=enabled \
+            -Dvulkan-beta=true \
+            -Dlibunwind=disabled \
+            -Dvalgrind=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dgallium-extra-hud=true \
+            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dshader-cache-default=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm,kgsl \
+            -Dvideo-codecs=all \
+            -Dmediafoundation-codecs=all \
+            -Dgbm=enabled
         
         if [ $? -eq 0 ]; then
           echo "✅ 配置成功"
@@ -344,26 +350,32 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
-           -Dplatforms=x11 \
            -Dbuildtype=release \
-           -Degl-native-platform=x11 \
-           -Dgallium-drivers=freedreno,zink \
-           -Dmediafoundation-codecs=all \
-           -Dvulkan-drivers=freedreno \
-           -Dfreedreno-kmds=kgsl \
-           -Dshader-cache=enabled \
-           -Dgles1=enabled \
-           -Dgles2=enabled \
-           -Dopengl=true \
-           -Dgbm=enabled \
-           -Dglx=dri \
-           -Degl=enabled \
-           -Dglvnd=disabled \
-           -Dmicrosoft-clc=disabled \
-           -Dllvm=disabled \
-           -Dshared-llvm=disabled \
-           -Dvulkan-beta=true \
-           -Dvideo-codecs=all
+            -Doptimization=3 \
+            -Dplatforms=x11 \
+            -Degl-native-platform=x11 \
+            -Dglx=dri \
+            -Dopengl=true \
+            -Dgles1=enabled \
+            -Dgles2=enabled \
+            -Dglvnd=disabled \
+            -Degl=enabled \
+            -Dllvm=enabled \
+            -Dshared-llvm=enabled \
+            -Dshader-cache=enabled \
+            -Dxlib-lease=enabled \
+            -Dvulkan-beta=true \
+            -Dlibunwind=disabled \
+            -Dvalgrind=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dgallium-extra-hud=true \
+            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dshader-cache-default=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm,kgsl \
+            -Dvideo-codecs=all \
+            -Dmediafoundation-codecs=all \
+            -Dgbm=enabled
         
         
           if [ $? -eq 0 ]; then
@@ -448,9 +460,9 @@ jobs:
       if: ${{ github.event_name == 'workflow_dispatch' }}
       with:
         tag_name: glibcmesa-${{ env.MESA_VERSION }}-${{ env.TARGET_ARCH }}-${{ env.BUILD_DATE }}
-        name: Mesa proot ${{ env.MESA_VERSION }} (${{ env.ARCH_DESC }})
+        name: Mesa glibc ${{ env.MESA_VERSION }} (${{ env.ARCH_DESC }})
         body: |
-          Mesa 3D Graphics Library for Termux proot (proot)
+          Mesa 3D Graphics Library for Termux glibc (glibc)
           
           构建信息:
           - **版本**: ${{ env.MESA_VERSION }}
@@ -483,7 +495,7 @@ jobs:
           
           安装说明:
           1. 下载完整的 tar.gz 包
-          2. 在 proot 环境中解压到根目录: `tar -xzf package.tar.gz -C /`
+          2. 在 glibc 环境中解压到根目录: `tar -xzf package.tar.gz -C /`
           
           $(if [ "${{ env.TARGET_ARCH }}" = "both" ]; then
             echo "多架构使用说明:"
@@ -523,8 +535,8 @@ jobs:
           fi)
           
           注意:
-          - 需要 Termux 的 proot 环境 (如 prootdistro 的 Ubuntu/Debian)
-          - 推荐在 proot 容器中使用
+          - 需要 Termux 的 glibc 环境 (如 glibcdistro 的 Ubuntu/Debian)
+          - 推荐在 glibc 容器中使用
           - 已禁用 Wayland 支持
           - armhf 版本为软件渲染，适用于兼容性需求
         files: |
@@ -537,14 +549,14 @@ jobs:
 
     - name: 输出总结
       run: |
-        echo "✅ Mesa proot 构建完成!"
+        echo "✅ Mesa glibc 构建完成!"
         echo "================================"
         echo "版本: $MESA_VERSION"
         echo "提交: $MESA_GIT_HASH"
         echo "构建日期: $BUILD_DATE"
         echo "分支: $MESA_BRANCH"
         echo "目标架构: $ARCH_DESC"
-        echo "环境: Termux (proot)"
+        echo "环境: Termux (glibc)"
         echo ""
         echo "📦 生成的文件:"
         ls -1 *.tar.gz | while read file; do
