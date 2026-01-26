@@ -4,19 +4,19 @@ cpp            = 'arm-linux-gnueabihf-g++'
 ar             = 'arm-linux-gnueabihf-ar'
 strip          = 'arm-linux-gnueabihf-strip'
 pkg-config     = 'pkg-config'
-llvm-config    = '/usr/bin/llvm-config-15'
+llvm-config    = '/usr/bin/llvm-config-19'
 
 [host_machine]
 system     = 'linux'
 cpu_family = 'arm'
-cpu        = 'armv8.2l'
+cpu        = 'armv8l'
 endian     = 'little'
 
 [built-in options]
-c_args   = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
-cpp_args = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
-c_link_args   = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
-cpp_link_args = ['-march=armv8-a', '-mfpu=neon', '-mfloat-abi=hard']
+c_args   = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
+cpp_args = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
+c_link_args   = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
+cpp_link_args = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
 
 [properties]
 needs_exe_wrapper = true
