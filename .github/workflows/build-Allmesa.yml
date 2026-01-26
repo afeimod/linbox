@@ -100,10 +100,12 @@ jobs:
             gcc-arm-linux-gnueabihf \
             g++-arm-linux-gnueabihf \
             binutils-arm-linux-gnueabihf \
-            libc6-dev-armhf-cross
+            libc6-dev-armhf-cross \
+            llvm-19-dev  # 添加 LLVM 开发包
+        
           sudo dpkg --add-architecture armhf
           sudo apt update
-            
+        
           # 安装 Mesa 构建所需的所有 armhf 依赖
           # XCB 相关依赖
           sudo apt install -y \
@@ -117,7 +119,7 @@ jobs:
             libxcb-xfixes0-dev:armhf \
             libxcb-randr0-dev:armhf \
             libxcb-xkb-dev:armhf
-            
+        
           # X11 相关依赖
           sudo apt install -y \
             libx11-dev:armhf \
@@ -128,14 +130,26 @@ jobs:
             libxxf86vm-dev:armhf \
             libxrandr-dev:armhf \
             libxshmfence-dev:armhf
-            
+        
           # DRM/GBM 相关依赖
           sudo apt install -y \
             libdrm-dev:armhf \
             libgbm-dev:armhf \
             libegl1-mesa-dev:armhf \
             libglvnd-dev:armhf
-            
+        
+          # Vulkan 相关依赖（用于 freedreno vulkan 驱动）
+          sudo apt install -y \
+            vulkan-headers \
+            libvulkan-dev:armhf \
+            glslang-tools:armhf
+        
+          # LLVM 相关依赖
+          sudo apt install -y \
+            llvm-19-dev:armhf \
+            libclc-19-dev:armhf \
+            libclang-rt-19-dev:armhf
+        
           # 基础库依赖
           sudo apt install -y \
             zlib1g-dev:armhf \
@@ -150,8 +164,14 @@ jobs:
             libpciaccess-dev:armhf \
             libelf-dev:armhf \
             libssl-dev:armhf \
-            libxml2-dev:armhf
-          
+            libxml2-dev:armhf \
+            libdrm-nouveau2:armhf \
+            libdrm-amdgpu1:armhf \
+            libdrm-radeon1:armhf \
+            libwayland-dev:armhf \
+            libva-dev:armhf \
+            libvdpau-dev:armhf
+      
           echo "ARM 交叉编译环境已准备"
         fi
 
@@ -302,7 +322,7 @@ jobs:
         echo "正在配置 Mesa 构建 (armhf)..."
         
         # 尝试配置 - 使用更简化的配置以减少依赖
-        CONFIG_SUCCESS=false
+        #CONFIG_SUCCESS=false
         
         # 尝试方案：简化的配置，禁用更多可选功能
         echo "尝试简化配置..."
@@ -310,25 +330,32 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
-           -Dplatforms=x11 \
            -Dbuildtype=release \
-           -Degl-native-platform=x11 \
-           -Dgallium-drivers=freedreno,zink \
-           -Dmediafoundation-codecs=all \
-           -Dvulkan-drivers=freedreno \
-           -Dshader-cache=enabled \
-           -Dgles1=enabled \
-           -Dgles2=enabled \
-           -Dopengl=true \
-           -Dgbm=enabled \
-           -Dglx=dri \
-           -Degl=enabled \
-           -Dglvnd=disabled \
-           -Dmicrosoft-clc=disabled \
-           -Dllvm=disabled \
-           -Dshared-llvm=disabled \
-           -Dvulkan-beta=true \
-           -Dvideo-codecs=all
+            -Doptimization=3 \
+            -Dplatforms=x11 \
+            -Degl-native-platform=x11 \
+            -Dglx=dri \
+            -Dopengl=true \
+            -Dgles1=enabled \
+            -Dgles2=enabled \
+            -Dglvnd=disabled \
+            -Degl=enabled \
+            -Dllvm=enabled \
+            -Dshared-llvm=enabled \
+            -Dshader-cache=enabled \
+            -Dxlib-lease=enabled \
+            -Dvulkan-beta=true \
+            -Dlibunwind=disabled \
+            -Dvalgrind=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dgallium-extra-hud=true \
+            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dshader-cache-default=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm,kgsl \
+            -Dvideo-codecs=all \
+            -Dmediafoundation-codecs=all \
+            -Dgbm=enabled
         
         if [ $? -eq 0 ]; then
           echo "✅ 配置成功"
@@ -343,25 +370,32 @@ jobs:
            --cross-file cross-file.txt \
            --libdir=lib32 \
            -Dprefix=$INSTALL_PREFIX \
-           -Dplatforms=x11 \
            -Dbuildtype=release \
-           -Degl-native-platform=x11 \
-           -Dgallium-drivers=freedreno,zink \
-           -Dmediafoundation-codecs=all \
-           -Dvulkan-drivers=freedreno \
-           -Dshader-cache=enabled \
-           -Dgles1=enabled \
-           -Dgles2=enabled \
-           -Dopengl=true \
-           -Dgbm=enabled \
-           -Dglx=dri \
-           -Degl=enabled \
-           -Dglvnd=disabled \
-           -Dmicrosoft-clc=disabled \
-           -Dllvm=disabled \
-           -Dshared-llvm=disabled \
-           -Dvulkan-beta=true \
-           -Dvideo-codecs=all
+            -Doptimization=3 \
+            -Dplatforms=x11 \
+            -Degl-native-platform=x11 \
+            -Dglx=dri \
+            -Dopengl=true \
+            -Dgles1=enabled \
+            -Dgles2=enabled \
+            -Dglvnd=disabled \
+            -Degl=enabled \
+            -Dllvm=enabled \
+            -Dshared-llvm=enabled \
+            -Dshader-cache=enabled \
+            -Dxlib-lease=enabled \
+            -Dvulkan-beta=true \
+            -Dlibunwind=disabled \
+            -Dvalgrind=disabled \
+            -Dmicrosoft-clc=disabled \
+            -Dgallium-extra-hud=true \
+            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dshader-cache-default=true \
+            -Dvulkan-drivers=freedreno \
+            -Dfreedreno-kmds=msm,kgsl \
+            -Dvideo-codecs=all \
+            -Dmediafoundation-codecs=all \
+            -Dgbm=enabled
         
         
           if [ $? -eq 0 ]; then
