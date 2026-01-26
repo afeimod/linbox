@@ -144,7 +144,7 @@ jobs:
             glslang-tools:armhf
         
           # LLVM 相关依赖
-          sudo apt install -y llvm-19-dev:armhf
+          sudo apt install -y libllvm-19-0:armhf
         
           # 基础库依赖
           sudo apt install -y \
