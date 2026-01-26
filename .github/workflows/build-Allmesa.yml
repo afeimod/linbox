@@ -343,7 +343,7 @@ jobs:
             -Dvalgrind=disabled \
             -Dmicrosoft-clc=disabled \
             -Dgallium-extra-hud=true \
-            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dgallium-drivers=zink,freedreno \
             -Dshader-cache-default=true \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm,kgsl \
@@ -383,7 +383,7 @@ jobs:
             -Dvalgrind=disabled \
             -Dmicrosoft-clc=disabled \
             -Dgallium-extra-hud=true \
-            -Dgallium-drivers=zink,freedreno,llvmpipe \
+            -Dgallium-drivers=zink,freedreno \
             -Dshader-cache-default=true \
             -Dvulkan-drivers=freedreno \
             -Dfreedreno-kmds=msm,kgsl \
