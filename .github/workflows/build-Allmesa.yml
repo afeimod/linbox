@@ -140,7 +140,6 @@ jobs:
         
           # Vulkan 相关依赖（用于 freedreno vulkan 驱动）
           sudo apt install -y \
-            vulkan-headers \
             libvulkan-dev:armhf \
             glslang-tools:armhf
         
