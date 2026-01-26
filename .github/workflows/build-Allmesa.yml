@@ -143,8 +143,6 @@ jobs:
             libvulkan-dev:armhf \
             glslang-tools:armhf
         
-          # LLVM 相关依赖
-          sudo apt install -y llvm-18-dev:armhf
         
           # 基础库依赖
           sudo apt install -y \
@@ -336,8 +334,8 @@ jobs:
             -Dgles2=enabled \
             -Dglvnd=disabled \
             -Degl=enabled \
-            -Dllvm=enabled \
-            -Dshared-llvm=enabled \
+            -Dllvm=disabled \
+            -Dshared-llvm=disabled \
             -Dshader-cache=enabled \
             -Dxlib-lease=enabled \
             -Dvulkan-beta=true \
