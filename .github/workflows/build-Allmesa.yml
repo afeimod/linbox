@@ -146,8 +146,7 @@ jobs:
           # LLVM 相关依赖
           sudo apt install -y \
             llvm-19-dev:armhf \
-            libclc-19-dev:armhf \
-            libclang-rt-19-dev:armhf
+            libclc-19-dev:armhf
         
           # 基础库依赖
           sudo apt install -y \
