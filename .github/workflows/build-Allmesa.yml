@@ -87,6 +87,7 @@ jobs:
           libxcb-present-dev libxcb-randr0-dev libxcb-sync-dev libxcb-xfixes0-dev \
           libxshmfence-dev libdrm-dev libgbm-dev libegl1-mesa-dev libexpat1-dev \
           python3-pip python3-setuptools python3-wheel ninja-build \
+          pulseaudio libasound2-plugins wget unzip cmake git g++-arm-linux-gnueabihf \
           flex bison libtool libclc-20-dev pkg-config build-essential libatomic1 \
           gcc g++ make cmake
         
@@ -129,21 +130,12 @@ jobs:
             wayland-protocols:armhf libwayland-egl-backend-dev:armhf libxcb-shm0-dev:armhf \
             pkg-config:armhf libgbm-dev:armhf libegl1-mesa-dev:armhf
         
-          # DRM/GBM 相关依赖
-          sudo apt install -y \
-            libdrm-dev:armhf \
-            libgbm-dev:armhf \
-            libegl1-mesa-dev:armhf \
-            libglvnd-dev:armhf
         
           # Vulkan 相关依赖（用于 freedreno vulkan 驱动）
           sudo apt install -y \
             libvulkan-dev:armhf \
             glslang-tools:armhf \
-            vulkan-tools:armhf \
-            libglvnd-core-dev:armhf \
-            libglvnd-dev:armhf \
-            libglvnd0:armhf
+            vulkan-tools:armhf
        
           echo "ARM 交叉编译环境已准备"
           sudo apt build-dep mesa -y
