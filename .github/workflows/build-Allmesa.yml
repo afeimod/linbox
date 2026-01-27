@@ -141,9 +141,15 @@ jobs:
           # Vulkan 相关依赖（用于 freedreno vulkan 驱动）
           sudo apt install -y \
             libvulkan-dev:armhf \
-            glslang-tools:armhf
-        
-        
+            glslang-tools:armhf \
+            vulkan-tools:armhf \
+            libglvnd-core-dev:armhf \
+            libglvnd-dev:armhf \
+            libglvnd0:armhf
+       
+
+
+
           # 基础库依赖
           sudo apt install -y \
             zlib1g-dev:armhf \
@@ -299,8 +305,11 @@ jobs:
         export CXX="arm-linux-gnueabihf-g++"
         export AR="arm-linux-gnueabihf-ar"
         export STRIP="arm-linux-gnueabihf-strip"
-        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
-        export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
+        export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/arm-linux-gnueabihf/lib/pkgconfig:/usr/share/pkgconfig"
+        export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/arm-linux-gnueabihf/lib/pkgconfig:/usr/share/pkgconfig"
+        export CFLAGS="-march=armv8-a -mfpu=neon-vfpv4 -mfloat-abi=hard -marm"
+        export CXXFLAGS="-march=armv8-a -mfpu=neon-vfpv4 -mfloat-abi=hard -marm"
+        export LDFLAGS="-march=armv8-a -mfpu=neon-vfpv4 -mfloat-abi=hard -marm"
         
         # 检查交叉编译工具是否可用
         echo "检查交叉编译工具:"
