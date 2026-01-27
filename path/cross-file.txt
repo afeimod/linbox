@@ -13,11 +13,12 @@ cpu        = 'armv8l'
 endian     = 'little'
 
 [built-in options]
-c_args   = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
-cpp_args = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
-c_link_args   = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
-cpp_link_args = ['-march=armv8-a+simd', '-mfpu=neon-fp-armv8', '-mfloat-abi=hard']
+c_args   = ['-march=armv8-a', '-mfpu=neon-vfpv4', '-mfloat-abi=hard', '-marm']
+cpp_args = ['-march=armv8-a', '-mfpu=neon-vfpv4', '-mfloat-abi=hard', '-marm']
+c_link_args   = ['-march=armv8-a', '-mfpu=neon-vfpv4', '-mfloat-abi=hard', '-marm']
+cpp_link_args = ['-march=armv8-a', '-mfpu=neon-vfpv4', '-mfloat-abi=hard', '-marm']
 
 [properties]
 needs_exe_wrapper = true
-pkg_config_libdir = ['/usr/lib/arm-linux-gnueabihf/pkgconfig', '/usr/share/pkgconfig']
+pkg_config_libdir = [
+  '/usr/lib/arm-linux-gnueabihf/pkgconfig', '/usr/arm-linux-gnueabihf/lib/pkgconfig', '/usr/share/pkgconfig']
