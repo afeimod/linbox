@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mesa_branch:
-        description: 'Mesa 分支 (可选，默认为 adreno-main)'
+        description: 'Mesa 分支/标签/提交 (例如: main, 24.3, 24.4.0, adreno-main)'
         required: false
         default: 'adreno-main'
         type: string
@@ -40,8 +40,8 @@ jobs:
       run: |
         # 设置默认参数
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "MESA_BRANCH=${{ github.event.inputs.mesa_branch }}" >> $GITHUB_ENV
-          echo "USE_UPSTREAM=${{ github.event.inputs.use_upstream }}" >> $GITHUB_ENV
+          echo "MESA_BRANCH=${{ github.event.inputs.mesa_branch || 'adreno-main' }}" >> $GITHUB_ENV
+          echo "USE_UPSTREAM=${{ github.event.inputs.use_upstream || 'false' }}" >> $GITHUB_ENV
           echo "TARGET_ARCH=${{ github.event.inputs.target_arch || 'both' }}" >> $GITHUB_ENV
         else
           echo "MESA_BRANCH=adreno-main" >> $GITHUB_ENV
@@ -55,7 +55,7 @@ jobs:
         # 设置安装目录
         echo "INSTALL_PREFIX=/data/data/com.termux/files/usr/glibc" >> $GITHUB_ENV
         
-        echo "使用的 Mesa 分支: $MESA_BRANCH"
+        echo "使用的 Mesa 分支/标签: $MESA_BRANCH"
         echo "是否使用上游: $USE_UPSTREAM"
         echo "目标架构: $TARGET_ARCH"
         echo "安装目录: $INSTALL_PREFIX"
@@ -105,7 +105,7 @@ jobs:
         
           sudo dpkg --add-architecture armhf
           sudo apt update
-        
+          sudo apt upgrade -y
           # 安装 Mesa 构建所需的所有 armhf 依赖
           # XCB 相关依赖
           sudo apt install -y \
@@ -121,15 +121,13 @@ jobs:
             libxcb-xkb-dev:armhf
         
           # X11 相关依赖
-          sudo apt install -y \
-            libx11-dev:armhf \
-            libx11-xcb-dev:armhf \
-            libxext-dev:armhf \
-            libxdamage-dev:armhf \
-            libxfixes-dev:armhf \
-            libxxf86vm-dev:armhf \
-            libxrandr-dev:armhf \
-            libxshmfence-dev:armhf
+          sudo apt install -y zenity:armhf libstdc++6:armhf \
+            zlib1g-dev:armhf libexpat1-dev:armhf libdrm-dev:armhf libx11-dev:armhf \
+            libxext-dev:armhf libxdamage-dev:armhf libxcb-glx0-dev:armhf libx11-xcb-dev:armhf \
+            libxcb-dri2-0-dev:armhf libxcb-dri3-dev:armhf libxcb-present-dev:armhf \
+            libxshmfence-dev:armhf libxxf86vm-dev:armhf libxrandr-dev:armhf libwayland-dev:armhf \
+            wayland-protocols:armhf libwayland-egl-backend-dev:armhf libxcb-shm0-dev:armhf \
+            pkg-config:armhf libgbm-dev:armhf libegl1-mesa-dev:armhf
         
           # DRM/GBM 相关依赖
           sudo apt install -y \
@@ -147,32 +145,9 @@ jobs:
             libglvnd-dev:armhf \
             libglvnd0:armhf
        
-
-
-
-          # 基础库依赖
-          sudo apt install -y \
-            zlib1g-dev:armhf \
-            libexpat1-dev:armhf \
-            libpthread-stubs0-dev:armhf \
-            libatomic1:armhf \
-            libatomic-ops-dev:armhf \
-            libselinux1-dev:armhf \
-            libunwind-dev:armhf \
-            libffi-dev:armhf \
-            libudev-dev:armhf \
-            libpciaccess-dev:armhf \
-            libelf-dev:armhf \
-            libssl-dev:armhf \
-            libxml2-dev:armhf \
-            libdrm-nouveau2:armhf \
-            libdrm-amdgpu1:armhf \
-            libdrm-radeon1:armhf \
-            libwayland-dev:armhf \
-            libva-dev:armhf \
-            libvdpau-dev:armhf
-      
           echo "ARM 交叉编译环境已准备"
+          sudo apt build-dep mesa -y
+          sudo apt install -f -y
         fi
 
     - name: 安装 Python 构建工具
@@ -193,6 +168,29 @@ jobs:
           echo "使用上游官方 Mesa 仓库"
           git clone https://gitlab.freedesktop.org/mesa/mesa.git
           cd mesa
+          
+          # 检出指定分支/标签/提交
+          if [ -n "$MESA_BRANCH" ] && [ "$MESA_BRANCH" != "adreno-main" ]; then
+            echo "检出上游分支/标签/提交: $MESA_BRANCH"
+            # 首先尝试获取分支或标签
+            if git fetch origin "$MESA_BRANCH" 2>/dev/null; then
+              git checkout "$MESA_BRANCH"
+            else
+              echo "未找到分支 '$MESA_BRANCH'，尝试作为标签检出..."
+              if git fetch origin --tags 2>/dev/null && git checkout "tags/$MESA_BRANCH" 2>/dev/null; then
+                echo "成功检出标签: $MESA_BRANCH"
+              else
+                echo "尝试作为提交哈希检出..."
+                git checkout "$MESA_BRANCH" 2>/dev/null || {
+                  echo "❌ 无法检出 '$MESA_BRANCH'，请检查分支/标签/提交是否存在"
+                  exit 1
+                }
+              fi
+            fi
+          else
+            echo "使用上游官方 Mesa 仓库的默认分支 (main)"
+            git checkout main
+          fi
         else
           echo "使用 lfdevs 的 Mesa for Android Container 仓库"
           git clone https://github.com/lfdevs/mesa-for-android-container.git mesa
@@ -218,12 +216,14 @@ jobs:
         echo "MESA_GIT_HASH=$GIT_HASH" >> $GITHUB_ENV
         echo "MESA_VERSION=$OFFICIAL_VERSION" >> $GITHUB_ENV
         echo "GIT_DESCRIBE=$GIT_DESCRIBE" >> $GITHUB_ENV
+        echo "MESA_BRANCH_ACTUAL=$(git branch --show-current)" >> $GITHUB_ENV
         
         echo "✅ 源码克隆完成"
         echo "版本: $OFFICIAL_VERSION"
         echo "提交: $GIT_HASH"
         echo "描述: $GIT_DESCRIBE"
         echo "分支: $(git branch --show-current)"
+        echo "标签/提交: $(git describe --tags 2>/dev/null || echo '无标签')"
 
     - name: 构建 aarch64 架构
       if: env.TARGET_ARCH == 'aarch64' || env.TARGET_ARCH == 'both'
