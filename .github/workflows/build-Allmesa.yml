@@ -138,8 +138,7 @@ jobs:
             vulkan-tools:armhf
        
           echo "ARM 交叉编译环境已准备"
-          sudo apt build-dep mesa -y
-          sudo apt install -f -y
+          
         fi
 
     - name: 安装 Python 构建工具
