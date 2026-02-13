@@ -1,5 +1,5 @@
---- wsi_common_x11原文件.c
-+++ wsi_common_x11目标文件.c
+--- wsi_common_x11.c
++++ wsi_common_x11.c
 @@ -1,1069 +1,939 @@
 -/*
 - * Copyright © 2015 Intel Corporation
