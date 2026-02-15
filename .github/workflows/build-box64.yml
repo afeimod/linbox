@@ -92,6 +92,9 @@ jobs:
             -DWINLATOR_GLIBC=ON \
             -DARM64=ON \
             -DBAD_SIGN=ON \
+            -DSD845=ON \
+            -DSD865=ON \
+            -DSD888=ON \
             -DSD8G2=ON
 
         make -j4
