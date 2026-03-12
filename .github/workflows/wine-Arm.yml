@@ -1,4 +1,4 @@
-name: Wine ARM64 WOW64 构建（基于 llvm-mingw）
+name: Wine ARM64 WOW64 构建（基于 llvm-mingw，Debian 12 容器）
 
 on:
   schedule:
@@ -27,53 +27,64 @@ env:
   BUILD_DIR: /tmp/build_wine
   WINE64_DIR: /opt/wine64
   WINE_SOURCE_DIR: /opt/wine-src
+  DEBIAN_FRONTEND: noninteractive
 
 permissions:
   contents: write
 
 jobs:
   build-wine-wow64:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:12
+      options: --user root  # 确保以 root 运行
     timeout-minutes: 180
 
     steps:
+      - name: 安装基础工具（用于后续操作）
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            wget \
+            git \
+            curl \
+            gnupg \
+            sudo \
+            xz-utils
+
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 彻底修复 APT 源（仿照 Dockerfile 思路，确保 arm64 全部指向 ports.ubuntu.com）
+      # 1. 配置 APT 源（仿照 Dockerfile 方法，支持 amd64 和 arm64）
       # ------------------------------------------------------------
-      - name: 配置 APT 源（支持 amd64 和 arm64，避免 404）
+      - name: 配置 APT 源
         run: |
-          # 备份并清空 sources.list.d 避免干扰
-          sudo mkdir -p /etc/apt/sources.list.d.bak
-          sudo mv /etc/apt/sources.list.d/* /etc/apt/sources.list.d.bak/ 2>/dev/null || true
-
           # 备份原 sources.list
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          cp /etc/apt/sources.list /etc/apt/sources.list.bak
 
           # 生成 amd64 列表（添加架构标识）
-          grep -v '^#' /etc/apt/sources.list.bak | sed 's/^deb /deb [arch=amd64] /g' | sudo tee /tmp/amd64.list
+          grep -v '^#' /etc/apt/sources.list.bak | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
 
-          # 生成 arm64 列表：替换架构，并将所有 Ubuntu 源域名替换为 ports.ubuntu.com/ubuntu-ports
+          # 生成 arm64 列表：替换架构，并将所有 Debian 源域名替换为 ports.debian.org（类似 Ubuntu ports）
           sed -e 's/\[arch=amd64\]/[arch=arm64]/g' \
-              -e 's|http://archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-              -e 's|http://security.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-              /tmp/amd64.list | sudo tee /tmp/arm64.list
+              -e 's|deb.debian.org|ports.debian.org|g' \
+              -e 's|security.debian.org|ports.debian.org|g' \
+              /tmp/amd64.list > /tmp/arm64.list
 
           # 合并两个列表，覆盖 sources.list
-          cat /tmp/amd64.list /tmp/arm64.list | sudo tee /etc/apt/sources.list
+          cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
 
           # 添加 arm64 架构并更新
-          sudo dpkg --add-architecture arm64
-          sudo apt update
-          sudo apt --fix-broken install -y
+          dpkg --add-architecture arm64
+          apt-get update
 
       # ------------------------------------------------------------
-      # 2. 安装依赖包（严格参照 Dockerfile 列表，仅调整 libstdc++ 包名以适配 Ubuntu 24.04）
+      # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
-          sudo apt install -y --no-install-recommends \
+          apt-get install -y --no-install-recommends \
             binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
             ca-certificates nano python3 python3-setuptools clang screen llvm lld wget curl \
             flex bison nasm \
@@ -81,7 +92,7 @@ jobs:
             libglib2.0-dev \
             libltdl-dev \
             libxcb1-dev \
-            libx11-dev  \
+            libx11-dev \
             librsvg2-bin \
             git gettext make automake autoconf pkg-config libtool gtk-doc-tools clang \
             dpkg-dev \
@@ -94,11 +105,11 @@ jobs:
             libx11-dev libxinerama-dev libfreetype-dev libfontconfig-dev \
             cmake \
             libstdc++6-arm64-cross \
-            libstdc++-dev:arm64 \          # 原为 libstdc++-12-dev-arm64-cross，Ubuntu 24.04 中使用默认版本
+            libstdc++-12-dev-arm64-cross \
             libepoxy-dev:arm64 \
             libsdl2-dev:arm64 \
             ninja-build \
-            fakeroot debhelper dh-make \
+            dpkg-dev fakeroot debhelper dh-make \
             libxcursor-dev:arm64 \
             libxi-dev:arm64 \
             libxshmfence-dev:arm64 \
@@ -133,20 +144,21 @@ jobs:
       # ------------------------------------------------------------
       - name: 下载并安装 llvm-mingw
         run: |
-          sudo mkdir -p /opt
+          mkdir -p /opt
           cd /opt
-          sudo wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
-          sudo tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
-          sudo rm ${{ env.LLVMMINGW_NAME }}.tar.xz
+          wget https://github.com/mstorsjo/llvm-mingw/releases/download/${{ env.LLVMMINGW_DATE }}/${{ env.LLVMMINGW_NAME }}.tar.xz
+          tar -xJf ${{ env.LLVMMINGW_NAME }}.tar.xz
+          rm ${{ env.LLVMMINGW_NAME }}.tar.xz
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 4. 设置中文语言环境
+      # 4. 设置中文语言环境（可选，但保留）
       # ------------------------------------------------------------
       - name: 设置中文语言环境
         run: |
-          sudo locale-gen zh_CN.UTF-8
-          sudo update-locale LANG=zh_CN.UTF-8
+          apt-get install -y locales
+          sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen
+          locale-gen
           echo "LANG=zh_CN.UTF-8" >> $GITHUB_ENV
           echo "LC_ALL=zh_CN.UTF-8" >> $GITHUB_ENV
 
@@ -159,19 +171,19 @@ jobs:
           WINE_BRANCH="${{ github.event.inputs.wine_branch || 'staging' }}"
           WINE_VERSION="${{ github.event.inputs.wine_version || 'latest' }}"
 
-          sudo mkdir -p ${{ env.WINE_SOURCE_DIR }}
+          mkdir -p ${{ env.WINE_SOURCE_DIR }}
           cd ${{ env.WINE_SOURCE_DIR }}
 
           case "$WINE_BRANCH" in
             staging-tkg|staging-tkg-fsync)
               echo "处理 TKG 系列分支: $WINE_BRANCH"
-              sudo git clone https://github.com/Kron4ek/wine-tkg.git source
+              git clone https://github.com/Kron4ek/wine-tkg.git source
               cd source
               if [ "$WINE_BRANCH" = "staging-tkg-fsync" ]; then
-                sudo git checkout fsync
+                git checkout fsync
               fi
               if [ "$WINE_VERSION" != "latest" ]; then
-                sudo git checkout "$WINE_VERSION" 2>/dev/null || sudo git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
+                git checkout "$WINE_VERSION" 2>/dev/null || git checkout "wine-$WINE_VERSION" 2>/dev/null || echo "使用默认分支"
               fi
               if [ -f "VERSION" ]; then
                 WINE_VERSION_ACTUAL="$(cat VERSION | tail -c +14)"
@@ -181,13 +193,14 @@ jobs:
               ;;
             staging)
               echo "处理 Staging 分支"
-              sudo git clone https://github.com/afeimod/wine-arm.git source
+              git clone https://github.com/afeimod/wine-arm.git source
               cd source
-              sudo git config advice.detachedHead false
+              git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                sudo git checkout "wine-$WINE_VERSION"
+                git checkout "wine-$WINE_VERSION"
               fi
               WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
+              # 下载并应用 staging 补丁
               PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
               STAGING_VERSION="v${PURE_VERSION}"
               wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
@@ -209,11 +222,11 @@ jobs:
               ;;
             vanilla)
               echo "处理 Vanilla 分支"
-              sudo git clone https://github.com/afeimod/wine-arm.git source
+              git clone https://github.com/afeimod/wine-arm.git source
               cd source
-              sudo git config advice.detachedHead false
+              git config advice.detachedHead false
               if [ "$WINE_VERSION" != "latest" ]; then
-                sudo git checkout "wine-$WINE_VERSION"
+                git checkout "wine-$WINE_VERSION"
               fi
               WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
               ;;
@@ -283,14 +296,14 @@ jobs:
       # ------------------------------------------------------------
       - name: 构建 native wine64 工具
         run: |
-          sudo mkdir -p ${{ env.WINE64_DIR }}
-          sudo cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
+          mkdir -p ${{ env.WINE64_DIR }}
+          cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
           cd ${{ env.WINE64_DIR }}
-          sudo mkdir -p amd64
+          mkdir -p amd64
           cd amd64
-          sudo ../source/configure --enable-win64 --prefix=/usr/local
-          sudo make __tooldeps__ -j$(nproc)
-          sudo make -C nls || true
+          ../source/configure --enable-win64 --prefix=/usr/local
+          make __tooldeps__ -j$(nproc)
+          make -C nls || true
           echo "检查生成的工具:"
           ls -la tools/winebuild/ tools/wrc/ tools/widl/ || true
 
@@ -300,7 +313,7 @@ jobs:
       - name: 交叉编译 ARM64 WOW64
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          sudo mkdir -p build-arm64
+          mkdir -p build-arm64
           cd build-arm64
 
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
@@ -309,7 +322,7 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          sudo ../configure \
+          ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
             --enable-archs=arm64ec,aarch64,i386 \
@@ -324,8 +337,8 @@ jobs:
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
-          sudo make -j$(nproc)
-          sudo make install
+          make -j$(nproc)
+          make install
 
       # ------------------------------------------------------------
       # 11. 打包
@@ -334,8 +347,7 @@ jobs:
         run: |
           PACKAGE_NAME="${{ env.BUILD_NAME }}"
           mkdir -p wine-package/$PACKAGE_NAME
-          sudo cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
-          sudo chown -R $USER:$USER wine-package
+          cp -r /tmp/wine-install-wow64/* wine-package/$PACKAGE_NAME/
 
       - name: 创建打包文件
         run: |
