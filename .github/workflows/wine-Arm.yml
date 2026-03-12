@@ -316,13 +316,16 @@ jobs:
           make __tooldeps__ -j$(nproc)
           make -C nls || true
           echo "检查生成的工具:"
-          ls -la tools/winebuild/ tools/wrc/ tools/widl/ || echo "工具目录可能为空"
+          if [ -d tools/winebuild ]; then ls -la tools/winebuild/; fi
+          if [ -d tools/wrc ]; then ls -la tools/wrc/; fi
+          if [ -d tools/widl ]; then ls -la tools/widl/; fi
 
       # ------------------------------------------------------------
-      # 10. 查找并确认 Wine 工具路径
+      # 10. 查找并确认 Wine 工具路径（使用 bash 以避免数组语法错误）
       # ------------------------------------------------------------
       - name: 定位 Wine 工具目录
         id: find_tools
+        shell: bash
         run: |
           # 尝试多个可能的路径
           POSSIBLE_PATHS=(
