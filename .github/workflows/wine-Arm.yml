@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: debian:12
-      options: --user root  # 确保以 root 运行
+      options: --user root
     timeout-minutes: 180
 
     steps:
@@ -51,26 +51,37 @@ jobs:
             curl \
             gnupg \
             sudo \
-            xz-utils
+            xz-utils \
+            apt-utils
 
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 配置 APT 源（仿照 Dockerfile 方法，支持 amd64 和 arm64）
+      # 1. 配置 APT 源（支持 amd64 和 arm64）- 修正版
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
-          # 备份原 sources.list
-          cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          # 显示原始源（用于调试）
+          echo "原始 sources.list:"
+          cat /etc/apt/sources.list || echo "文件不存在"
+
+          # 备份原 sources.list（如果存在）
+          if [ -f /etc/apt/sources.list ]; then
+            cp /etc/apt/sources.list /etc/apt/sources.list.bak
+          else
+            # 如果不存在，创建一个基础的 amd64 源
+            cat > /etc/apt/sources.list <<EOF
+            deb http://deb.debian.org/debian bookworm main contrib non-free
+            deb http://deb.debian.org/debian bookworm-updates main contrib non-free
+            deb http://security.debian.org/debian-security bookworm-security main contrib non-free
+            EOF
+          fi
 
           # 生成 amd64 列表（添加架构标识）
-          grep -v '^#' /etc/apt/sources.list.bak | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
+          grep -v '^#' /etc/apt/sources.list | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
 
-          # 生成 arm64 列表：替换架构，并将所有 Debian 源域名替换为 ports.debian.org（类似 Ubuntu ports）
-          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' \
-              -e 's|deb.debian.org|ports.debian.org|g' \
-              -e 's|security.debian.org|ports.debian.org|g' \
-              /tmp/amd64.list > /tmp/arm64.list
+          # 生成 arm64 列表：替换架构，保持相同的 URL（deb.debian.org 和 security.debian.org 都支持 arm64）
+          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' /tmp/amd64.list > /tmp/arm64.list
 
           # 合并两个列表，覆盖 sources.list
           cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
@@ -78,6 +89,16 @@ jobs:
           # 添加 arm64 架构并更新
           dpkg --add-architecture arm64
           apt-get update
+
+          # 调试：显示当前源
+          echo "当前 sources.list:"
+          cat /etc/apt/sources.list
+
+          # 测试 arm64 源是否可用（安装一个最小包）
+          apt-get install -y --no-install-recommends hello:arm64 || {
+            echo "arm64 源测试失败，退出"
+            exit 1
+          }
 
       # ------------------------------------------------------------
       # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
@@ -152,7 +173,7 @@ jobs:
           echo "/opt/${{ env.LLVMMINGW_NAME }}/bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 4. 设置中文语言环境（可选，但保留）
+      # 4. 设置中文语言环境
       # ------------------------------------------------------------
       - name: 设置中文语言环境
         run: |
