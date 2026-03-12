@@ -40,18 +40,25 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 仿照 Dockerfile 配置 APT 源（动态生成架构限定源）
+      # 1. 彻底修复 APT 源（仿照 Dockerfile 思路，确保 arm64 全部指向 ports.ubuntu.com）
       # ------------------------------------------------------------
-      - name: 配置 APT 源（支持 amd64 和 arm64）
+      - name: 配置 APT 源（支持 amd64 和 arm64，避免 404）
         run: |
+          # 备份并清空 sources.list.d 避免干扰
+          sudo mkdir -p /etc/apt/sources.list.d.bak
+          sudo mv /etc/apt/sources.list.d/* /etc/apt/sources.list.d.bak/ 2>/dev/null || true
+
           # 备份原 sources.list
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
 
-          # 生成 amd64 架构源列表
-          grep -v "^#" /etc/apt/sources.list.bak | sed 's/^deb /deb [arch=amd64] /g' | sudo tee /tmp/amd64.list
+          # 生成 amd64 列表（添加架构标识）
+          grep -v '^#' /etc/apt/sources.list.bak | sed 's/^deb /deb [arch=amd64] /g' | sudo tee /tmp/amd64.list
 
-          # 生成 arm64 架构源列表：替换架构，并将 security.ubuntu.com 替换为 ports.ubuntu.com/ubuntu-ports（避免 404）
-          cat /tmp/amd64.list | sed 's/\[arch=amd64\]/[arch=arm64]/g' | sed 's/security.ubuntu.com/ports.ubuntu.com\/ubuntu-ports/g' | sudo tee /tmp/arm64.list
+          # 生成 arm64 列表：替换架构，并将所有 Ubuntu 源域名替换为 ports.ubuntu.com/ubuntu-ports
+          sed -e 's/\[arch=amd64\]/[arch=arm64]/g' \
+              -e 's|http://archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
+              -e 's|http://security.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
+              /tmp/amd64.list | sudo tee /tmp/arm64.list
 
           # 合并两个列表，覆盖 sources.list
           cat /tmp/amd64.list /tmp/arm64.list | sudo tee /etc/apt/sources.list
@@ -62,7 +69,7 @@ jobs:
           sudo apt --fix-broken install -y
 
       # ------------------------------------------------------------
-      # 2. 安装依赖包（完全参照 Dockerfile 的包列表，仅调整 libstdc++ 版本）
+      # 2. 安装依赖包（严格参照 Dockerfile 列表，仅调整 libstdc++ 包名以适配 Ubuntu 24.04）
       # ------------------------------------------------------------
       - name: 安装构建依赖
         run: |
@@ -87,7 +94,7 @@ jobs:
             libx11-dev libxinerama-dev libfreetype-dev libfontconfig-dev \
             cmake \
             libstdc++6-arm64-cross \
-            libstdc++-13-dev-arm64-cross \   # 原为 libstdc++-12-dev-arm64-cross，Ubuntu 24.04 使用 13
+            libstdc++-dev:arm64 \          # 原为 libstdc++-12-dev-arm64-cross，Ubuntu 24.04 中使用默认版本
             libepoxy-dev:arm64 \
             libsdl2-dev:arm64 \
             ninja-build \
