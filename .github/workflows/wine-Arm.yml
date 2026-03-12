@@ -51,12 +51,13 @@ jobs:
             curl \
             gnupg \
             sudo \
-            xz-utils
+            xz-utils \
+            g++
 
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 配置 APT 源（支持 amd64 和 arm64）- 修复 here-document 缩进问题
+      # 1. 配置 APT 源（支持 amd64 和 arm64）
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
@@ -64,7 +65,7 @@ jobs:
           if [ -f /etc/apt/sources.list ]; then
             cp /etc/apt/sources.list /etc/apt/sources.list.bak
           else
-            # 如果不存在，创建一个基础的 amd64 源（使用 echo 避免 here-document 缩进问题）
+            # 如果不存在，创建一个基础的 amd64 源
             echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
             echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
             echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
@@ -315,10 +316,41 @@ jobs:
           make __tooldeps__ -j$(nproc)
           make -C nls || true
           echo "检查生成的工具:"
-          ls -la tools/winebuild/ tools/wrc/ tools/widl/ || true
+          ls -la tools/winebuild/ tools/wrc/ tools/widl/ || echo "工具目录可能为空"
 
       # ------------------------------------------------------------
-      # 10. 交叉编译 ARM64 WOW64
+      # 10. 查找并确认 Wine 工具路径
+      # ------------------------------------------------------------
+      - name: 定位 Wine 工具目录
+        id: find_tools
+        run: |
+          # 尝试多个可能的路径
+          POSSIBLE_PATHS=(
+            "${{ env.WINE64_DIR }}/amd64/tools"
+            "${{ env.WINE64_DIR }}/amd64"
+            "${{ env.WINE64_DIR }}/amd64/tools/winebuild"
+            "${{ env.WINE64_DIR }}/amd64/tools/wrc"
+            "${{ env.WINE64_DIR }}/amd64/tools/widl"
+          )
+          FOUND=""
+          for p in "${POSSIBLE_PATHS[@]}"; do
+            if [ -f "$p/winebuild" ] || [ -f "$p/wrc" ] || [ -f "$p/widl" ]; then
+              # 取包含工具的目录
+              TOOLS_DIR="$(dirname "$p")"
+              echo "找到 Wine 工具目录: $TOOLS_DIR"
+              FOUND="$TOOLS_DIR"
+              break
+            fi
+          done
+          if [ -z "$FOUND" ]; then
+            echo "错误: 未找到 Wine 工具"
+            find ${{ env.WINE64_DIR }} -name "winebuild" -o -name "wrc" -o -name "widl" 2>/dev/null || echo "未找到任何工具"
+            exit 1
+          fi
+          echo "WINE_TOOLS_DIR=$FOUND" >> $GITHUB_ENV
+
+      # ------------------------------------------------------------
+      # 11. 交叉编译 ARM64 WOW64
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -332,6 +364,10 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
+          # 使用上一步找到的 tools 目录
+          WINE_TOOLS="${{ env.WINE_TOOLS_DIR }}"
+          echo "使用 Wine 工具目录: $WINE_TOOLS"
+
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -343,7 +379,7 @@ jobs:
             --host=aarch64-linux-gnu \
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
-            --with-wine-tools=${{ env.WINE64_DIR }}/amd64/tools \
+            --with-wine-tools="$WINE_TOOLS" \
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
@@ -351,7 +387,7 @@ jobs:
           make install
 
       # ------------------------------------------------------------
-      # 11. 打包
+      # 12. 打包
       # ------------------------------------------------------------
       - name: 准备打包
         run: |
