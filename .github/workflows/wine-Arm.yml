@@ -52,7 +52,8 @@ jobs:
             gnupg \
             sudo \
             xz-utils \
-            g++
+            g++ \
+            file
 
       - uses: actions/checkout@v4
 
@@ -61,34 +62,21 @@ jobs:
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
-          # 备份原 sources.list（如果存在）
           if [ -f /etc/apt/sources.list ]; then
             cp /etc/apt/sources.list /etc/apt/sources.list.bak
           else
-            # 如果不存在，创建一个基础的 amd64 源
             echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
             echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
             echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
           fi
 
-          # 生成 amd64 列表（添加架构标识）
           grep -v '^#' /etc/apt/sources.list | sed 's/^deb /deb [arch=amd64] /g' > /tmp/amd64.list
-
-          # 生成 arm64 列表：替换架构，保持相同的 URL（deb.debian.org 和 security.debian.org 都支持 arm64）
           sed -e 's/\[arch=amd64\]/[arch=arm64]/g' /tmp/amd64.list > /tmp/arm64.list
-
-          # 合并两个列表，覆盖 sources.list
           cat /tmp/amd64.list /tmp/arm64.list > /etc/apt/sources.list
 
-          # 添加 arm64 架构并更新
           dpkg --add-architecture arm64
           apt-get update
-
-          # 测试 arm64 源是否可用（安装一个最小包）
-          apt-get install -y --no-install-recommends hello:arm64 || {
-            echo "❌ arm64 源测试失败，请检查源配置"
-            exit 1
-          }
+          apt-get install -y --no-install-recommends hello:arm64 || { echo "arm64 源测试失败"; exit 1; }
 
       # ------------------------------------------------------------
       # 2. 安装所有依赖（完全参照 Dockerfile 的包列表）
@@ -211,7 +199,6 @@ jobs:
                 git checkout "wine-$WINE_VERSION"
               fi
               WINE_VERSION_ACTUAL=$(git describe --tags --abbrev=0 2>/dev/null || echo "$WINE_VERSION")
-              # 下载并应用 staging 补丁
               PURE_VERSION=$(echo "$WINE_VERSION_ACTUAL" | sed 's/^wine-//')
               STAGING_VERSION="v${PURE_VERSION}"
               wget -O "wine-staging-${PURE_VERSION}.tar.gz" "https://github.com/wine-staging/wine-staging/archive/refs/tags/${STAGING_VERSION}.tar.gz" || \
@@ -259,7 +246,6 @@ jobs:
       - name: 修复 Termux 路径问题
         run: |
           cd ${{ env.WINE_SOURCE_DIR }}/source
-          echo "修复 Termux 路径问题..."
           find . -type f \( -name "*.c" -o -name "*.h" -o -name "*.in" -o -name "*.spec" \) -exec grep -l "/tmp" {} \; 2>/dev/null | xargs sed -i 's|/tmp/|/data/data/com.termux/files/usr/tmp/|g' 2>/dev/null || true
           find server -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
           find . -name "file.c" -exec sed -i 's|"/tmp"|"/data/data/com.termux/files/usr/tmp"|g' {} + 2>/dev/null || true
@@ -316,41 +302,38 @@ jobs:
           make __tooldeps__ -j$(nproc)
           make -C nls || true
           echo "检查生成的工具:"
-          if [ -d tools/winebuild ]; then ls -la tools/winebuild/; fi
-          if [ -d tools/wrc ]; then ls -la tools/wrc/; fi
-          if [ -d tools/widl ]; then ls -la tools/widl/; fi
+          ls -la tools/winebuild/ tools/wrc/ tools/widl/ || echo "工具目录可能为空"
+          # 确保文件存在且可执行
+          if [ -f tools/winebuild/winebuild ]; then
+            file tools/winebuild/winebuild
+            chmod +x tools/winebuild/winebuild
+          fi
+          if [ -f tools/wrc/wrc ]; then
+            file tools/wrc/wrc
+            chmod +x tools/wrc/wrc
+          fi
+          if [ -f tools/widl/widl ]; then
+            file tools/widl/widl
+            chmod +x tools/widl/widl
+          fi
+          # 创建统一的 bin 目录并将工具链接进去（便于 configure 查找）
+          mkdir -p tools/bin
+          ln -sf $(pwd)/tools/winebuild/winebuild tools/bin/
+          ln -sf $(pwd)/tools/wrc/wrc tools/bin/
+          ln -sf $(pwd)/tools/widl/widl tools/bin/
+          echo "$(pwd)/tools/bin" >> $GITHUB_PATH   # 将 bin 目录加入 PATH
 
       # ------------------------------------------------------------
-      # 10. 查找并确认 Wine 工具路径（使用 bash 以避免数组语法错误）
+      # 10. 验证工具可执行性
       # ------------------------------------------------------------
-      - name: 定位 Wine 工具目录
-        id: find_tools
-        shell: bash
+      - name: 验证 Wine 工具
         run: |
-          # 尝试多个可能的路径
-          POSSIBLE_PATHS=(
-            "${{ env.WINE64_DIR }}/amd64/tools"
-            "${{ env.WINE64_DIR }}/amd64"
-            "${{ env.WINE64_DIR }}/amd64/tools/winebuild"
-            "${{ env.WINE64_DIR }}/amd64/tools/wrc"
-            "${{ env.WINE64_DIR }}/amd64/tools/widl"
-          )
-          FOUND=""
-          for p in "${POSSIBLE_PATHS[@]}"; do
-            if [ -f "$p/winebuild" ] || [ -f "$p/wrc" ] || [ -f "$p/widl" ]; then
-              # 取包含工具的目录
-              TOOLS_DIR="$(dirname "$p")"
-              echo "找到 Wine 工具目录: $TOOLS_DIR"
-              FOUND="$TOOLS_DIR"
-              break
-            fi
-          done
-          if [ -z "$FOUND" ]; then
-            echo "错误: 未找到 Wine 工具"
-            find ${{ env.WINE64_DIR }} -name "winebuild" -o -name "wrc" -o -name "widl" 2>/dev/null || echo "未找到任何工具"
-            exit 1
-          fi
-          echo "WINE_TOOLS_DIR=$FOUND" >> $GITHUB_ENV
+          echo "测试 winebuild:"
+          winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          echo "测试 wrc:"
+          wrc --version || { echo "wrc 不可执行"; exit 1; }
+          echo "测试 widl:"
+          widl --version || { echo "widl 不可执行"; exit 1; }
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64
@@ -367,10 +350,8 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 使用上一步找到的 tools 目录
-          WINE_TOOLS="${{ env.WINE_TOOLS_DIR }}"
-          echo "使用 Wine 工具目录: $WINE_TOOLS"
-
+          # 现在 PATH 中已经包含 winebuild/wrc/widl 的目录，configure 会自动找到它们
+          # 同时显式指定 wine64 目录
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -382,8 +363,9 @@ jobs:
             --host=aarch64-linux-gnu \
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
-            --with-wine-tools=../wine64/amd64 \
-            CC=aarch64-linux-gnu-gcc
+            --with-wine64=${{ env.WINE64_DIR }}/amd64 \
+            CC=aarch64-linux-gnu-gcc \
+            CXX=aarch64-linux-gnu-g++
 
           make -j$(nproc)
           make install
