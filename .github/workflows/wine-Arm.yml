@@ -53,7 +53,8 @@ jobs:
             sudo \
             xz-utils \
             g++ \
-            file
+            file \
+            ldd
 
       - uses: actions/checkout@v4
 
@@ -316,24 +317,31 @@ jobs:
             file tools/widl/widl
             chmod +x tools/widl/widl
           fi
-          # 创建统一的 bin 目录并将工具链接进去（便于 configure 查找）
-          mkdir -p tools/bin
-          ln -sf $(pwd)/tools/winebuild/winebuild tools/bin/
-          ln -sf $(pwd)/tools/wrc/wrc tools/bin/
-          ln -sf $(pwd)/tools/widl/widl tools/bin/
-          echo "$(pwd)/tools/bin" >> $GITHUB_PATH   # 将 bin 目录加入 PATH
+          # 创建统一目录并复制可执行文件（不使用符号链接）
+          mkdir -p tools-bin
+          cp tools/winebuild/winebuild tools-bin/
+          cp tools/wrc/wrc tools-bin/
+          cp tools/widl/widl tools-bin/
+          chmod +x tools-bin/*
+          echo "统一工具目录内容:"
+          ls -la tools-bin/
+          # 将目录加入 PATH（便于后续手动验证）
+          echo "$(pwd)/tools-bin" >> $GITHUB_PATH
 
       # ------------------------------------------------------------
-      # 10. 验证 Wine 工具
+      # 10. 验证 Wine 工具（使用复制的文件）
       # ------------------------------------------------------------
       - name: 验证 Wine 工具
         run: |
+          TOOLSDIR="${{ env.WINE64_DIR }}/amd64/tools-bin"
+          echo "验证工具目录: $TOOLSDIR"
+          ls -la $TOOLSDIR
           echo "测试 winebuild:"
-          winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          $TOOLSDIR/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
           echo "测试 wrc:"
-          wrc --version || { echo "wrc 不可执行"; exit 1; }
+          $TOOLSDIR/wrc --version || { echo "wrc 不可执行"; exit 1; }
           echo "测试 widl:"
-          widl -V || { echo "widl 不可执行"; exit 1; }
+          $TOOLSDIR/widl -V || { echo "widl 不可执行"; exit 1; }
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64
@@ -350,8 +358,8 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 使用显式的 --with-wine-tools 指向 bin 目录
-          WINE_TOOLS="${{ env.WINE64_DIR }}/amd64/tools/bin"
+          # 使用复制的工具目录
+          WINE_TOOLS="${{ env.WINE64_DIR }}/amd64/tools-bin"
           echo "使用 Wine 工具目录: $WINE_TOOLS"
 
           ../configure \
