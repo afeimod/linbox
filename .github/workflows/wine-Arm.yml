@@ -51,20 +51,15 @@ jobs:
             curl \
             gnupg \
             sudo \
-            xz-utils \
-            apt-utils
+            xz-utils
 
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 配置 APT 源（支持 amd64 和 arm64）- 修正版
+      # 1. 配置 APT 源（支持 amd64 和 arm64）
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
-          # 显示原始源（用于调试）
-          echo "原始 sources.list:"
-          cat /etc/apt/sources.list || echo "文件不存在"
-
           # 备份原 sources.list（如果存在）
           if [ -f /etc/apt/sources.list ]; then
             cp /etc/apt/sources.list /etc/apt/sources.list.bak
@@ -90,13 +85,9 @@ jobs:
           dpkg --add-architecture arm64
           apt-get update
 
-          # 调试：显示当前源
-          echo "当前 sources.list:"
-          cat /etc/apt/sources.list
-
           # 测试 arm64 源是否可用（安装一个最小包）
           apt-get install -y --no-install-recommends hello:arm64 || {
-            echo "arm64 源测试失败，退出"
+            echo "❌ arm64 源测试失败，请检查源配置"
             exit 1
           }
 
