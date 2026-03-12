@@ -53,8 +53,7 @@ jobs:
             sudo \
             xz-utils \
             g++ \
-            file \
-            ldd
+            file
 
       - uses: actions/checkout@v4
 
