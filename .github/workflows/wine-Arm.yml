@@ -324,7 +324,7 @@ jobs:
           echo "$(pwd)/tools/bin" >> $GITHUB_PATH   # 将 bin 目录加入 PATH
 
       # ------------------------------------------------------------
-      # 10. 验证 Wine 工具（修正 widl 参数）
+      # 10. 验证 Wine 工具
       # ------------------------------------------------------------
       - name: 验证 Wine 工具
         run: |
@@ -350,8 +350,10 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 现在 PATH 中已经包含 winebuild/wrc/widl 的目录，configure 会自动找到它们
-          # 同时显式指定 wine64 目录
+          # 使用显式的 --with-wine-tools 指向 bin 目录
+          WINE_TOOLS="${{ env.WINE64_DIR }}/amd64/tools/bin"
+          echo "使用 Wine 工具目录: $WINE_TOOLS"
+
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -364,6 +366,7 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine64=${{ env.WINE64_DIR }}/amd64 \
+            --with-wine-tools="$WINE_TOOLS" \
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
