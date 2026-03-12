@@ -289,9 +289,9 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（x86_64）用于生成交叉编译工具
+      # 9. 构建 native wine64（x86_64）完整版本（包含工具和库）
       # ------------------------------------------------------------
-      - name: 构建 native wine64 工具
+      - name: 构建 native wine64 完整版本
         run: |
           mkdir -p ${{ env.WINE64_DIR }}
           cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
@@ -299,40 +299,16 @@ jobs:
           mkdir -p amd64
           cd amd64
           ../source/configure --enable-win64 --prefix=/usr/local
-          make __tooldeps__ -j$(nproc)
-          make -C nls || true
-          echo "检查生成的工具:"
-          ls -la tools/winebuild/ tools/wrc/ tools/widl/ || echo "工具目录可能为空"
-          # 确保文件存在且可执行
-          if [ -f tools/winebuild/winebuild ]; then
-            file tools/winebuild/winebuild
-            chmod +x tools/winebuild/winebuild
-          fi
-          if [ -f tools/wrc/wrc ]; then
-            file tools/wrc/wrc
-            chmod +x tools/wrc/wrc
-          fi
-          if [ -f tools/widl/widl ]; then
-            file tools/widl/widl
-            chmod +x tools/widl/widl
-          fi
-          # 创建统一目录并复制可执行文件（不使用符号链接）
-          mkdir -p tools-bin
-          cp tools/winebuild/winebuild tools-bin/
-          cp tools/wrc/wrc tools-bin/
-          cp tools/widl/widl tools-bin/
-          chmod +x tools-bin/*
-          echo "统一工具目录内容:"
-          ls -la tools-bin/
-          # 将目录加入 PATH（便于后续手动验证）
-          echo "$(pwd)/tools-bin" >> $GITHUB_PATH
+          make -j$(nproc)
+          echo "完整构建完成，工具位于 $(pwd)/tools"
+          ls -la tools/
 
       # ------------------------------------------------------------
-      # 10. 验证 Wine 工具（使用复制的文件）
+      # 10. 验证 Wine 工具（直接使用构建目录中的工具）
       # ------------------------------------------------------------
       - name: 验证 Wine 工具
         run: |
-          TOOLSDIR="${{ env.WINE64_DIR }}/amd64/tools-bin"
+          TOOLSDIR="${{ env.WINE64_DIR }}/amd64/tools"
           echo "验证工具目录: $TOOLSDIR"
           ls -la $TOOLSDIR
           echo "测试 winebuild:"
@@ -341,6 +317,10 @@ jobs:
           $TOOLSDIR/wrc --version || { echo "wrc 不可执行"; exit 1; }
           echo "测试 widl:"
           $TOOLSDIR/widl -V || { echo "widl 不可执行"; exit 1; }
+          echo "检查动态库依赖:"
+          ldd $TOOLSDIR/winebuild || echo "ldd 检查失败（可能静态链接或无需关注）"
+          ldd $TOOLSDIR/wrc || true
+          ldd $TOOLSDIR/widl || true
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64
@@ -357,15 +337,16 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 使用复制的工具目录
-          WINE_TOOLS="${{ env.WINE64_DIR }}/amd64/tools-bin"
-          echo "使用 Wine 工具目录: $WINE_TOOLS"
+          # 添加 native 工具目录到 PATH 以增强可靠性（configure 会自动通过 --with-wine64 查找）
+          export PATH="${{ env.WINE64_DIR }}/amd64/tools:$PATH"
+
+          echo "使用 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
+          echo "当前 PATH: $PATH"
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
             --enable-archs=arm64ec,aarch64,i386 \
-            --enable-tools \
             --disable-tests \
             --with-vulkan \
             --with-gstreamer \
@@ -373,7 +354,6 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine64=${{ env.WINE64_DIR }}/amd64 \
-            --with-wine-tools="$WINE_TOOLS" \
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
