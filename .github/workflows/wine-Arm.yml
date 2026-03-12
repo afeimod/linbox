@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 1. 配置 APT 源（支持 amd64 和 arm64）
+      # 1. 配置 APT 源（支持 amd64 和 arm64）- 修复 here-document 缩进问题
       # ------------------------------------------------------------
       - name: 配置 APT 源
         run: |
@@ -64,12 +64,10 @@ jobs:
           if [ -f /etc/apt/sources.list ]; then
             cp /etc/apt/sources.list /etc/apt/sources.list.bak
           else
-            # 如果不存在，创建一个基础的 amd64 源
-            cat > /etc/apt/sources.list <<EOF
-            deb http://deb.debian.org/debian bookworm main contrib non-free
-            deb http://deb.debian.org/debian bookworm-updates main contrib non-free
-            deb http://security.debian.org/debian-security bookworm-security main contrib non-free
-            EOF
+            # 如果不存在，创建一个基础的 amd64 源（使用 echo 避免 here-document 缩进问题）
+            echo "deb http://deb.debian.org/debian bookworm main contrib non-free" > /etc/apt/sources.list
+            echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free" >> /etc/apt/sources.list
+            echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free" >> /etc/apt/sources.list
           fi
 
           # 生成 amd64 列表（添加架构标识）
