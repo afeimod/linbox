@@ -40,23 +40,40 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 配置 APT 源，支持 arm64 并避免 404 错误
+      # 彻底修复 APT 源：同时配置 amd64 和 arm64 源，避免 404
+      # 参照 Dockerfile.txt 的处理方式
       # ------------------------------------------------------------
-      - name: 添加 ARM64 架构并配置 APT 源
+      - name: 添加 ARM64 架构并重新配置 APT 源
         run: |
           sudo dpkg --add-architecture arm64
-          # 主源限制为 amd64
-          sudo sed -i 's/^deb /deb [arch=amd64] /g' /etc/apt/sources.list
-          # 添加 arm64 专用源（使用 ports.ubuntu.com）
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+
+          # 备份原始 sources.list
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+
+          # 生成新的 sources.list，明确指定架构
+          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+          # amd64 sources (archive.ubuntu.com)
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+
+          # arm64 sources (ports.ubuntu.com)
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+
+          # 更新包列表
           sudo apt update
           sudo apt --fix-broken install -y
 
       # ------------------------------------------------------------
       # 安装所有构建依赖（主机架构 + arm64 库）
+      # 严格参照 Dockerfile.txt 中的包列表
       # ------------------------------------------------------------
-      - name: 安装基础依赖
+      - name: 安装基础工具和交叉编译工具链
         run: |
           sudo apt install -y \
             autoconf \
@@ -89,7 +106,8 @@ jobs:
             llvm \
             lld \
             nasm \
-            gtk-doc-tools
+            gtk-doc-tools \
+            binutils-aarch64-linux-gnu
 
       - name: 安装主机架构开发库（amd64）
         run: |
@@ -172,7 +190,9 @@ jobs:
             libcups2-dev:arm64 \
             libxkbcommon-dev:arm64 \
             libxkbregistry-dev:arm64 \
-            libwayland-dev:arm64
+            libwayland-dev:arm64 \
+            libstdc++6-arm64-cross \
+            libstdc++-12-dev-arm64-cross
 
       # ------------------------------------------------------------
       # 安装 llvm-mingw 交叉编译工具链
