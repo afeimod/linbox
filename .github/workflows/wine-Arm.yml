@@ -345,6 +345,7 @@ jobs:
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
+      #     修改点：添加 --enable-tools，并设置正确的 LDFLAGS 以适配 Termux
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -356,7 +357,8 @@ jobs:
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
-          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
+          # 根据 rules (4).txt 设置正确的 LDFLAGS，同时保留库搜索路径
+          export LDFLAGS="-L/usr/lib/aarch64-linux-gnu -Wl,--dynamic-linker=/data/data/com.termux/files/usr/glibc/lib/ld-linux-aarch64.so.1 -Wl,-rpath=/data/data/com.termux/files/usr/glibc/lib"
           export WINE_NLS_DIR=/opt/wine64-native/nls
 
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
@@ -366,6 +368,7 @@ jobs:
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
             --enable-archs=arm64ec,aarch64,i386 \
+            --enable-tools \
             --disable-tests \
             --with-vulkan \
             --with-gstreamer \
@@ -374,14 +377,35 @@ jobs:
             build_alias=x86_64-linux-gnu \
             --with-wine64=${{ env.WINE64_DIR }}/amd64 \
             --with-wine-tools=/opt/wine64-native \
-            CC=aarch64-linux-gnu-gcc \
-            CXX=aarch64-linux-gnu-g++
+            CC=aarch64-linux-gnu-gcc
 
           make -j$(nproc)
           make install
 
+          # 验证安装是否生成 bin 目录（若缺失则报错）
+          if [ ! -d /tmp/wine-install-wow64/bin ]; then
+            echo "错误: /tmp/wine-install-wow64/bin 目录不存在，安装可能不完整"
+            exit 1
+          fi
+
       # ------------------------------------------------------------
-      # 12. 打包
+      # 12. 验证安装目录内容（可选，便于调试）
+      # ------------------------------------------------------------
+      - name: 验证安装目录内容
+        run: |
+          echo "安装目录 /tmp/wine-install-wow64 的内容："
+          ls -la /tmp/wine-install-wow64/
+          if [ -d /tmp/wine-install-wow64/bin ]; then
+            echo "bin 目录内容："
+            ls -la /tmp/wine-install-wow64/bin/
+          fi
+          if [ -d /tmp/wine-install-wow64/share ]; then
+            echo "share 目录内容："
+            ls -la /tmp/wine-install-wow64/share/
+          fi
+
+      # ------------------------------------------------------------
+      # 13. 打包
       # ------------------------------------------------------------
       - name: 准备打包
         run: |
@@ -437,7 +461,7 @@ jobs:
             ✓ 应用了关键补丁提升兼容性
 
             ## 安装说明
-            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置，并设置环境变量。
+            解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
 
             ## 构建信息
             - 构建时间: ${{ github.event.head_commit.timestamp }}
