@@ -300,11 +300,23 @@ jobs:
           cd amd64
           ../source/configure --enable-win64 --prefix=/usr/local
           make -j$(nproc)
-          # 显式构建 nls 目录以确保生成 locale.nls
+          # 显式构建 nls 目录，确保 locale.nls 生成
           make -C nls
-          echo "完整构建完成，工具位于 $(pwd)/tools"
-          ls -la tools/
+          # 如果仍未生成，尝试手动运行 make_nls
+          if [ ! -f nls/locale.nls ]; then
+            echo "手动生成 locale.nls"
+            # 确保 make_nls 工具已构建
+            make -C ../tools/make_nls
+            (cd nls && ../tools/make_nls/make_nls)
+          fi
+          # 检查生成结果
+          echo "nls 目录内容:"
           ls -la nls/
+          if [ ! -f nls/locale.nls ]; then
+            echo "错误: locale.nls 生成失败"
+            exit 1
+          fi
+          echo "完整构建完成，工具位于 $(pwd)/tools"
 
       # ------------------------------------------------------------
       # 10. 将完整的 native 构建目录复制到可执行位置（包含 nls）
