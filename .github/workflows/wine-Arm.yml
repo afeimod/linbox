@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'vanilla'
+        default: 'staging'
         type: choice
         options:
         - vanilla
@@ -382,49 +382,82 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 12. 补全安装目录的运行时文件（NLS、字体、关键可执行文件）
+      # 12. 全面补全安装目录的运行时文件（NLS、字体、wine.inf、关键程序及符号链接）
       # ------------------------------------------------------------
-      - name: 补全安装目录的运行时文件
+      - name: 全面补全安装目录的运行时文件
         run: |
           set -e
           TARGET_PREFIX="/tmp/wine-install-wow64"
-          NATIVE_NLS_DIR="/opt/wine64-native/nls"
-          SOURCE_FONTS_DIR="${{ env.WINE_SOURCE_DIR }}/source/fonts"
           BUILD_DIR="${{ env.WINE_SOURCE_DIR }}/source/build-arm64"
+          SOURCE_DIR="${{ env.WINE_SOURCE_DIR }}/source"
+          NATIVE_NLS_DIR="/opt/wine64-native/nls"
+          SOURCE_FONTS_DIR="$SOURCE_DIR/fonts"
 
           echo "=== 补全 share/wine/nls ==="
           mkdir -p "$TARGET_PREFIX/share/wine/nls"
           if [ -d "$NATIVE_NLS_DIR" ]; then
-            cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+              cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
           fi
-          # 确保 locale.nls 存在（从备份恢复）
           if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
-            cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
+              cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
           fi
 
           echo "=== 补全 share/wine/fonts ==="
           if [ -d "$SOURCE_FONTS_DIR" ]; then
-            mkdir -p "$TARGET_PREFIX/share/wine/fonts"
-            cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
+              mkdir -p "$TARGET_PREFIX/share/wine/fonts"
+              cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
           else
-            echo "警告: 源码 fonts 目录不存在，跳过字体复制"
+              echo "警告: 源码 fonts 目录不存在，跳过字体复制"
           fi
 
-          echo "=== 验证 bin 目录关键文件 ==="
+          echo "=== 补全 wine.inf ==="
+          # 查找构建生成的 wine.inf（优先）
+          WINE_INF_SRC=$(find "$BUILD_DIR" -name "wine.inf" -type f 2>/dev/null | head -1)
+          if [ -z "$WINE_INF_SRC" ]; then
+              # 如果未生成，尝试从源码目录复制原始文件
+              if [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf" ]; then
+                  WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf"
+              elif [ -f "$SOURCE_DIR/dlls/wine.inf/wine.inf.in" ]; then
+                  WINE_INF_SRC="$SOURCE_DIR/dlls/wine.inf/wine.inf.in"
+              fi
+          fi
+          if [ -n "$WINE_INF_SRC" ]; then
+              mkdir -p "$TARGET_PREFIX/share/wine"
+              cp -v "$WINE_INF_SRC" "$TARGET_PREFIX/share/wine/wine.inf"
+          else
+              echo "警告: 未找到 wine.inf 文件"
+          fi
+
+          echo "=== 补全关键程序文件 ==="
           BIN_DIR="$TARGET_PREFIX/bin"
           mkdir -p "$BIN_DIR"
-          # 检查并补充关键可执行文件
-          for exe in wine wine64 wine-preloader wineserver; do
-            if [ ! -f "$BIN_DIR/$exe" ]; then
-              # 在构建目录中查找（可能位于 loader/ 或 programs/ 下）
-              found=$(find "$BUILD_DIR" -type f -name "$exe" 2>/dev/null | head -1)
-              if [ -n "$found" ]; then
-                cp -v "$found" "$BIN_DIR/"
-              else
-                echo "警告: 未找到 $exe，可能安装时已包含或构建失败"
+
+          # 需要的关键程序列表
+          PROGRAMS="wineboot winecfg regedit wineconsole wineserver wine wine64"
+          for prog in $PROGRAMS; do
+              if [ ! -f "$BIN_DIR/$prog" ]; then
+                  # 在构建目录中查找可执行文件
+                  found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
+                  if [ -n "$found" ]; then
+                      cp -v "$found" "$BIN_DIR/"
+                  else
+                      echo "警告: 未找到 $prog"
+                  fi
               fi
-            fi
           done
+
+          # 检查 wine 是否存在，如果缺失但 wine64 存在，创建符号链接
+          if [ ! -f "$BIN_DIR/wine" ] && [ -f "$BIN_DIR/wine64" ]; then
+              ln -sv wine64 "$BIN_DIR/wine"
+          fi
+
+          # 确保 wine-preloader 存在（可能 wine 本身是链接到 preloader？但标准安装 wine 指向 wine64，preloader 单独存在）
+          if [ ! -f "$BIN_DIR/wine-preloader" ]; then
+              found=$(find "$BUILD_DIR" -type f -name "wine-preloader" -executable 2>/dev/null | head -1)
+              if [ -n "$found" ]; then
+                  cp -v "$found" "$BIN_DIR/"
+              fi
+          fi
 
           echo "=== 最终安装目录结构预览 ==="
           ls -la "$TARGET_PREFIX/share/wine/" || true
@@ -501,6 +534,7 @@ jobs:
             ✓ GStreamer 多媒体后端
             ✓ 中文环境支持
             ✓ 应用了关键补丁提升兼容性
+            ✓ 包含完整的运行时文件：wine.inf、wineboot 及所有必要程序
 
             ## 安装说明
             解压后，将 `${{ env.BUILD_NAME }}` 文件夹放置在 Termux 的合适位置（建议 `/data/data/com.termux/files/usr/glibc`），并设置环境变量。
