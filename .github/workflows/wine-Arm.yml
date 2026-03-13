@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'staging'
+        default: 'vanilla'
         type: choice
         options:
         - vanilla
@@ -304,42 +304,27 @@ jobs:
           ls -la tools/
 
       # ------------------------------------------------------------
-      # 10. 提取所有 Wine 工具到平铺目录（供交叉编译使用）
+      # 10. 将完整的 native 构建目录复制到可执行位置
       # ------------------------------------------------------------
-      - name: 提取 Wine 工具到独立目录
+      - name: 复制完整构建目录并验证工具
         run: |
-          # 创建工具目录
-          mkdir -p /opt/wine-tools-bin
+          # 创建目标目录
+          mkdir -p /opt/wine64-native
+          # 递归复制整个构建目录，保留所有属性
+          cp -a ${{ env.WINE64_DIR }}/amd64/* /opt/wine64-native/
 
-          # 遍历 tools 下的每个子目录，将可执行文件复制到工具目录
-          for toolpath in ${{ env.WINE64_DIR }}/amd64/tools/*/; do
-            toolname=$(basename "$toolpath")
-            # 子目录内通常有一个与目录同名的可执行文件
-            if [ -f "${toolpath}${toolname}" ]; then
-              cp "${toolpath}${toolname}" "/opt/wine-tools-bin/${toolname}"
-              echo "复制 ${toolname}"
-            else
-              # 如果没有同名文件，尝试复制子目录内第一个可执行文件（应急）
-              first_exe=$(find "$toolpath" -maxdepth 1 -type f -executable | head -1)
-              if [ -n "$first_exe" ]; then
-                cp "$first_exe" "/opt/wine-tools-bin/$(basename "$first_exe")"
-                echo "复制 $(basename "$first_exe") 从 $toolpath"
-              fi
-            fi
-          done
+          # 确保 tools 子目录及其内容可执行
+          chmod -R +x /opt/wine64-native/tools/*/
 
-          # 确保所有文件可执行
-          chmod +x /opt/wine-tools-bin/*
-
-          # 验证关键工具
+          # 验证工具可执行性（使用完整路径调用）
           echo "验证工具:"
-          /opt/wine-tools-bin/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
-          /opt/wine-tools-bin/wrc --version || { echo "wrc 不可执行"; exit 1; }
-          /opt/wine-tools-bin/widl -V || { echo "widl 不可执行"; exit 1; }
+          /opt/wine64-native/tools/winebuild/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          /opt/wine64-native/tools/wrc/wrc --version || { echo "wrc 不可执行"; exit 1; }
+          /opt/wine64-native/tools/widl/widl -V || { echo "widl 不可执行"; exit 1; }
           echo "所有工具验证通过"
 
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用平铺工具目录）
+      # 11. 交叉编译 ARM64 WOW64（使用完整构建目录作为工具目录）
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -353,9 +338,8 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 使用平铺工具目录
-          echo "使用 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
-          echo "使用 Wine 工具目录: /opt/wine-tools-bin"
+          echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
+          echo "当前 PATH: $PATH"
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
@@ -368,7 +352,7 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine64=${{ env.WINE64_DIR }}/amd64 \
-            --with-wine-tools=/opt/wine-tools-bin \
+            --with-wine-tools=/opt/wine64-native \
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
