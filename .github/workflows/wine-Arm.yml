@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'staging'
+        default: 'vanilla'
         type: choice
         options:
         - vanilla
@@ -289,9 +289,9 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（x86_64）完整版本（包含工具和 NLS）
+      # 9. 构建 native wine64（仅工具依赖和 NLS，模仿成功示例）
       # ------------------------------------------------------------
-      - name: 构建 native wine64 完整版本
+      - name: 构建 native wine64 工具和 NLS
         run: |
           mkdir -p ${{ env.WINE64_DIR }}
           cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
@@ -299,24 +299,23 @@ jobs:
           mkdir -p amd64
           cd amd64
           ../source/configure --enable-win64 --prefix=/usr/local
-          make -j$(nproc)
-          # 显式构建 nls 目录，确保 locale.nls 生成
+          # 只构建工具依赖（模仿 Dockerfile (1).txt）
+          make __tooldeps__ -j$(nproc)
+          # 显式构建 nls 目录以生成 locale.nls
           make -C nls
-          # 如果仍未生成，尝试手动运行 make_nls
-          if [ ! -f nls/locale.nls ]; then
-            echo "手动生成 locale.nls"
-            # 确保 make_nls 工具已构建
-            make -C ../tools/make_nls
-            (cd nls && ../tools/make_nls/make_nls)
-          fi
-          # 检查生成结果
+          # 验证 locale.nls 是否生成
           echo "nls 目录内容:"
           ls -la nls/
           if [ ! -f nls/locale.nls ]; then
             echo "错误: locale.nls 生成失败"
             exit 1
           fi
-          echo "完整构建完成，工具位于 $(pwd)/tools"
+          # 检查文件大小（非空）
+          if [ ! -s nls/locale.nls ]; then
+            echo "错误: locale.nls 为空"
+            exit 1
+          fi
+          echo "locale.nls 生成成功，大小: $(wc -c < nls/locale.nls) 字节"
 
       # ------------------------------------------------------------
       # 10. 将完整的 native 构建目录复制到可执行位置（包含 nls）
@@ -325,10 +324,10 @@ jobs:
         run: |
           # 创建目标目录
           mkdir -p /opt/wine64-native
-          # 递归复制整个构建目录（包含 nls 等），保留所有属性
+          # 递归复制整个构建目录，保留所有属性
           cp -a ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
 
-          # 确保 tools 和 nls 子目录及其内容可执行/可读
+          # 确保 tools 和 nls 子目录可读/可执行
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
 
@@ -338,7 +337,7 @@ jobs:
           /opt/wine64-native/tools/wrc/wrc --version || { echo "wrc 不可执行"; exit 1; }
           /opt/wine64-native/tools/widl/widl -V || { echo "widl 不可执行"; exit 1; }
           if [ -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "locale.nls 存在"
+            echo "locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
           else
             echo "错误: locale.nls 不存在"
             exit 1
