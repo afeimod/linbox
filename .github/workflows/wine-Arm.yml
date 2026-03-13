@@ -294,17 +294,19 @@ jobs:
           make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
           make -C nls
+          # 查找 locale.nls
+          echo "查找 locale.nls:"
+          find . -name "locale.nls" -type f
           # 严格检查 locale.nls 是否存在且非空
           if [ ! -f nls/locale.nls ]; then
-            echo "错误: locale.nls 未生成"
+            echo "错误: nls/locale.nls 未生成"
             exit 1
           fi
           if [ ! -s nls/locale.nls ]; then
-            echo "错误: locale.nls 为空"
+            echo "错误: nls/locale.nls 为空"
             exit 1
           fi
           echo "locale.nls 生成成功，大小: $(wc -c < nls/locale.nls) 字节"
-          # 列出 nls 目录以确认
           ls -la nls/
 
       # ------------------------------------------------------------
@@ -312,11 +314,17 @@ jobs:
       # ------------------------------------------------------------
       - name: 复制构建目录并验证 NLS
         run: |
+          set -e
           mkdir -p /opt/wine64-native
+          # 验证源文件存在
+          if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
+            echo "错误: 源目录中 nls/locale.nls 不存在"
+            exit 1
+          fi
           cp -a ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
-          # 再次验证 locale.nls 存在
+          # 验证复制后的文件
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
             echo "错误: 复制后 locale.nls 丢失"
             exit 1
