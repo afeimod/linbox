@@ -339,6 +339,7 @@ jobs:
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
+      #     修改：移除 --with-wine64，仅使用 --with-wine-tools 以强制重新编译 programs
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -357,6 +358,7 @@ jobs:
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
           echo "WINE_NLS_DIR=$WINE_NLS_DIR"
 
+          # 关键修改：仅使用 --with-wine-tools，不使用 --with-wine64
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -368,7 +370,6 @@ jobs:
             --host=aarch64-linux-gnu \
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
-            --with-wine64=${{ env.WINE64_DIR }}/amd64 \
             --with-wine-tools=/opt/wine64-native \
             CC=aarch64-linux-gnu-gcc
 
@@ -382,7 +383,7 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 12. 全面补全安装目录的运行时文件（增强版）
+      # 12. 全面补全安装目录的运行时文件（增强版：优先从 programs/ 查找）
       # ------------------------------------------------------------
       - name: 全面补全安装目录的运行时文件（增强版）
         run: |
@@ -432,19 +433,27 @@ jobs:
           BIN_DIR="$TARGET_PREFIX/bin"
           mkdir -p "$BIN_DIR"
 
-          # 需要的关键程序列表
+          # 需要的关键程序列表（包括 wineboot, winecfg, regedit, wineconsole 等）
           PROGRAMS="wine wine64 wine-preloader wineserver wineboot winecfg regedit wineconsole"
           for prog in $PROGRAMS; do
               if [ -f "$BIN_DIR/$prog" ]; then
                   echo "文件 $BIN_DIR/$prog 已存在"
                   continue
               fi
-              # 在构建目录中查找可执行文件（递归）
-              found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
+              # 优先从 programs/ 子目录查找（用户态程序）
+              found=""
+              if [[ "$prog" != "wine" && "$prog" != "wine64" && "$prog" != "wine-preloader" && "$prog" != "wineserver" ]]; then
+                  found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
+              fi
+              if [ -z "$found" ]; then
+                  # 全目录搜索（包括 loader/ 等）
+                  found=$(find "$BUILD_DIR" -type f -name "$prog" -executable 2>/dev/null | head -1)
+              fi
               if [ -n "$found" ]; then
                   cp -v "$found" "$BIN_DIR/"
               else
-                  echo "警告: 在构建目录中未找到 $prog"
+                  echo "错误: 完全未找到 $prog"
+                  exit 1
               fi
           done
 
