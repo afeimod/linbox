@@ -296,45 +296,45 @@ jobs:
           make -C nls
           echo "查找 locale.nls:"
           find . -name "locale.nls" -type f
-          # 检查 nls/locale.nls 是否存在，并备份到独立位置
-          if [ ! -f nls/locale.nls ]; then
+          # 检查 nls/locale.nls 是否存在，并备份到独立位置（跟随符号链接）
+          if [ ! -f nls/locale.nls ] && [ ! -L nls/locale.nls ]; then
             echo "错误: nls/locale.nls 未生成"
             exit 1
           fi
           mkdir -p /opt/nls-backup
-          cp nls/locale.nls /opt/nls-backup/
+          cp -L nls/locale.nls /opt/nls-backup/
           echo "locale.nls 已备份到 /opt/nls-backup/locale.nls"
           ls -la nls/
 
       # ------------------------------------------------------------
-      # 10. 复制构建目录，若丢失则从备份恢复
+      # 10. 复制构建目录，跟随符号链接，并验证 NLS（带恢复机制）
       # ------------------------------------------------------------
       - name: 复制构建目录并验证 NLS（带恢复机制）
         run: |
           set -e
           mkdir -p /opt/wine64-native
-          # 检查源文件，若不存在则从备份恢复
-          if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
+          # 检查源文件，若不存在则从备份恢复（但备份也应使用跟随符号链接的方式）
+          if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ] && [ ! -L ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
             echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
             if [ -f /opt/nls-backup/locale.nls ]; then
               mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
-              cp /opt/nls-backup/locale.nls ${{ env.WINE64_DIR }}/amd64/nls/locale.nls
+              cp -f /opt/nls-backup/locale.nls ${{ env.WINE64_DIR }}/amd64/nls/locale.nls
               echo "已从备份恢复 locale.nls"
             else
               echo "错误: 无法恢复 locale.nls"
               exit 1
             fi
           fi
-          # 复制整个构建目录
-          cp -a ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
+          # 复制整个构建目录，使用 -aL 选项（归档且跟随符号链接）
+          cp -aL ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
-          # 验证复制后的文件，若丢失则从备份恢复
+          # 验证复制后的文件是否为普通文件（不是符号链接）
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "警告: 复制后 locale.nls 丢失，尝试从备份恢复"
+            echo "警告: 复制后 locale.nls 丢失或为无效符号链接，尝试从备份恢复"
             if [ -f /opt/nls-backup/locale.nls ]; then
               mkdir -p /opt/wine64-native/nls
-              cp /opt/nls-backup/locale.nls /opt/wine64-native/nls/locale.nls
+              cp -f /opt/nls-backup/locale.nls /opt/wine64-native/nls/locale.nls
               echo "已从备份恢复 locale.nls 到目标目录"
             else
               echo "错误: 无法恢复 locale.nls"
