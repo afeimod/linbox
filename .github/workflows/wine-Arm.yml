@@ -304,26 +304,70 @@ jobs:
           ls -la tools/
 
       # ------------------------------------------------------------
-      # 10. 复制整个 tools 目录到安全位置并验证工具（避免原目录 noexec 问题）
+      # 10. 复制并整理工具到安全目录
       # ------------------------------------------------------------
-      - name: 复制工具到安全目录并验证
+      - name: 复制并整理工具到安全目录
         run: |
-          # 创建独立工具目录，递归复制所有工具子目录
-          mkdir -p /opt/wine-tools
-          cp -r ${{ env.WINE64_DIR }}/amd64/tools/* /opt/wine-tools/
-
-          # 确保所有可执行文件都有执行权限（理论上 cp 会保留，但显式设置无害）
-          chmod +x /opt/wine-tools/*/*
-
-          # 使用绝对路径验证关键工具
-          echo "验证工具:"
-          /opt/wine-tools/winebuild/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
-          /opt/wine-tools/wrc/wrc --version || { echo "wrc 不可执行"; exit 1; }
-          /opt/wine-tools/widl/widl -V || { echo "widl 不可执行"; exit 1; }
-          echo "所有工具验证通过"
+          # 创建专用的工具目录和 bin 子目录
+          mkdir -p /opt/wine-tools/bin
+          
+          # 源工具目录（由原生 wine64 构建产生）
+          TOOLS_SRC_DIR="${{ env.WINE64_DIR }}/amd64/tools"
+          
+          # 定义需要查找和复制的核心 Wine 构建工具列表
+          declare -a key_tools=("winebuild" "wrc" "widl" "wmc" "winegcc" "wineg++")
+          
+          echo "正在从 $TOOLS_SRC_DIR 查找并复制工具..."
+          for tool in "${key_tools[@]}"; do
+            # 查找并复制与工具同名的可执行文件
+            if find "$TOOLS_SRC_DIR" -type f -name "$tool" -exec cp -v {} /opt/wine-tools/bin/ \; 2>/dev/null | grep -q '.'; then
+              echo "  ✓ 已复制: $tool"
+            else
+              # 如果未找到，尝试查找 .exe 后缀（针对某些 Windows 工具链变体）
+              if find "$TOOLS_SRC_DIR" -type f -name "$tool.exe" -exec cp -v {} /opt/wine-tools/bin/ \; 2>/dev/null | grep -q '.'; then
+                echo "  ✓ 已复制: $tool.exe"
+              else
+                echo "  ⚠ 警告: 未找到工具 $tool (或其 .exe 变体)，构建可能失败。"
+              fi
+            fi
+          done
+          
+          # 确保所有已复制的文件具有执行权限
+          chmod +x /opt/wine-tools/bin/* 2>/dev/null || true
+          
+          # 验证关键工具是否可用
+          echo "验证工具可执行性:"
+          MUST_HAVE_TOOLS=("winebuild" "wrc" "widl")
+          ALL_OK=true
+          for tool in "${MUST_HAVE_TOOLS[@]}"; do
+            TOOL_PATH="/opt/wine-tools/bin/$tool"
+            if [[ -f "$TOOL_PATH" && -x "$TOOL_PATH" ]]; then
+              if "$TOOL_PATH" --version &>/dev/null || "$TOOL_PATH" -V &>/dev/null; then
+                echo "  ✓ $tool 验证通过"
+              else
+                echo "  ✗ $tool 存在但执行失败"
+                ALL_OK=false
+              fi
+            else
+              # 如果无后缀文件不存在，尝试 .exe 后缀
+              TOOL_PATH_EXE="/opt/wine-tools/bin/$tool.exe"
+              if [[ -f "$TOOL_PATH_EXE" ]]; then
+                echo "  ⚠ $tool 以 .exe 格式存在，可能需要调整后续配置。"
+              else
+                echo "  ✗ 错误: 未找到必需工具 $tool"
+                ALL_OK=false
+              fi
+            fi
+          done
+          
+          if [[ "$ALL_OK" != true ]]; then
+            echo "错误: 关键工具验证失败。构建无法继续。"
+            exit 1
+          fi
+          echo "所有工具已成功准备在 /opt/wine-tools/bin/"
 
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用复制后的工具目录）
+      # 11. 交叉编译 ARM64 WOW64
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -331,17 +375,37 @@ jobs:
           mkdir -p build-arm64
           cd build-arm64
 
+          # 设置交叉编译工具链路径
           export PATH="/opt/${{ env.LLVMMINGW_NAME }}/bin:$PATH"
+          # 设置 pkg-config 路径以查找 ARM64 库
           export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
+          
+          # ==== 关键修复：显式设置 Wine 构建工具路径 ====
+          # 将我们整理好的工具目录加入 PATH，确保 configure 和 make 能直接找到它们
+          export PATH="/opt/wine-tools/bin:$PATH"
+          # 同时，显式设置关键工具的环境变量，为 configure 脚本提供绝对路径
+          export WINEBUILD="/opt/wine-tools/bin/winebuild"
+          export WRC="/opt/wine-tools/bin/wrc"
+          export WIDL="/opt/wine-tools/bin/widl"
+          # 注意：如果工具是以 .exe 结尾，则变量也需要包含 .exe，例如：
+          # export WINEBUILD="/opt/wine-tools/bin/winebuild.exe"
+          # ================================================
 
-          # 关键：使用 --with-wine-tools 明确指定复制后的工具目录
-          # 同时保留 --with-wine64 指向完整构建树（用于头文件和库）
-          echo "使用 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
-          echo "使用 Wine 工具目录: /opt/wine-tools"
+          echo "构建环境摘要:"
+          echo "  - LLVM-Mingw 路径: /opt/${{ env.LLVMMINGW_NAME }}/bin"
+          echo "  - Wine 工具路径: /opt/wine-tools/bin"
+          echo "  - 原生 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
+          which winebuild && winebuild --version || true
+          which wrc && wrc --version || true
+          which widl && widl -V || true
 
+          # 运行配置脚本
+          # --with-wine-tools 参数应指向包含可执行文件的目录（即 bin 目录的父级或自身）
+          # 这里我们指向 /opt/wine-tools，因为 configure 会在该路径下寻找 `tools` 子目录或直接寻找工具。
+          # 但更可靠的方法是依靠我们已设置到 PATH 和环境变量中的路径。
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
             --with-mingw=clang \
@@ -353,10 +417,11 @@ jobs:
             host_alias=aarch64-linux-gnu \
             build_alias=x86_64-linux-gnu \
             --with-wine64=${{ env.WINE64_DIR }}/amd64 \
-            --with-wine-tools=/opt/wine-tools \
+            --with-wine-tools=/opt/wine-tools \  # 指向工具集合的根目录
             CC=aarch64-linux-gnu-gcc \
             CXX=aarch64-linux-gnu-g++
 
+          # 编译和安装
           make -j$(nproc)
           make install
 
