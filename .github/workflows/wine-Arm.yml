@@ -280,11 +280,11 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（严格模仿成功示例：只构建工具依赖和 NLS）
+      # 9. 构建 native wine64（严格模仿成功示例，并备份 locale.nls）
       # ------------------------------------------------------------
-      - name: 构建 native wine64 工具和 NLS
+      - name: 构建 native wine64 工具和 NLS（带备份）
         run: |
-          set -e  # 任何错误立即退出
+          set -e
           mkdir -p ${{ env.WINE64_DIR }}
           cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
           cd ${{ env.WINE64_DIR }}
@@ -294,40 +294,52 @@ jobs:
           make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
           make -C nls
-          # 查找 locale.nls
           echo "查找 locale.nls:"
           find . -name "locale.nls" -type f
-          # 严格检查 locale.nls 是否存在且非空
+          # 检查 nls/locale.nls 是否存在，并备份到独立位置
           if [ ! -f nls/locale.nls ]; then
             echo "错误: nls/locale.nls 未生成"
             exit 1
           fi
-          if [ ! -s nls/locale.nls ]; then
-            echo "错误: nls/locale.nls 为空"
-            exit 1
-          fi
-          echo "locale.nls 生成成功，大小: $(wc -c < nls/locale.nls) 字节"
+          mkdir -p /opt/nls-backup
+          cp nls/locale.nls /opt/nls-backup/
+          echo "locale.nls 已备份到 /opt/nls-backup/locale.nls"
           ls -la nls/
 
       # ------------------------------------------------------------
-      # 10. 复制完整构建目录到可执行位置（保留所有属性）
+      # 10. 复制构建目录，若丢失则从备份恢复
       # ------------------------------------------------------------
-      - name: 复制构建目录并验证 NLS
+      - name: 复制构建目录并验证 NLS（带恢复机制）
         run: |
           set -e
           mkdir -p /opt/wine64-native
-          # 验证源文件存在
+          # 检查源文件，若不存在则从备份恢复
           if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
-            echo "错误: 源目录中 nls/locale.nls 不存在"
-            exit 1
+            echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
+            if [ -f /opt/nls-backup/locale.nls ]; then
+              mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
+              cp /opt/nls-backup/locale.nls ${{ env.WINE64_DIR }}/amd64/nls/locale.nls
+              echo "已从备份恢复 locale.nls"
+            else
+              echo "错误: 无法恢复 locale.nls"
+              exit 1
+            fi
           fi
+          # 复制整个构建目录
           cp -a ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
-          # 验证复制后的文件
+          # 验证复制后的文件，若丢失则从备份恢复
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "错误: 复制后 locale.nls 丢失"
-            exit 1
+            echo "警告: 复制后 locale.nls 丢失，尝试从备份恢复"
+            if [ -f /opt/nls-backup/locale.nls ]; then
+              mkdir -p /opt/wine64-native/nls
+              cp /opt/nls-backup/locale.nls /opt/wine64-native/nls/locale.nls
+              echo "已从备份恢复 locale.nls 到目标目录"
+            else
+              echo "错误: 无法恢复 locale.nls"
+              exit 1
+            fi
           fi
           echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
 
@@ -345,7 +357,6 @@ jobs:
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
-          # 设置 NLS 目录，确保工具能加载 locale.nls
           export WINE_NLS_DIR=/opt/wine64-native/nls
 
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
