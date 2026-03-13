@@ -304,23 +304,23 @@ jobs:
           ls -la tools/
 
       # ------------------------------------------------------------
-      # 10. 验证 Wine 工具（直接使用构建目录中的工具）
+      # 10. 将工具复制到可执行目录并验证
       # ------------------------------------------------------------
-      - name: 验证 Wine 工具
+      - name: 复制工具到安全目录并验证
         run: |
-          TOOLSDIR="${{ env.WINE64_DIR }}/amd64/tools"
-          echo "验证工具目录: $TOOLSDIR"
-          ls -la $TOOLSDIR
-          echo "测试 winebuild:"
-          $TOOLSDIR/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
-          echo "测试 wrc:"
-          $TOOLSDIR/wrc --version || { echo "wrc 不可执行"; exit 1; }
-          echo "测试 widl:"
-          $TOOLSDIR/widl -V || { echo "widl 不可执行"; exit 1; }
-          echo "检查动态库依赖:"
-          ldd $TOOLSDIR/winebuild || echo "ldd 检查失败（可能静态链接或无需关注）"
-          ldd $TOOLSDIR/wrc || true
-          ldd $TOOLSDIR/widl || true
+          # 创建独立工具目录
+          mkdir -p /opt/wine-tools-bin
+          cp ${{ env.WINE64_DIR }}/amd64/tools/* /opt/wine-tools-bin/
+          chmod +x /opt/wine-tools-bin/*
+          echo "/opt/wine-tools-bin" >> $GITHUB_PATH
+
+          # 验证工具可执行性
+          echo "验证工具目录: /opt/wine-tools-bin"
+          ls -la /opt/wine-tools-bin
+          /opt/wine-tools-bin/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          /opt/wine-tools-bin/wrc --version || { echo "wrc 不可执行"; exit 1; }
+          /opt/wine-tools-bin/widl -V || { echo "widl 不可执行"; exit 1; }
+          echo "所有工具验证通过"
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64
@@ -337,9 +337,7 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # 添加 native 工具目录到 PATH 以增强可靠性（configure 会自动通过 --with-wine64 查找）
-          export PATH="${{ env.WINE64_DIR }}/amd64/tools:$PATH"
-
+          # PATH 已包含 /opt/wine-tools-bin，无需额外设置
           echo "使用 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
           echo "当前 PATH: $PATH"
 
