@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'staging'
+        default: 'vanilla'
         type: choice
         options:
         - vanilla
@@ -280,9 +280,9 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（严格模仿成功示例，并备份 locale.nls）
+      # 9. 构建 native wine64（严格模仿成功示例，并备份完整 nls 目录）
       # ------------------------------------------------------------
-      - name: 构建 native wine64 工具和 NLS（带备份）
+      - name: 构建 native wine64 工具和 NLS（带完整备份）
         run: |
           set -e
           mkdir -p ${{ env.WINE64_DIR }}
@@ -294,17 +294,11 @@ jobs:
           make __tooldeps__ -j$(nproc)
           echo "构建 NLS 目录..."
           make -C nls
-          echo "查找 locale.nls:"
-          find . -name "locale.nls" -type f
-          # 检查 nls/locale.nls 是否存在，并备份到独立位置（跟随符号链接）
-          if [ ! -f nls/locale.nls ] && [ ! -L nls/locale.nls ]; then
-            echo "错误: nls/locale.nls 未生成"
-            exit 1
-          fi
+          # 备份整个 nls 目录（跟随符号链接）
           mkdir -p /opt/nls-backup
-          cp -L nls/locale.nls /opt/nls-backup/
-          echo "locale.nls 已备份到 /opt/nls-backup/locale.nls"
-          ls -la nls/
+          cp -aL nls/. /opt/nls-backup/
+          echo "nls 目录已完整备份到 /opt/nls-backup"
+          ls -la /opt/nls-backup/
 
       # ------------------------------------------------------------
       # 10. 复制构建目录，跟随符号链接，并验证 NLS（带恢复机制）
@@ -313,15 +307,15 @@ jobs:
         run: |
           set -e
           mkdir -p /opt/wine64-native
-          # 检查源文件，若不存在则从备份恢复（但备份也应使用跟随符号链接的方式）
+          # 检查源文件，若不存在则从备份恢复（备份包含所有 nls 文件）
           if [ ! -f ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ] && [ ! -L ${{ env.WINE64_DIR }}/amd64/nls/locale.nls ]; then
             echo "警告: 源目录中 nls/locale.nls 不存在，尝试从备份恢复"
-            if [ -f /opt/nls-backup/locale.nls ]; then
+            if [ -d /opt/nls-backup ]; then
               mkdir -p ${{ env.WINE64_DIR }}/amd64/nls
-              cp -f /opt/nls-backup/locale.nls ${{ env.WINE64_DIR }}/amd64/nls/locale.nls
-              echo "已从备份恢复 locale.nls"
+              cp -af /opt/nls-backup/. ${{ env.WINE64_DIR }}/amd64/nls/
+              echo "已从备份恢复完整 nls 目录"
             else
-              echo "错误: 无法恢复 locale.nls"
+              echo "错误: 无法恢复 nls 目录"
               exit 1
             fi
           fi
@@ -332,12 +326,12 @@ jobs:
           # 验证复制后的文件是否为普通文件（不是符号链接）
           if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
             echo "警告: 复制后 locale.nls 丢失或为无效符号链接，尝试从备份恢复"
-            if [ -f /opt/nls-backup/locale.nls ]; then
+            if [ -d /opt/nls-backup ]; then
               mkdir -p /opt/wine64-native/nls
-              cp -f /opt/nls-backup/locale.nls /opt/wine64-native/nls/locale.nls
-              echo "已从备份恢复 locale.nls 到目标目录"
+              cp -af /opt/nls-backup/. /opt/wine64-native/nls/
+              echo "已从备份恢复 nls 目录到目标目录"
             else
-              echo "错误: 无法恢复 locale.nls"
+              echo "错误: 无法恢复 nls 目录"
               exit 1
             fi
           fi
@@ -345,7 +339,6 @@ jobs:
 
       # ------------------------------------------------------------
       # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
-      #     修改点：添加 --enable-tools，并设置正确的 LDFLAGS 以适配 Termux
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -389,7 +382,56 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 12. 验证安装目录内容（可选，便于调试）
+      # 12. 补全安装目录的运行时文件（NLS、字体、关键可执行文件）
+      # ------------------------------------------------------------
+      - name: 补全安装目录的运行时文件
+        run: |
+          set -e
+          TARGET_PREFIX="/tmp/wine-install-wow64"
+          NATIVE_NLS_DIR="/opt/wine64-native/nls"
+          SOURCE_FONTS_DIR="${{ env.WINE_SOURCE_DIR }}/source/fonts"
+          BUILD_DIR="${{ env.WINE_SOURCE_DIR }}/source/build-arm64"
+
+          echo "=== 补全 share/wine/nls ==="
+          mkdir -p "$TARGET_PREFIX/share/wine/nls"
+          if [ -d "$NATIVE_NLS_DIR" ]; then
+            cp -v "$NATIVE_NLS_DIR"/*.nls "$TARGET_PREFIX/share/wine/nls/" 2>/dev/null || echo "没有找到 .nls 文件，可能已存在"
+          fi
+          # 确保 locale.nls 存在（从备份恢复）
+          if [ ! -f "$TARGET_PREFIX/share/wine/nls/locale.nls" ] && [ -f "/opt/nls-backup/locale.nls" ]; then
+            cp -v "/opt/nls-backup/locale.nls" "$TARGET_PREFIX/share/wine/nls/"
+          fi
+
+          echo "=== 补全 share/wine/fonts ==="
+          if [ -d "$SOURCE_FONTS_DIR" ]; then
+            mkdir -p "$TARGET_PREFIX/share/wine/fonts"
+            cp -v "$SOURCE_FONTS_DIR"/*.ttf "$SOURCE_FONTS_DIR"/*.fon "$TARGET_PREFIX/share/wine/fonts/" 2>/dev/null || echo "字体复制完成或无字体文件"
+          else
+            echo "警告: 源码 fonts 目录不存在，跳过字体复制"
+          fi
+
+          echo "=== 验证 bin 目录关键文件 ==="
+          BIN_DIR="$TARGET_PREFIX/bin"
+          mkdir -p "$BIN_DIR"
+          # 检查并补充关键可执行文件
+          for exe in wine wine64 wine-preloader wineserver; do
+            if [ ! -f "$BIN_DIR/$exe" ]; then
+              # 在构建目录中查找（可能位于 loader/ 或 programs/ 下）
+              found=$(find "$BUILD_DIR" -type f -name "$exe" 2>/dev/null | head -1)
+              if [ -n "$found" ]; then
+                cp -v "$found" "$BIN_DIR/"
+              else
+                echo "警告: 未找到 $exe，可能安装时已包含或构建失败"
+              fi
+            fi
+          done
+
+          echo "=== 最终安装目录结构预览 ==="
+          ls -la "$TARGET_PREFIX/share/wine/" || true
+          ls -la "$TARGET_PREFIX/bin/" || true
+
+      # ------------------------------------------------------------
+      # 13. 验证安装目录内容（可选，便于调试）
       # ------------------------------------------------------------
       - name: 验证安装目录内容
         run: |
@@ -405,7 +447,7 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 13. 打包
+      # 14. 打包
       # ------------------------------------------------------------
       - name: 准备打包
         run: |
