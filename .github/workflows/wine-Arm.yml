@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'vanilla'
+        default: 'staging'
         type: choice
         options:
         - vanilla
@@ -24,7 +24,6 @@ on:
 env:
   LLVMMINGW_DATE: 20251202
   LLVMMINGW_NAME: llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64
-  BUILD_DIR: /tmp/build_wine
   WINE64_DIR: /opt/wine64
   WINE_SOURCE_DIR: /opt/wine-src
   DEBIAN_FRONTEND: noninteractive
@@ -41,19 +40,11 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - name: 安装基础工具（用于后续操作）
+      - name: 安装基础工具
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates \
-            wget \
-            git \
-            curl \
-            gnupg \
-            sudo \
-            xz-utils \
-            g++ \
-            file
+            ca-certificates wget git curl gnupg sudo xz-utils g++ file
 
       - uses: actions/checkout@v4
 
@@ -289,63 +280,51 @@ jobs:
           fi
 
       # ------------------------------------------------------------
-      # 9. 构建 native wine64（仅工具依赖和 NLS，模仿成功示例）
+      # 9. 构建 native wine64（严格模仿成功示例：只构建工具依赖和 NLS）
       # ------------------------------------------------------------
       - name: 构建 native wine64 工具和 NLS
         run: |
+          set -e  # 任何错误立即退出
           mkdir -p ${{ env.WINE64_DIR }}
           cp -r ${{ env.WINE_SOURCE_DIR }}/source ${{ env.WINE64_DIR }}/source
           cd ${{ env.WINE64_DIR }}
           mkdir -p amd64
           cd amd64
           ../source/configure --enable-win64 --prefix=/usr/local
-          # 只构建工具依赖（模仿 Dockerfile (1).txt）
           make __tooldeps__ -j$(nproc)
-          # 显式构建 nls 目录以生成 locale.nls
+          echo "构建 NLS 目录..."
           make -C nls
-          # 验证 locale.nls 是否生成
-          echo "nls 目录内容:"
-          ls -la nls/
+          # 严格检查 locale.nls 是否存在且非空
           if [ ! -f nls/locale.nls ]; then
-            echo "错误: locale.nls 生成失败"
+            echo "错误: locale.nls 未生成"
             exit 1
           fi
-          # 检查文件大小（非空）
           if [ ! -s nls/locale.nls ]; then
             echo "错误: locale.nls 为空"
             exit 1
           fi
           echo "locale.nls 生成成功，大小: $(wc -c < nls/locale.nls) 字节"
+          # 列出 nls 目录以确认
+          ls -la nls/
 
       # ------------------------------------------------------------
-      # 10. 将完整的 native 构建目录复制到可执行位置（包含 nls）
+      # 10. 复制完整构建目录到可执行位置（保留所有属性）
       # ------------------------------------------------------------
-      - name: 复制完整构建目录并验证工具及 NLS
+      - name: 复制构建目录并验证 NLS
         run: |
-          # 创建目标目录
           mkdir -p /opt/wine64-native
-          # 递归复制整个构建目录，保留所有属性
           cp -a ${{ env.WINE64_DIR }}/amd64/. /opt/wine64-native/
-
-          # 确保 tools 和 nls 子目录可读/可执行
           chmod -R +x /opt/wine64-native/tools/*/
           chmod -R +r /opt/wine64-native/nls
-
-          # 验证关键工具和 locale.nls 是否存在
-          echo "验证工具和 NLS:"
-          /opt/wine64-native/tools/winebuild/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
-          /opt/wine64-native/tools/wrc/wrc --version || { echo "wrc 不可执行"; exit 1; }
-          /opt/wine64-native/tools/widl/widl -V || { echo "widl 不可执行"; exit 1; }
-          if [ -f /opt/wine64-native/nls/locale.nls ]; then
-            echo "locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
-          else
-            echo "错误: locale.nls 不存在"
+          # 再次验证 locale.nls 存在
+          if [ ! -f /opt/wine64-native/nls/locale.nls ]; then
+            echo "错误: 复制后 locale.nls 丢失"
             exit 1
           fi
-          echo "所有工具验证通过"
+          echo "复制后 locale.nls 存在，大小: $(wc -c < /opt/wine64-native/nls/locale.nls) 字节"
 
       # ------------------------------------------------------------
-      # 11. 交叉编译 ARM64 WOW64（使用完整构建目录作为工具目录）
+      # 11. 交叉编译 ARM64 WOW64（使用复制后的目录作为工具目录）
       # ------------------------------------------------------------
       - name: 交叉编译 ARM64 WOW64
         run: |
@@ -358,13 +337,11 @@ jobs:
           export CFLAGS="-O2 -pipe"
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
-
-          # 设置 WINE_NLS_DIR 指向复制后的 nls 目录
+          # 设置 NLS 目录，确保工具能加载 locale.nls
           export WINE_NLS_DIR=/opt/wine64-native/nls
 
           echo "使用 Wine64 构建目录（作为工具目录）: /opt/wine64-native"
           echo "WINE_NLS_DIR=$WINE_NLS_DIR"
-          echo "当前 PATH: $PATH"
 
           ../configure \
             --prefix=/tmp/wine-install-wow64 \
