@@ -304,22 +304,24 @@ jobs:
           ls -la tools/
 
       # ------------------------------------------------------------
-      # 10. 将工具复制到可执行目录并验证
+      # 10. 复制整个 tools 目录到可执行位置并加入 PATH
       # ------------------------------------------------------------
       - name: 复制工具到安全目录并验证
         run: |
-          # 创建独立工具目录
-          mkdir -p /opt/wine-tools-bin
-          cp ${{ env.WINE64_DIR }}/amd64/tools/* /opt/wine-tools-bin/
-          chmod +x /opt/wine-tools-bin/*
-          echo "/opt/wine-tools-bin" >> $GITHUB_PATH
+          # 递归复制整个 tools 目录到 /opt/wine-tools（保留子目录结构）
+          mkdir -p /opt/wine-tools
+          cp -r ${{ env.WINE64_DIR }}/amd64/tools/* /opt/wine-tools/
 
-          # 验证工具可执行性
-          echo "验证工具目录: /opt/wine-tools-bin"
-          ls -la /opt/wine-tools-bin
-          /opt/wine-tools-bin/winebuild --version || { echo "winebuild 不可执行"; exit 1; }
-          /opt/wine-tools-bin/wrc --version || { echo "wrc 不可执行"; exit 1; }
-          /opt/wine-tools-bin/widl -V || { echo "widl 不可执行"; exit 1; }
+          # 将每个子目录加入 PATH
+          for toolpath in /opt/wine-tools/*/; do
+            echo "$toolpath" >> $GITHUB_PATH
+          done
+
+          # 验证工具可执行性（PATH 已包含所有子目录）
+          echo "验证工具:"
+          winebuild --version || { echo "winebuild 不可执行"; exit 1; }
+          wrc --version || { echo "wrc 不可执行"; exit 1; }
+          widl -V || { echo "widl 不可执行"; exit 1; }
           echo "所有工具验证通过"
 
       # ------------------------------------------------------------
@@ -337,7 +339,7 @@ jobs:
           export CXXFLAGS="-O2 -pipe"
           export LDFLAGS="-L/usr/lib/aarch64-linux-gnu"
 
-          # PATH 已包含 /opt/wine-tools-bin，无需额外设置
+          # PATH 已包含 /opt/wine-tools 下的各子目录，无需额外设置
           echo "使用 Wine64 构建目录: ${{ env.WINE64_DIR }}/amd64"
           echo "当前 PATH: $PATH"
 
