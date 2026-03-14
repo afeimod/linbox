@@ -434,7 +434,7 @@ jobs:
           mkdir -p "$BIN_DIR"
 
           # 需要的关键程序列表（包括 wineboot, winecfg, regedit, wineconsole 等）
-          PROGRAMS="wine wine64 wine-preloader wineserver wineboot winecfg regedit wineconsole"
+          PROGRAMS="wine wineserver wineboot winecfg regedit"
           for prog in $PROGRAMS; do
               if [ -f "$BIN_DIR/$prog" ]; then
                   echo "文件 $BIN_DIR/$prog 已存在"
@@ -442,7 +442,7 @@ jobs:
               fi
               # 优先从 programs/ 子目录查找（用户态程序）
               found=""
-              if [[ "$prog" != "wine" && "$prog" != "wine64" && "$prog" != "wine-preloader" && "$prog" != "wineserver" ]]; then
+              if [[ "$prog" != "wine" && "$prog" != "wineserver" ]]; then
                   found=$(find "$BUILD_DIR/programs" -type f -name "$prog" -executable 2>/dev/null | head -1)
               fi
               if [ -z "$found" ]; then
@@ -457,19 +457,11 @@ jobs:
               fi
           done
 
-          # 特殊处理：如果 wine 缺失但 wine64 存在，创建符号链接
-          if [ ! -f "$BIN_DIR/wine" ] && [ -f "$BIN_DIR/wine64" ]; then
-              ln -sv wine64 "$BIN_DIR/wine"
-              echo "已创建符号链接 wine -> wine64"
-          fi
-          if [ ! -f "$BIN_DIR/wine64" ] && [ -f "$BIN_DIR/wine" ]; then
-              ln -sv wine "$BIN_DIR/wine64"
-              echo "已创建符号链接 wine64 -> wine"
-          fi
+          
 
           echo "=== 验证 bin 目录关键文件 ==="
           ls -la "$BIN_DIR"
-          for required in wine wine64 wineserver wineboot; do
+          for required in wine wineserver wineboot; do
               if [ ! -f "$BIN_DIR/$required" ] && [ ! -L "$BIN_DIR/$required" ]; then
                   echo "错误: 缺少关键文件 $required"
                   exit 1
