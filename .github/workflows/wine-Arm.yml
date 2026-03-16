@@ -8,7 +8,7 @@ on:
       wine_branch:
         description: 'Wine 分支'
         required: false
-        default: 'staging'
+        default: 'vanilla'
         type: choice
         options:
         - vanilla
