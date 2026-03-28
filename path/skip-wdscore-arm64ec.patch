@@ -1,0 +1,18 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -3385,7 +3385,13 @@
+ WINE_CONFIG_MAKEFILE(dlls/wbemdisp)
+ WINE_CONFIG_MAKEFILE(dlls/wbemdisp/tests)
+ WINE_CONFIG_MAKEFILE(dlls/wbemprox)
+ WINE_CONFIG_MAKEFILE(dlls/wbemprox/tests)
+-WINE_CONFIG_MAKEFILE(dlls/wdscore)
++dnl ARM64EC linker cannot handle the C++ mangled stub symbols in wdscore
++case " $cross_archs " in
++  *\ arm64ec\ *)
++    WINE_IGNORE_FILE(dlls/wdscore) ;;
++  *)
++    WINE_CONFIG_MAKEFILE(dlls/wdscore) ;;
++esac
+ WINE_CONFIG_MAKEFILE(dlls/webservices)
+ WINE_CONFIG_MAKEFILE(dlls/webservices/tests)
+ WINE_CONFIG_MAKEFILE(dlls/websocket)
