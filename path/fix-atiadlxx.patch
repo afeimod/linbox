@@ -1,0 +1,9 @@
+--- a/dlls/atiadlxx/atiadlxx_main.c
++++ b/dlls/atiadlxx/atiadlxx_main.c
+@@ -8,7 +8,7 @@
+ 
+ static LONG dummy;
+ static void dummy_func(void) {
+-    InterlockedOr(&dummy, 0);
++    InterlockedOr((volatile long *)&dummy, 0);
+ }
