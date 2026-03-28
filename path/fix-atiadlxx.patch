@@ -1,9 +1,11 @@
 --- a/dlls/atiadlxx/atiadlxx_main.c
 +++ b/dlls/atiadlxx/atiadlxx_main.c
-@@ -8,7 +8,7 @@
+@@ -70,7 +70,7 @@ static LONG dummy;
  
- static LONG dummy;
- static void dummy_func(void) {
+ static void dummy_func(void)
+ {
 -    InterlockedOr(&dummy, 0);
 +    InterlockedOr((volatile long *)&dummy, 0);
  }
+ 
+ DEFINE_DEVPROPKEY(DEVPROPKEY_GPU_LUID, 0x60b193cb, 0x5276, 0x4d0f, 0x96, 0xfc, 0xf1, 0x73, 0xab, 0xad, 0x3e, 0xc6, 2);
