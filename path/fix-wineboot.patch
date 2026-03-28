@@ -1,0 +1,12 @@
+--- a/programs/wineboot/wineboot.c
++++ b/programs/wineboot/wineboot.c
+@@ -536,7 +536,9 @@
+         return;
+ 
+     data = NtCurrentTeb()->ProcessEnvironmentBlock;
++#ifndef __aarch64__
+     initialize_xstate_features( data );
++#endif
+ }
+ 
+ static void wait_for_process( HANDLE process, DWORD timeout )
