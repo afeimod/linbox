@@ -1,12 +1,13 @@
 --- a/programs/wineboot/wineboot.c
 +++ b/programs/wineboot/wineboot.c
-@@ -536,7 +536,9 @@
-         return;
+@@ -552,7 +552,9 @@
+     }
+     data->ActiveProcessorCount = NtCurrentTeb()->Peb->NumberOfProcessors;
+     data->ActiveGroupCount = 1;
  
-     data = NtCurrentTeb()->ProcessEnvironmentBlock;
 +#ifndef __aarch64__
      initialize_xstate_features( data );
 +#endif
- }
  
- static void wait_for_process( HANDLE process, DWORD timeout )
+     UnmapViewOfFile( data );
+ }
