@@ -1,0 +1,25 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-apt-hook — apt DPkg::Pre-Install-Pkgs 钩子（双保险第二道）
+# ============================================================
+# apt 在每次调用 dpkg 之前，把待安装 deb 的路径逐行写入本钩子的
+# stdin。这里做两件事：
+#   1) 触发 bin/dpkg trampoline 自愈（dpkg 包升级会用真身覆盖它，
+#      并把新版真身同步回 dpkg.real）；
+#   2) 把 deb 逐个交给 linbox-debfix 重打包为 com.linbox 前缀。
+#
+# 即使 Dir::Bin::dpkg 路由失效（bin/dpkg 暂时被 dpkg 包升级覆盖、
+# 还未来得及自愈），本钩子仍保证 deb 在 dpkg 解包前完成重写。
+# ============================================================
+set -u
+
+PREFIX=/data/data/com.linbox/files/usr
+PATH=$PREFIX/bin:$PATH
+export PATH
+
+"$PREFIX/libexec/linbox/dpkg-wrap" --heal-only 2>/dev/null
+
+if [ -x "$PREFIX/bin/linbox-debfix" ]; then
+    "$PREFIX/bin/linbox-debfix"
+fi
+exit 0

@@ -1,0 +1,83 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# LINBOX_X11_CLIENT rev18 —— LinBox 内置客户端识别标记（勿删，
+# linbox-x11 靠本行检测文件是否被 termux-x11-nightly 官方包覆盖）
+# ============================================================
+# LinBox 内置 X11 客户端（v2.22.2）
+# ============================================================
+# 以宿主 APK 为 CLASSPATH，经 app_process 启动
+# com.termux.x11.CmdEntryPoint —— 即 X server 本体
+#（lorie 合成器 + Xwayland in-process，预编译 libXlorie.so）。
+#
+# 与官方 Termux:X11 应用互不冲突：
+# - 广播目标固定为 com.linbox（TERMUX_X11_OVERRIDE_PACKAGE）；
+# - X11 socket 落在 LinBox 自身的 tmp 目录；
+# - 进程 nice-name 为 linboxx11，独立于官方应用的 com.termux.x11。
+# ============================================================
+
+PREFIX=/data/data/com.linbox/files/usr
+
+# 保留调用方库环境（X server 启动后会原样传给会话进程）
+[ -z "${LD_LIBRARY_PATH+x}" ] || export XSTARTUP_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+[ -z "${LD_PRELOAD+x}" ] || export XSTARTUP_LD_PRELOAD="$LD_PRELOAD"
+[ -z "${CLASSPATH+x}" ] || export XSTARTUP_CLASSPATH="$CLASSPATH"
+
+# 广播目标：只叫醒 LinBox 自己
+export TERMUX_X11_OVERRIDE_PACKAGE=com.linbox
+
+# 宿主 APK 与 native 库目录（安装器写入 etc/linbox-x11.env，
+# LinBox 每次启动会自动刷新，APK 升级后路径自愈）
+X11_ENV_FILE="/data/data/com.linbox/files/usr/etc/linbox-x11.env"
+if [ -r "$X11_ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$X11_ENV_FILE"
+    if [ -n "$LINBOX_APK_PATH" ]; then
+        export LINBOX_APK_PATH
+        export CLASSPATH="$LINBOX_APK_PATH"
+    fi
+    if [ -n "$LINBOX_NATIVE_DIR" ]; then
+        # CmdEntryPoint 兜底加载 libXlorie.so 用（APK 内 lib 条目被压缩）
+        export LINBOX_X11_NATIVE_DIR="$LINBOX_NATIVE_DIR"
+    fi
+fi
+
+# 兜底：安装器文件缺失时用 pm 查询宿主 APK
+if [ -z "${CLASSPATH:-}" ] || [ ! -r "$CLASSPATH" ]; then
+    CLASSPATH="$(pm path com.linbox 2>/dev/null | head -n 1 | cut -d: -f2-)"
+    if [ -n "$CLASSPATH" ]; then
+        export CLASSPATH
+    fi
+fi
+if [ -z "${CLASSPATH:-}" ] || [ ! -r "$CLASSPATH" ]; then
+    echo "linbox-x11: 无法定位宿主 APK，请打开一次 LinBox 桌面后重试" >&2
+    exit 1
+fi
+
+# app_process 不需要 Termux 的库搜索路径
+unset LD_LIBRARY_PATH LD_PRELOAD
+
+# XKB 键盘数据：X server 初始化必需，缺失时 start() 直接退出（
+# "$XKB_CONFIG_ROOT is not set" → System.exit(1)，用户实测）。
+# 数据随 APK 分发：etc/linbox/x11/xkb.tar.gz 首次启动自动解压；
+# 或由 pkg 的 xkeyboard-config 包提供 share/X11/xkb（二选一）。
+XKB_DIR="$PREFIX/etc/linbox/x11/xkb"
+if [ ! -d "$XKB_DIR/rules" ] && [ -r "$PREFIX/etc/linbox/x11/xkb.tar.gz" ]; then
+    mkdir -p "$XKB_DIR" 2>/dev/null
+    tar -xzf "$PREFIX/etc/linbox/x11/xkb.tar.gz" -C "$XKB_DIR" 2>/dev/null
+fi
+if [ -d "$XKB_DIR/rules" ]; then
+    export XKB_CONFIG_ROOT="$XKB_DIR"
+elif [ -d "$PREFIX/share/X11/xkb/rules" ]; then
+    export XKB_CONFIG_ROOT="$PREFIX/share/X11/xkb"
+fi
+
+# 服务已在运行则不重复拉起（nice-name 精确匹配 linboxx11；
+# ps 探测逐级兜底 busybox/toybox，避免误判已在运行而重复拉起）
+if { ps -ef 2>/dev/null || ps ax 2>/dev/null || ps 2>/dev/null; } \
+    | grep 'linboxx11' | grep -v grep >/dev/null 2>&1; then
+    echo "X11 服务已在运行（如需重启请先执行 linbox-x11-stop）"
+    exit 0
+fi
+
+exec /system/bin/app_process -Xnoimage-dex2oat / \
+    --nice-name="linboxx11 $*" \
+    com.termux.x11.CmdEntryPoint "$@"

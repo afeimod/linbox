@@ -1,0 +1,264 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# linbox-pkgfix — pkg/apt 动态库链接离线自愈 v1.1（fix9.10）
+# ============================================================
+# 背景（fix9.9/9.10 排查实锤）：
+#   1) bootstrap 归档（2022.01.07-r1）把 libexpat.so /
+#      libgpg-error.so 以 dev 名作为真实文件入库，SYMLINKS.txt 缺少
+#      对应 soname 条目 → usr/lib 里 libexpat.so.1 /
+#      libgpg-error.so.0 从不存在；而 dpkg status 又把 libexpat
+#      登记为已安装，pkg install dbus 等依赖方永远不会再解包它们
+#      → 结构性死锁（dbus-daemon 必报 CANNOT LINK libexpat.so.1，
+#      dbus-launch 尾随费解的 EOF 报错）。
+#   2) 历史 dpkg 事故（fix8.6 前）还可能丢失 liblz4.so.1（apt →
+#      libapt-pkg.so 的 DT_NEEDED）→ pkg/apt 全灭 → 无法用包管理器
+#      自救的死循环（pkg install 任何软件都 CANNOT LINK）。
+#   3) fix9.10 实锤：9.7~9.9 APK fresh 安装死于 x11-xkb.tar.gz
+#      独立资产在 CI 仓库管线中整文件丢失 → bootstrap 安装失败 +
+#      revision 不落盘（每次启动迁移重跑再失败）；救援库部署
+#      （rev19 起在迁移内）因此在这些环境从未生效。
+#
+# 本脚本职责（全程离线，不依赖 apt/pkg/网络/主界面，幂等可反复执行）：
+#   [1/4] 通用 soname 链接自愈：libX.so.N.M[.W] 真实文件存在而
+#         libX.so.N 缺失 → 补相对符号链接（绝不覆盖已有文件）；
+#   [2/4] dev 名特例映射：libexpat.so→libexpat.so.1、
+#         libgpg-error.so→libgpg-error.so.0（bootstrap 打包缺陷）；
+#   [3/4] 救援库兜底（v1.1 三级来源链）：真身整文件丢失时——
+#         ① etc/linbox/rescue/ 内置副本 → ② 宿主 APK 内嵌
+#         bootstrap 归档流式提取（纯 shell 可达：base.apk →
+#         assets/termux/bootstrap-aarch64.zip → lib/<真身>，ELF
+#         魔数校验，不依赖打开主界面/迁移是否完成/任何 APK 版本）
+#         → ③ 结论区补救指引；
+#   [4/4] 链接实测：apt-get/apt/dpkg/dpkg-deb/dbus-daemon/curl 及
+#         xfce4 组件逐个 --version 实跑，报告 PASS/FAIL 与缺失库。
+#
+# 用法：linbox-pkgfix [-q]   （-q/--quiet 静默，供 linbox-x11 自动调用）
+#       输出同时落盘 var/lib/linbox/pkgfix.log（终端无关的地面真相）
+# ============================================================
+
+PREFIX=/data/data/com.linbox/files/usr
+LIB=$PREFIX/lib
+RESCUE=$PREFIX/etc/linbox/rescue
+TMPC=$PREFIX/tmp
+LOGDIR=$PREFIX/var/lib/linbox
+LOGFILE=$LOGDIR/pkgfix.log
+
+QUIET=0
+if [ "${1:-}" = "-q" ] || [ "${1:-}" = "--quiet" ]; then
+    QUIET=1
+fi
+
+# 动态库解析兜底（对齐 linbox-dpkg，防异常入口环境缺失）
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$PREFIX/lib:"*) : ;;
+    *) export LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
+
+mkdir -p "$LOGDIR" 2>/dev/null
+
+say() {
+    [ "$QUIET" -eq 1 ] || echo "$1"
+    printf '%s pkgfix: %s\n' "$(date '+%m-%d %H:%M:%S' 2>/dev/null || echo '?')" "$1" \
+        >> "$LOGFILE" 2>/dev/null || :
+}
+
+_fixed=0
+
+say "==== linbox-pkgfix v1.1（fix9.10）动态库链接离线自愈 ===="
+
+# ---- [1/4] 通用 soname 链接自愈 ------------------------------------
+# 真实文件 libX.so.N.M / libX.so.N.M.W 存在而短名 libX.so.N 缺失时补
+# 相对符号链接。跳过：链接名已存在（含悬空链接）、非真实文件、
+# 单段版本名（Termux 包常直接以 soname 命名，如 libssl.so.3）。
+say "[1/4] 通用 soname 链接自愈（libX.so.N.M[.W] → libX.so.N）"
+for f in "$LIB"/lib*.so.*.*; do
+    [ -f "$f" ] || continue          # glob 未命中时为字面量，防御
+    [ -L "$f" ] && continue          # 只处理真实文件
+    b=${f##*/}                       # 例：liblz4.so.1.9.3
+    case "$b" in
+        *.so.*.*) : ;;
+        *) continue ;;               # 需两段以上版本号
+    esac
+    base=${b%%.so.*}                 # liblz4
+    ver=${b#*.so.}                   # 1.9.3
+    first=${ver%%.*}                 # 1
+    case "$first" in
+        ""|*[!0-9]*) continue ;;     # 版本首段非纯数字（如 -2.1），跳过
+    esac
+    short="$base.so.$first"          # liblz4.so.1
+    [ "$short" = "$b" ] && continue  # 防御：不应发生
+    if [ -e "$LIB/$short" ] || [ -L "$LIB/$short" ]; then
+        continue
+    fi
+    if ln -s "$b" "$LIB/$short" 2>/dev/null; then
+        say "  [链] $short → $b"
+        _fixed=$((_fixed + 1))
+    fi
+done
+
+# ---- [2/4] dev 名特例映射（bootstrap 打包缺陷修补） ----------------
+# bootstrap 把这两个库的 dev 名当真实文件入库且 SYMLINKS.txt 无条目；
+# 旧库文件符号集是新依赖方的子集，补上 soname 链接即可被动态链接器
+# 按 DT_NEEDED 名字找到。之后用 pkg reinstall 摆正数据库（见结论）。
+fix_devname() {                      # fix_devname <dev 名> <soname>
+    _fd_d="$1"; _fd_s="$2"
+    if [ ! -f "$LIB/$_fd_d" ]; then return 0; fi
+    if [ -e "$LIB/$_fd_s" ] || [ -L "$LIB/$_fd_s" ]; then return 0; fi
+    if ln -s "$_fd_d" "$LIB/$_fd_s" 2>/dev/null; then
+        say "  [链] $_fd_s → $_fd_d"
+        _fixed=$((_fixed + 1))
+    fi
+}
+say "[2/4] dev 名真实文件特例映射（bootstrap 缺陷修补）"
+fix_devname libexpat.so libexpat.so.1
+fix_devname libgpg-error.so libgpg-error.so.0
+
+# ---- [3/4] 救援库兜底（三级来源链） --------------------------------
+# 真身整文件丢失（dpkg 事故）时按序自救，全程离线：
+#   来源① etc/linbox/rescue/：LinBox 主界面/迁移部署的内置副本；
+#   来源② 宿主 APK 内嵌 bootstrap 归档（v1.1 新增，纯 shell 可达，
+#         不依赖打开主界面/迁移是否完成/任何 APK 版本）——双层 zip
+#         流式提取：base.apk → assets/termux/bootstrap-aarch64.zip
+#         → lib/<真身>，ELF 魔数校验通过才落盘，并回填来源① 供
+#         下次秒过（APK 内历版 bootstrap 均含三库真身）；
+#   来源③ 均不可得 → 结论区给补救指引。
+# 解压器：bootstrap 自带 Info-ZIP bin/unzip（全版必有）→
+#         /system/bin/toybox unzip（Android 10+ 兜底）。
+is_elf() {                            # is_elf <文件> —— ELF 魔数校验（\x7fELF）
+    [ -f "$1" ] || return 1
+    [ "$(dd if="$1" bs=1 count=4 2>/dev/null)" = "$(printf '\177ELF')" ]
+}
+
+unzip_entry_to() {                    # unzip_entry_to <zip> <条目> <输出>
+    _uz_zip="$1"; _uz_entry="$2"; _uz_out="$3"
+    : > "$_uz_out" 2>/dev/null || return 1
+    if [ -x "$PREFIX/bin/unzip" ]; then
+        if "$PREFIX/bin/unzip" -p "$_uz_zip" "$_uz_entry" > "$_uz_out" 2>/dev/null \
+           && [ -s "$_uz_out" ]; then return 0; fi
+    fi
+    if [ -x /system/bin/toybox ]; then
+        if /system/bin/toybox unzip -p "$_uz_zip" "$_uz_entry" > "$_uz_out" 2>/dev/null \
+           && [ -s "$_uz_out" ]; then return 0; fi
+    fi
+    return 1
+}
+
+# 定位内嵌 bootstrap 归档（双层 zip 外层解包，一轮至多一次）
+BOOT_CACHE=""
+prepare_bootstrap_cache() {
+    if [ -n "$BOOT_CACHE" ]; then
+        [ "$BOOT_CACHE" != "failed" ]
+        return $?
+    fi
+    BOOT_CACHE=failed
+    _apk=""
+    if [ -f "$PREFIX/etc/linbox-x11.env" ]; then
+        _apk=$(sed -n 's/^LINBOX_APK_PATH=//p' "$PREFIX/etc/linbox-x11.env" 2>/dev/null | head -n 1)
+    fi
+    if [ -z "$_apk" ] || [ ! -f "$_apk" ]; then
+        _apk=$(pm path com.linbox 2>/dev/null | sed 's/^package://' | head -n 1)
+    fi
+    if [ -z "$_apk" ] || [ ! -f "$_apk" ]; then
+        for _cand in /data/app/*com.linbox*/base.apk; do
+            if [ -f "$_cand" ]; then _apk="$_cand"; break; fi
+        done
+    fi
+    if [ -z "$_apk" ] || [ ! -f "$_apk" ]; then
+        say "  （未定位到宿主 APK —— 跳过 APK 内提取）"
+        return 1
+    fi
+    mkdir -p "$TMPC" 2>/dev/null
+    _cache="$TMPC/linbox-bootstrap-$$.zip"
+    if unzip_entry_to "$_apk" "assets/termux/bootstrap-aarch64.zip" "$_cache"; then
+        BOOT_CACHE="$_cache"
+        return 0
+    fi
+    rm -f "$_cache" 2>/dev/null
+    say "  （宿主 APK 内 bootstrap 解包失败（缺 unzip/条目缺失）—— 打开一次 LinBox 主界面走内置部署）"
+    return 1
+}
+
+rescue_lib() {                        # rescue_lib <真身名> <soname> <归档内路径>
+    _rl_r="$1"; _rl_s="$2"; _rl_e="$3"
+    if [ -e "$LIB/$_rl_s" ] || [ -L "$LIB/$_rl_s" ]; then return 0; fi
+    if [ ! -f "$LIB/$_rl_r" ]; then
+        # 来源①：主界面/迁移部署的救援目录
+        if [ -f "$RESCUE/$_rl_r" ]; then
+            if cp -f "$RESCUE/$_rl_r" "$LIB/$_rl_r" 2>/dev/null; then
+                chmod 644 "$LIB/$_rl_r" 2>/dev/null
+                say "  [救] 真身 $_rl_r 已从救援库补齐"
+                _fixed=$((_fixed + 1))
+            fi
+        fi
+        # 来源②：宿主 APK 内嵌 bootstrap（v1.1；ELF 魔数校验 + 回填救援目录）
+        if [ ! -f "$LIB/$_rl_r" ] && prepare_bootstrap_cache; then
+            if unzip_entry_to "$BOOT_CACHE" "$_rl_e" "$LIB/$_rl_r" && is_elf "$LIB/$_rl_r"; then
+                chmod 644 "$LIB/$_rl_r" 2>/dev/null
+                mkdir -p "$RESCUE" 2>/dev/null
+                cp -f "$LIB/$_rl_r" "$RESCUE/$_rl_r" 2>/dev/null
+                say "  [取] 真身 $_rl_r 已从宿主 APK 提取"
+                _fixed=$((_fixed + 1))
+            else
+                rm -f "$LIB/$_rl_r" 2>/dev/null
+            fi
+        fi
+    fi
+    [ -f "$LIB/$_rl_r" ] || return 0
+    if ln -s "$_rl_r" "$LIB/$_rl_s" 2>/dev/null; then
+        say "  [链] $_rl_s → $_rl_r"
+        _fixed=$((_fixed + 1))
+    fi
+}
+say "[3/4] 救援库兜底（真身丢失时：救援目录 → 宿主 APK 内嵌 bootstrap）"
+rescue_lib liblz4.so.1.9.3 liblz4.so.1 lib/liblz4.so.1.9.3
+rescue_lib libexpat.so libexpat.so.1 lib/libexpat.so
+rescue_lib libgpg-error.so libgpg-error.so.0 lib/libgpg-error.so
+# 本轮提取的中间归档缓存清理（结果文件均已落位，缓存不再需要）
+[ -n "$BOOT_CACHE" ] && [ "$BOOT_CACHE" != "failed" ] && rm -f "$BOOT_CACHE" 2>/dev/null
+
+# ---- [4/4] 链接实测 -------------------------------------------------
+# 动态链接先于参数解析：--version 实跑即可安全探测（无副作用）。
+verify_bin() {                       # verify_bin <bin 名>
+    _vb="$1"
+    [ -x "$PREFIX/bin/$_vb" ] || return 0
+    if command -v timeout >/dev/null 2>&1; then
+        _vb_out="$(timeout 8 "$PREFIX/bin/$_vb" --version 2>&1)" || true
+    else
+        _vb_out="$("$PREFIX/bin/$_vb" --version 2>&1)" || true
+    fi
+    case "$_vb_out" in
+        *"CANNOT LINK"*|*"not found: needed by"*|*"cannot locate symbol"*)
+            _vb_miss="$(printf '%s\n' "$_vb_out" | \
+                sed -n 's/.*library "\([^"]*\)" not found.*/\1/p' | head -n 1)"
+            say "  [FAIL] $_vb 无法链接（缺 ${_vb_miss:-未知库/符号}）"
+            _fail=$((_fail + 1))
+            ;;
+        *)
+            say "  [PASS] $_vb"
+            ;;
+    esac
+}
+say "[4/4] 动态链接实测（--version 实跑验证）"
+_fail=0
+for _b in apt-get apt dpkg dpkg-deb dbus-daemon curl xfwm4 xfce4-panel xfdesktop; do
+    verify_bin "$_b"
+done
+
+# ---- 结论与后续指引 -------------------------------------------------
+say ""
+if [ "$_fail" -eq 0 ]; then
+    say "结论：全部通过（本轮补建 $_fixed 处）。"
+    say "建议接着执行（把 dpkg 数据库与实际文件摆正，防复发）："
+    say "  pkg reinstall liblz4 libexpat libgpg-error"
+    say "  pkg upgrade"
+    say "  linbox-x11 :13    # 重跑 X11 桌面"
+    exit 0
+else
+    say "结论：仍有 $_fail 项无法链接。"
+    say "→ 缺 liblz4.so.1 / libexpat.so.1 / libgpg-error.so.0 且真身丢失（APK 内提取亦未成功）："
+    say "  ① 打开一次 LinBox 主界面（fix9.10 起每次启动自动部署救援库）后重跑 linbox-pkgfix；"
+    say "  ② 核对宿主 APK 定位（LINBOX_APK_PATH 应指向存在的 base.apk）："
+    say "     cat $PREFIX/etc/linbox-x11.env ；装新版 APK 后路径会变，主界面打开一次即自动刷新"
+    say "→ apt-get 已 PASS 时：直接 pkg install <对应包>（linbox-x11 会给包名）；"
+    say "→ 完整诊断日志：cat $LOGFILE"
+    exit 1
+fi

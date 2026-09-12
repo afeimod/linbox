@@ -35,7 +35,7 @@
         <item name="android:layout_height">42dp</item>
         <item name="android:focusable">true</item>
         <item name="android:clickable">true</item>
-        <item name="android:textColor">#ffffff</item>
+        <item name="android:textColor">#FFFFFFFF</item>
         <item name="android:textSize">16sp</item>
         <item name="android:gravity">left|center_vertical</item>
         <item name="android:paddingLeft">12dp</item>
@@ -46,7 +46,7 @@
         <item name="android:ellipsize">end</item>
         <item name="android:spinnerMode">dropdown</item>
         <item name="android:background">@drawable/combo_box</item>
-        <item name="android:popupBackground">@drawable/content_dialog_background</item>
+        <item name="android:popupBackground">@color/colorDayNight</item>
     </style>
 
     <style name="TerminalComboBox">

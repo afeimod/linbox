@@ -55,7 +55,7 @@
                 android:layout_height="wrap_content"
                 android:gravity="center_horizontal|center_vertical"
                 android:text="@string/not_connected"
-                android:textColor="#FFFFFF"
+                android:textColor="#FFFFFFFF"
                 android:textSize="20sp" />
 
             <Space
@@ -67,6 +67,7 @@
                 android:id="@+id/preferences_button"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:textColor="#FFFFFFFF"
                 android:text="@string/preferences_button_text" />
 
             <Space
@@ -80,6 +81,7 @@
                 android:id="@+id/exit_button"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:textColor="#FFFFFFFF"
                 android:text="@string/exit_button_exit_app" />
         </LinearLayout>
 
@@ -268,7 +270,7 @@
         android:visibility="gone" />
 
     <View
-        android:id="@+id/activity_termux_bottom_space_view"
+        android:id="@+id/display_termux_bottom_space_view"
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_gravity="bottom|center"

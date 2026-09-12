@@ -14,7 +14,7 @@
         android:padding="0dp"
         android:text="@string/launch_button_text"
         android:maxLines="1"
-        android:textColor="@color/colorWhite"
+        android:textColor="#FFFFFFFF"
         android:visibility="gone" />
 
     <LinearLayout

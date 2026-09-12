@@ -1,0 +1,594 @@
+package com.linbox.apps.x11
+
+import android.content.Context
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.view.Display
+import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.linbox.core.theme.LocalWinTheme
+import com.linbox.core.window.WindowContentScope
+import com.linbox.core.window.WindowManager
+import com.termux.x11.LoriePreferences
+import com.termux.x11.LorieView
+import com.termux.x11.X11InputHub
+import com.termux.x11.input.InputStub
+
+private const val TAG_X11 = "X11Surface"
+
+/**
+ * v2.22.2 fix9.6：X11 桌面的桌面窗口渲染面（开始菜单/桌面图标"X11 桌面"
+ * 窗口内容，也可由终端 `linbox-x11` 广播自动弹出，见 X11WindowController）。
+ *
+ * v2.22.3 fix10/fix11b 更新：
+ * - 分辨率握手：glibc-runner -d 分辨率经 X11ResolutionLink（文件协议）
+ *   到达本窗口。无 -d = native：X 屏幕随桌面窗口尺寸变化拉伸全屏；
+ *   有 -d = exact + stretch：X 屏幕保持指定分辨率（游戏真实全屏渲染），
+ *   显示层同比例拉伸铺满窗口，无黑边；
+ * - 智能鼠标桥（SmartTouchBridge）：触摸→真实鼠标事件（替代旧的原生
+ *   X 触摸直注）。wine 窗口（explorer/游戏）需要的是鼠标按下/抬起，
+ *   且双击需要两次点击落在同一个小矩形内 —— 本桥带双击位置吸附、
+ *   按下即按住（拖拽窗口/滚动条）、双指轻点右键、双指滑动滚轮；
+ * - 虚拟手柄：直接使用桌面的悬浮虚拟手柄（GamepadOverlay/
+ *   GamepadController），按键/鼠标经 X11InputHub 桥直注 X ——
+ *   不再叠加 Winlator 移植的 InputControlsView 手柄层（已移除）。
+ */
+@Composable
+fun X11Surface(scope: WindowContentScope) {
+    val theme = LocalWinTheme.current
+    val context = LocalContext.current
+    val wm = remember { WindowManager.get() }
+    val connState by X11WindowController.state.collectAsState()
+    var lorieViewRef by remember { mutableStateOf<LorieView?>(null) }
+    var wmRevision by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) { wm.observe { wmRevision++ } }
+    val isTrueFs = remember(wmRevision) { scope.windowState.isTrueFullscreen }
+
+    val prefs = remember { LoriePreferences.prefs }
+
+    // 智能鼠标桥与手柄层（随 LorieView 实例创建，见 factory）
+    var touchBridge by remember { mutableStateOf<SmartTouchBridge?>(null) }
+    val resState by X11ResolutionLink.state.collectAsState()
+
+    // 连接建立即应用分辨率协议文件（兜底时序：glibc-runner 写文件可能
+    // 早于/晚于窗口打开；FileObserver 只覆盖窗口已打开的情况）。
+    LaunchedEffect(connState) {
+        if (connState == X11WindowController.State.Connected) {
+            X11ResolutionLink.applyFromFile()
+        }
+    }
+
+    // v2.22.5 fix15/fix17：游戏窗口自适应铺满 —— X11FitClient 直连 X server
+    // socket，把窗口化游戏平移铺满 X 屏幕（客户区 = 屏幕），根治"四周黑边
+    // 烧在画面内部"。fix17 起固定分辨率与跟随窗口会话均启用（跟随窗口会话
+    // fit 时 X 屏幕会被定为游戏客户区，控制条如实显示）；桌面环境（xfdesktop
+    // 等大面积窗口）FitClient 内部自动跳过；窗口关闭/断开时自动停止。
+    LaunchedEffect(connState) {
+        val active = connState == X11WindowController.State.Connected
+        if (active) X11FitClient.start() else X11FitClient.stop()
+    }
+
+    // 窗口关闭/最小化（内容离开组合）时断开渲染连接并抑制本会话自动弹窗；
+    // 重新打开/还原窗口时 factory 重建 LorieView 并自动重连。
+    // v2.22.5 fix15：窗口真正关闭（标题栏 X 按钮，最小化不触发 onClose）
+    // 时终止 wine 会话 —— 用户反馈"关闭 x11 窗口没有关闭 wine"。
+    DisposableEffect(scope.windowState.id) {
+        scope.windowState.onClose = { X11Session.killWine() }
+        onDispose {
+            X11FitClient.stop()
+            lorieViewRef = null
+            X11ResolutionLink.attachView(null)
+            // 桌面手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
+            X11InputHub.get(context).setActiveLorieView(null)
+            X11WindowController.detachView(userClosed = true)
+        }
+    }
+
+    // 真全屏时返回键退出全屏（对齐浏览器/播放器行为）
+    BackHandler(enabled = isTrueFs) { wm.toggleTrueFullscreen(scope.windowState.id) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        // ===== 画面区 =====
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    // 根容器：LorieView 铺满窗口（native 跟随窗口 / exact+stretch
+                    // 拉伸铺满，均无黑边）。
+                    // v2.22.5 fix12：Gravity.CENTER → FILL —— 画面靠左上锚定
+                    // （用户反馈"黑边没有靠左"）；FILL = TOP|START|BOTTOM|END。
+                    val root = FrameLayout(ctx)
+
+                    val lv = LorieView(ctx)
+                    root.addView(lv, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        Gravity.FILL
+                    ))
+
+                    val bridge = SmartTouchBridge(ctx, lv)
+                    touchBridge = bridge
+
+                    lv.setCallback { surfaceW, surfaceH, screenW, screenH ->
+                        bridge.updateTransform(surfaceW, surfaceH, screenW, screenH)
+                        // fix15：自适应客户端同步当前 X 屏幕尺寸（已铺满则跳过判断）
+                        X11FitClient.screenW = screenW
+                        X11FitClient.screenH = screenH
+                        // 同步 Winlator 侧 xserver 状态（screenInfo 消费方依赖）。
+                        try {
+                            lv.screenInfo.handleHostSizeChanged(surfaceW, surfaceH)
+                            lv.screenInfo.handleClientSizeChanged(screenW, screenH)
+                        } catch (_: Exception) {}
+                        val display = lv.display
+                        val framerate = (display?.refreshRate ?: 60f).toInt()
+                        val name = if (display == null || display.displayId == Display.DEFAULT_DISPLAY)
+                            "Builtin Display" else "External Display"
+                        LorieView.sendWindowChange(screenW, screenH, framerate, name)
+                    }
+                    lv.setOnTouchListener { _, e -> bridge.onTouch(e) }
+                    // 按键直注 X（返回键不拦截，交给桌面处理全屏/关窗）
+                    lv.setOnKeyListener { _, keyCode, event ->
+                        if (keyCode == KeyEvent.KEYCODE_BACK) false
+                        else bridge.sendKey(event) ?: false
+                    }
+
+                    lorieViewRef = lv
+                    X11ResolutionLink.attachView(lv)
+                    // 桌面虚拟手柄 → X11 直注通道（GamepadController 经
+                    // X11InputHub 静态桥把按键/鼠标事件发到本视图）。
+                    X11InputHub.get(ctx).setActiveLorieView(lv)
+
+                    X11WindowController.connectLorieView(lv)
+                    root
+                }
+            )
+
+            // ===== 等待页（未连接时覆盖） =====
+            if (connState != X11WindowController.State.Connected) {
+                WaitingPanel(connState)
+            }
+        }
+
+        // ===== 控制条（连接后显示） =====
+        // v2.22.5 fix13：真全屏时隐藏控制条（用户需求：点"全屏"后底部菜单
+        // 消失，画面独占整个窗口；按返回键退出全屏后控制条重新出现 ——
+        // BackHandler 已在本 Composable 顶部处理）。
+        if (connState == X11WindowController.State.Connected && prefs != null && !isTrueFs) {
+            ControlBar(
+                scope = scope,
+                prefs = prefs,
+                lorieView = lorieViewRef,
+                isTrueFs = isTrueFs,
+                resState = resState
+            )
+        }
+    }
+
+    // v2.22.4 fix11c：X11 设置面板（长按标题栏 / 常驻通知 "X11 设置" 动作）
+    X11SettingsDialog()
+}
+
+@Composable
+private fun WaitingPanel(state: X11WindowController.State) {
+    val theme = LocalWinTheme.current
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xF2000000))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = if (state == X11WindowController.State.Waiting) "正在连接 X 服务…"
+            else "未发现 X 服务",
+            color = Color.White,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "在终端执行以下命令启动桌面（本窗口将自动亮起）：",
+            color = Color(0xFFB8C4CE),
+            fontSize = 12.sp,
+            lineHeight = 17.sp
+        )
+        Spacer(Modifier.height(6.dp))
+        val steps = listOf(
+            "linbox-x11 :13                  # 启动 X 服务并自动打开本窗口",
+            "env DISPLAY=:13 xfce4-session   # 未自动起会话时手动执行",
+            "glibc-runner -d1280x720 game.exe  # 游戏按指定分辨率全屏渲染",
+            "linbox-x11 doctor              # 连不上时一键体检"
+        )
+        steps.forEach { line ->
+            Text(
+                text = line,
+                color = Color(0xFF9FE29F),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF14231A), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = { X11Desktop.open(context) }) {
+            Text("打开兼容全屏模式", fontSize = 12.sp)
+        }
+        Text(
+            text = "兼容模式 = 独立全屏 Activity（排查窗口模式问题时使用）",
+            color = Color(0xFF8A97A3),
+            fontSize = 10.sp
+        )
+    }
+}
+
+@Composable
+private fun ControlBar(
+    scope: WindowContentScope,
+    prefs: com.termux.x11.Prefs,
+    lorieView: LorieView?,
+    isTrueFs: Boolean,
+    resState: X11ResolutionLink.ResolutionState
+) {
+    val theme = LocalWinTheme.current
+    val wm = remember { WindowManager.get() }
+    val context = LocalContext.current
+
+    var modeNative by remember(resState.mode) { mutableStateOf(resState.mode != "exact") }
+    var resText by remember(resState.mode) {
+        mutableStateOf(
+            if (resState.mode == "exact" && resState.exact.isNotEmpty()) resState.exact
+            else prefs.displayResolutionExact.get()
+        )
+    }
+    var resError by remember { mutableStateOf(false) }
+    val barBg = if (theme.isDark) Color(0xFF1B222B) else Color(0xFFF2F4F7)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(barBg)
+            .border(0.dp, Color.Transparent)
+    ) {
+        HorizontalDivider(color = if (theme.isDark) Color(0xFF3A4450) else Color(0xFFDDDDDD))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // 分辨率模式切换
+            TextButton(
+                onClick = {
+                    modeNative = true
+                    prefs.displayResolutionMode.put("native")
+                    X11ResolutionLink.setNative()
+                    lorieView?.let { it.regenerate(); it.requestLayout() }
+                },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = if (modeNative) theme.accentColor else theme.windowTitleBarTextColor
+                ),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text("跟随窗口", fontSize = 11.sp) }
+
+            TextButton(
+                onClick = { modeNative = false },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = if (!modeNative) theme.accentColor else theme.windowTitleBarTextColor
+                ),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text("固定分辨率", fontSize = 11.sp) }
+
+            if (!modeNative) {
+                OutlinedTextField(
+                    value = resText,
+                    onValueChange = { resText = it; resError = false },
+                    enabled = !modeNative,
+                    isError = resError,
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (theme.isDark) Color.White else Color.Black
+                    ),
+                    modifier = Modifier
+                        .width(110.dp)
+                        .height(48.dp),
+                    placeholder = { Text("1280x720", fontSize = 10.sp) }
+                )
+                TextButton(
+                    onClick = {
+                        val m = Regex("(\\d{2,5})x(\\d{2,5})").find(resText.trim())
+                        val (w, h) = m?.destructured ?: run { resError = true; return@TextButton }
+                        if (w.toInt() < 160 || h.toInt() < 120) { resError = true; return@TextButton }
+                        modeNative = false
+                        X11ResolutionLink.setExact(w.toInt(), h.toInt())
+                        resError = false
+                        lorieView?.let { it.regenerate(); it.requestLayout() }
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) { Text("应用", fontSize = 11.sp) }
+            }
+
+            // 分辨率来源指示（glibc-runner 握手状态一目了然）
+            Text(
+                text = if (resState.mode == "exact") "X:${resState.exact}"
+                       else "X:跟随窗口",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = if (resState.fromGame) theme.accentColor else theme.windowTitleBarTextColor
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            // 软键盘开关
+            TextButton(
+                onClick = {
+                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                    @Suppress("DEPRECATION")
+                    imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text("键盘", fontSize = 11.sp) }
+
+            // v2.22.5 fix14：游戏全屏（Alt+Enter）—— 窗口化游戏（居中小窗+
+            // 四周黑边）一键切换 wine/DXVK 全屏：X 屏幕经 RandR 自动切成游戏
+            // 分辨率，画面铺满无黑边。
+            TextButton(
+                onClick = { X11InputHub.sendAltEnter() },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text("游戏全屏", fontSize = 11.sp) }
+
+            // 全屏切换（真全屏：隐藏标题栏与任务栏，返回键退出）
+            TextButton(
+                onClick = { wm.toggleTrueFullscreen(scope.windowState.id) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text(if (isTrueFs) "退出全屏" else "全屏", fontSize = 11.sp) }
+        }
+    }
+}
+
+/**
+ * 智能鼠标桥（fix10）：Android 触摸 → X 真实鼠标事件。
+ *
+ * 为什么不再直注原生 X 触摸（旧 DirectTouchBridge / sendTouchEvent）：
+ * - wine（尤其 explorer/游戏菜单）大量场景只响应鼠标按下/抬起；
+ *   XI2 触摸直注在 wine 下表现为"点不开文件夹/文件"；
+ * - 双击要求两次点击落点足够近 —— 手指两次落点天然有偏差；
+ * - 拖拽（移动 wine 窗口、拉滚动条）需要"按下期间持续移动"。
+ *
+ * 手势映射：
+ * - 单指按下      → 绝对移动到指尖（双击吸附，见下）+ 左键按下
+ * - 单指移动      → 跟随移动（= 按住拖拽；轻点不产生位移）
+ * - 单指抬起      → 左键抬起（快速轻点 = 完整左键单击）
+ * - 双击          → 两次轻点 <450ms 且落点接近 → 第二次按下自动吸附到
+ *                   第一次的 X 坐标 → wine 稳定识别 WM_LBUTTONDBLCLK
+ * - 双指轻点      → 右键单击
+ * - 双指滑动      → 滚轮（上下滑动 = 滚动内容）
+ * - 长按拖动      → 左键按住拖拽（天然支持，无需特殊处理）
+ *
+ * 坐标变换：视图像素 ×(X屏幕/视图) = X 坐标；固定分辨率模式下
+ * LorieView 信箱缩放，比例恒等映射，无偏移。
+ */
+private class SmartTouchBridge(private val context: Context, private val view: LorieView) {
+    private val renderData = com.termux.x11.input.RenderData()
+    private val keySender = com.termux.x11.input.InputEventSender(view)
+
+    // 视图→X 坐标变换参数
+    private var surfaceW = 0
+    private var surfaceH = 0
+    private var screenW = 0
+    private var screenH = 0
+    private var scaleX = 1f
+    private var scaleY = 1f
+
+    // 手势状态
+    private var mode = Mode.IDLE
+    private var pressedLeft = false
+    private var downX = 0f; private var downY = 0f
+    private var downAt = 0L
+    private var moved = false
+    private var curX = 0f; private var curY = 0f
+
+    // 双指
+    private var twoStartAt = 0L
+    private var twoMoved = false
+    private var lastTwoY = 0f
+    private var scrollAccum = 0f
+
+    // 双击吸附（X 坐标）
+    private var lastTapX = -1f; private var lastTapY = -1f
+    private var lastTapAt = 0L
+
+    private val slopPx = (ViewConfiguration.get(context).scaledTouchSlop * 1.5f)
+    private val tapMaxMs = 260L
+    private val dblTapMaxMs = 450L
+    private val wheelStep = 40f
+
+    private enum class Mode { IDLE, ONE, TWO, TWO_DONE }
+
+    fun updateTransform(surfaceW: Int, surfaceH: Int, screenW: Int, screenH: Int) {
+        this.surfaceW = surfaceW
+        this.surfaceH = surfaceH
+        this.screenW = screenW
+        this.screenH = screenH
+        scaleX = if (surfaceW > 0) screenW.toFloat() / surfaceW else 1f
+        scaleY = if (surfaceH > 0) screenH.toFloat() / surfaceH else 1f
+        renderData.imageWidth = surfaceW
+        renderData.imageHeight = surfaceH
+        renderData.screenWidth = screenW
+        renderData.screenHeight = screenH
+        renderData.scale.set(scaleX, scaleY)
+    }
+
+    private fun toXpx(vx: Float, vy: Float): FloatArray {
+        val x = (vx * scaleX).toInt().coerceIn(0, (screenW - 1).coerceAtLeast(0))
+        val y = (vy * scaleY).toInt().coerceIn(0, (screenH - 1).coerceAtLeast(0))
+        return floatArrayOf(x.toFloat(), y.toFloat())
+    }
+
+    private fun sendMoveX(x: Int, y: Int) {
+        view.sendMouseEvent(x.toFloat(), y.toFloat(), InputStub.BUTTON_UNDEFINED, false, false)
+    }
+
+    private fun sendButton(button: Int, down: Boolean) {
+        // (0,0)+relative = 纯按键事件（在当前指针位置按下/抬起），
+        // 与 InputDeviceManager 的注入路径完全一致。
+        view.sendMouseEvent(0f, 0f, button, down, true)
+    }
+
+    /** 双击吸附：若处于双击窗口内且落点接近上次轻点，返回上次落点。 */
+    private fun snapPoint(vx: Float, vy: Float): FloatArray {
+        val now = android.os.SystemClock.uptimeMillis()
+        val px = toXpx(vx, vy)
+        if (lastTapAt > 0 && now - lastTapAt <= dblTapMaxMs) {
+            val dx = px[0] - lastTapX
+            val dy = px[1] - lastTapY
+            val slopX = slopPx * scaleX
+            val slopY = slopPx * scaleY
+            if (dx * dx + dy * dy <= slopX * slopX + slopY * slopY) {
+                return floatArrayOf(lastTapX, lastTapY)
+            }
+        }
+        return px
+    }
+
+    fun onTouch(event: MotionEvent): Boolean {
+        if (!LorieView.connected() || screenW <= 0 || screenH <= 0) return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                mode = Mode.ONE
+                downX = event.x; downY = event.y
+                curX = downX; curY = downY
+                downAt = android.os.SystemClock.uptimeMillis()
+                moved = false
+                val p = snapPoint(downX, downY)
+                sendMoveX(p[0].toInt(), p[1].toInt())
+                sendButton(InputStub.BUTTON_LEFT, true)
+                pressedLeft = true
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (mode == Mode.ONE && event.pointerCount >= 2) {
+                    mode = Mode.TWO
+                    twoStartAt = android.os.SystemClock.uptimeMillis()
+                    twoMoved = false
+                    scrollAccum = 0f
+                    lastTwoY = (event.getY(0) + event.getY(1)) / 2f
+                    if (pressedLeft) {
+                        sendButton(InputStub.BUTTON_LEFT, false)
+                        pressedLeft = false
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                when (mode) {
+                    Mode.ONE -> {
+                        curX = event.x; curY = event.y
+                        if (!moved) {
+                            val dx = curX - downX
+                            val dy = curY - downY
+                            moved = dx * dx + dy * dy > slopPx * slopPx
+                        }
+                        val p = toXpx(curX, curY)
+                        sendMoveX(p[0].toInt(), p[1].toInt())
+                    }
+                    Mode.TWO -> {
+                        if (event.pointerCount >= 2) {
+                            val avgY = (event.getY(0) + event.getY(1)) / 2f
+                            val dy = (lastTwoY - avgY) * scaleY // 手指上滑 → 正值 → 内容下滚
+                            lastTwoY = avgY
+                            if (kotlin.math.abs(dy) > 0.5f) twoMoved = true
+                            scrollAccum += dy
+                            if (kotlin.math.abs(scrollAccum) >= wheelStep) {
+                                val steps = (scrollAccum / wheelStep).toInt()
+                                view.sendMouseWheelEvent(0f, steps * wheelStep)
+                                scrollAccum -= steps * wheelStep
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (mode == Mode.TWO) {
+                    // 双指轻点（未滑动、时间短）→ 右键单击
+                    if (!twoMoved && android.os.SystemClock.uptimeMillis() - twoStartAt < 320L) {
+                        val p = toXpx(curX, curY)
+                        sendMoveX(p[0].toInt(), p[1].toInt())
+                        sendButton(InputStub.BUTTON_RIGHT, true)
+                        sendButton(InputStub.BUTTON_RIGHT, false)
+                    }
+                    mode = Mode.TWO_DONE
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                if (pressedLeft) {
+                    sendButton(InputStub.BUTTON_LEFT, false)
+                    pressedLeft = false
+                }
+                if (mode == Mode.ONE) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (!moved && now - downAt <= tapMaxMs) {
+                        // 完整轻点 → 记录落点（X 坐标）供双击吸附
+                        val p = snapPoint(downX, downY)
+                        lastTapX = p[0]; lastTapY = p[1]; lastTapAt = now
+                    } else {
+                        lastTapAt = 0L
+                    }
+                }
+                mode = Mode.IDLE
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                if (pressedLeft) {
+                    sendButton(InputStub.BUTTON_LEFT, false)
+                    pressedLeft = false
+                }
+                mode = Mode.IDLE
+            }
+        }
+        return true
+    }
+
+    fun sendKey(event: KeyEvent): Boolean = keySender.sendKeyEvent(event)
+}

@@ -1,0 +1,17 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# 停止 LinBox 内置 X11 服务（v2.22.2）
+# ============================================================
+# 仅匹配 linboxx11 进程名（app_process --nice-name），
+# 不会误杀官方 Termux:X11 应用（com.termux.x11）的进程。
+# ============================================================
+
+PIDS="$(ps -ef 2>/dev/null | grep 'linboxx11' | grep -v grep | awk '{print $2}')"
+if [ -z "$PIDS" ]; then
+    echo "X11 服务未在运行"
+    exit 0
+fi
+for pid in $PIDS; do
+    kill -9 "$pid" 2>/dev/null
+done
+echo "X11 服务已停止"

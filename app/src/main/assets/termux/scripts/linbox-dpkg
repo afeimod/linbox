@@ -1,0 +1,273 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# linbox-dpkg — LinBox dpkg 包装器 v3.2（fix8.6：动态库解析保障+真身晋升验证）
+# ============================================================
+# 官方仓库的 deb 全部按 /data/data/com.termux 前缀构建（tar 成员
+# 路径即绝对路径 data/data/com.termux/...），dpkg 以 instdir=/
+# 按成员路径落盘——不重写就会写进别的应用的数据目录（报错表现为
+# unable to stat './data/data/com.termux': Permission denied）。
+#
+# fix6 的缺陷：包装器只部署在 bin/dpkg 一处。dpkg 包自升级时，
+# deb 里的 bin/dpkg 真身 ELF 会覆盖 bin/dpkg（包装器脚本）——
+# 此后 apt/pkg 全部绕过 deb 重打包，pkg update / pkg install
+# 全线失败。fix7 起"三层布局 + apt 钉扎 + 双重自愈"根治。
+#
+# 本包装器职责：
+#   0) 自愈 bin/dpkg（见上）；
+#   1) apt 缓存预扫描（fix8.5）：下载缓存中的官方 deb 先行重写，
+#      保证 apt 任何时刻的暂存源都是净品；
+#   2) 参数中的 *.deb 逐个经 linbox-debfix 重打包为 com.linbox 前缀；
+#   3) 包装器自检（fix8.5）：不信任 debfix 记账，字节级复查每个 deb
+#      参数，仍有残留则可见地再修一次；
+#   4) 兜底重试（fix8.4）：dpkg 失败且有 deb 参数时再扫一轮，确有
+#      修复发生才重试一次 dpkg——同一命令内自愈；
+#   5) 返回后自愈 + linbox-reprefix 增量重写（安装内容安全网）。
+#   6) 全程文件日志 pkgfix.log（fix8.5）：参数全量+每个 deb 的处理
+#      结果落盘——终端无关的地面真相（rev 9 上机复测发现 13 包在
+#      终端零输出但按逻辑必然应输出，本日志用于一锤定音）。
+# 覆盖范围：apt / pkg / 直接 dpkg -i / grun-install 等全部路径。
+# ============================================================
+
+PREFIX=/data/data/com.linbox/files/usr
+REAL=$PREFIX/libexec/linbox/dpkg.real
+WRAP=$PREFIX/libexec/linbox/dpkg
+BIN=$PREFIX/bin/dpkg
+FIX=$PREFIX/bin/linbox-debfix
+REPREFIX=$PREFIX/bin/linbox-reprefix
+
+# ---- 动态库解析保障（fix8.6，无条件兜底）----
+# 会话环境正常时 LD_LIBRARY_PATH 已由 App 注入（TermuxEnvironment，
+# 对齐上游 Termux）；这里再兜底一层，防御任何绕过 App 环境的调用方
+# （failsafe 会话 / adb / env -i 清洗等）。缺失时仅自带 DT_RPATH 的
+# 二进制可链接；新版官方包改用 DT_RUNPATH（bionic 不认），dpkg.real
+# 换入即报 CANNOT LINK EXECUTABLE ... libmd.so not found（事故实锤：
+# 2026-09-06 pkgfix.log，21:21:27 换真身后所有 dpkg 调用 rc=1）。
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$PREFIX/lib:"*) : ;;
+    *) export LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
+
+# ---- 文件日志（fix8.5）：终端无关的地面真相 ----
+LOGFILE=$PREFIX/var/lib/linbox/pkgfix.log
+mkdir -p "$PREFIX/var/lib/linbox" "$PREFIX/tmp" 2>/dev/null
+log() {
+    printf '%s dpkg: %s\n' "$(date '+%m-%d %H:%M:%S' 2>/dev/null || echo '?')" "$*" >> "$LOGFILE" 2>/dev/null || :
+}
+if [ -f "$LOGFILE" ]; then
+    _lsz=$(stat -c %s "$LOGFILE" 2>/dev/null || echo 0)
+    if [ "$_lsz" -gt 262144 ]; then
+        tail -n 300 "$LOGFILE" > "$LOGFILE.t" 2>/dev/null \
+            && mv -f "$LOGFILE.t" "$LOGFILE" 2>/dev/null
+    fi
+fi
+unset _lsz
+
+# 包装器本体优先（apt 经 Dir::Bin::dpkg 调用时 $0 即本体；
+# 用户经 bin/dpkg 调用时 $0 是副本，恢复动作以本体为模板）
+SELF=$0
+if [ -f "$WRAP" ]; then SELF=$WRAP; fi
+
+# 原子恢复 bin/dpkg 为包装器副本（cp 到临时文件再 mv，不破坏正在
+# 执行的旧 inode）
+heal_bin_dpkg() {
+    [ -f "$SELF" ] || return 0
+    if ! cmp -s "$SELF" "$BIN" 2>/dev/null; then
+        cp -f "$SELF" "$BIN.tmp.$$" 2>/dev/null \
+            && chmod 700 "$BIN.tmp.$$" 2>/dev/null \
+            && mv -f "$BIN.tmp.$$" "$BIN" 2>/dev/null
+    fi
+}
+
+# ---- 真身可运行性验证（fix8.6）----
+# 新 dpkg ELF 必须在本机可链接运行才允许顶替 dpkg.real：dpkg 包
+# 自升级换入的新真身若依赖的库（如 libmd.so）尚未安装/不可解析，
+# 直接换入会把 dpkg 整个打死，事务内所有后续调用全部失败。
+dpkg_real_runnable() {
+    env LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        "$1" --version >/dev/null 2>&1
+}
+
+# ---- 暂存真身晋升（fix8.6）：依赖库就绪后自动完成被搁置的同步 ----
+# debfix 的 sync_dpkg_real 自检失败时会暂存到 $REAL.pending（保留旧
+# 真身继续干活）；待其依赖（如随事务解包的 libmd）就绪后在此晋升。
+if [ -f "$REAL.pending" ]; then
+    if dpkg_real_runnable "$REAL.pending"; then
+        cp -f "$REAL" "$REAL.old" 2>/dev/null
+        cp -f "$REAL.pending" "$REAL.tmp.$$" 2>/dev/null \
+            && chmod 700 "$REAL.tmp.$$" 2>/dev/null \
+            && mv -f "$REAL.tmp.$$" "$REAL" 2>/dev/null
+        rm -f "$REAL.pending" 2>/dev/null
+        log "暂存真身依赖就绪 → 晋升 dpkg.real"
+    fi
+fi
+
+# ---- 自愈（运行前）：bin/dpkg 若被 dpkg 升级覆盖为真身 ELF ----
+# 新真身先验证可运行再提升为 dpkg.real（仅当比现有 dpkg.real 新时）；
+# 不可运行则暂存 pending 待依赖就绪（保留现有 dpkg.real 继续干活），
+# 再恢复包装器副本。
+if [ -f "$BIN" ]; then
+    magic=$(head -c 4 "$BIN" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')
+    if [ "$magic" = "7f454c46" ]; then
+        if [ ! -f "$REAL" ] || [ "$BIN" -nt "$REAL" ]; then
+            if dpkg_real_runnable "$BIN"; then
+                cp -f "$BIN" "$REAL.tmp.$$" 2>/dev/null \
+                    && chmod 700 "$REAL.tmp.$$" 2>/dev/null \
+                    && mv -f "$REAL.tmp.$$" "$REAL" 2>/dev/null
+            else
+                cp -f "$BIN" "$REAL.pending.tmp.$$" 2>/dev/null \
+                    && chmod 700 "$REAL.pending.tmp.$$" 2>/dev/null \
+                    && mv -f "$REAL.pending.tmp.$$" "$REAL.pending" 2>/dev/null
+                log "自愈: bin/dpkg 真身暂不可运行 → 暂存 pending，保留现有 dpkg.real"
+            fi
+        fi
+        heal_bin_dpkg
+    fi
+else
+    heal_bin_dpkg
+fi
+
+# ---- path-exclude / force-confold / Pre-Install-Pkgs 钩子（fix8.5，无条件重写）----
+# force-confold 消除配置文件交互提示；path-exclude 顺带防御。
+# ⚠ 实测结论（fix8.1）：dpkg 的 filter 检查发生在 lstat 之后，
+# path-exclude 对 "unable to stat ... Permission denied"（EACCES）
+# 场景无效——官方前缀成员必须在落盘前由 linbox-debfix 消灭。
+# Pre-Install-Pkgs 钩子（fix8.5 新增）：apt 在调 dpkg 前把全部 deb
+# 路径经 stdin 喂给 linbox-debfix——绕过本包装器循环的独立重写路径。
+# 内容随版本演进，无条件重写（幂等）。
+_DPKGCFG=$PREFIX/etc/dpkg/dpkg.cfg.d/99-linbox-fix
+_APTCFG=$PREFIX/etc/apt/apt.conf.d/99-linbox-fix
+mkdir -p "$PREFIX/etc/dpkg/dpkg.cfg.d" "$PREFIX/etc/apt/apt.conf.d" 2>/dev/null
+printf '%s\n' \
+    '# LinBox (com.linbox) dpkg 兜底修复（fix8.5）' \
+    '# 跳过官方 deb 中漏经重写的 /data/data/com.termux 成员' \
+    '# （如裸目录条目），否则 dpkg 落盘时报 Permission denied。' \
+    'path-exclude=/data/data/com.termux' \
+    'path-exclude=/data/data/com.termux/*' \
+    'force-confold' \
+    > "$_DPKGCFG" 2>/dev/null
+printf '%s\n' \
+    '// LinBox (com.linbox) dpkg 兜底修复（fix8.5）' \
+    '// path-exclude/force-confold 双保险；Pre-Install-Pkgs 把全部' \
+    '// deb 在 dpkg 前交给 linbox-debfix 重写（独立第二路径）。' \
+    'DPkg::Options:: "--path-exclude=/data/data/com.termux";' \
+    'DPkg::Options:: "--path-exclude=/data/data/com.termux/*";' \
+    'DPkg::Options:: "--force-confold";' \
+    'DPkg::Pre-Install-Pkgs:: "/data/data/com.linbox/files/usr/bin/linbox-debfix";' \
+    > "$_APTCFG" 2>/dev/null
+unset _DPKGCFG _APTCFG
+
+# ---- 调用横幅 + 参数日志（fix8.5）----
+log "===== 调用开始: $# 参数 ====="
+log "args: $*"
+echo "linbox-dpkg v3.2 (fix8.6): dpkg 调用 ($# 参数)" >&2
+
+# ---- apt 缓存预扫描（fix8.5）----
+# 把下载缓存中的官方 deb 先重写为 com.linbox 前缀（幂等）：即使后续
+# apt 重新暂存，暂存源也已是净品。有记账+字节扫描=净时快速返回。
+if [ -x "$FIX" ]; then
+    for d in "$PREFIX"/cache/apt/archives/*.deb "$PREFIX"/cache/apt/archives/partial/*.deb; do
+        [ -f "$d" ] || continue
+        "$FIX" "$d" >/dev/null 2>&1
+    done
+fi
+
+# ---- deb 重打包（com.termux → com.linbox）----
+fix_failed=0
+_seen_deb=0
+for a in "$@"; do
+    case "$a" in
+        *.deb)
+            _seen_deb=1
+            if [ -f "$a" ]; then
+                if [ -x "$FIX" ]; then
+                    log "debfix <- $a"
+                    "$FIX" "$a" >/dev/null
+                    _frc=$?
+                    log "debfix rc=$_frc <- $a"
+                    [ "$_frc" -eq 0 ] || fix_failed=1
+                    unset _frc
+                else
+                    echo "linbox-dpkg: 警告: linbox-debfix 不可用，$a 未经前缀重写" >&2
+                    log "debfix 不可用: $a"
+                    fix_failed=1
+                fi
+            else
+                log "deb 参数不存在: $a"
+            fi
+            ;;
+    esac
+done
+if [ "$fix_failed" -eq 1 ]; then
+    echo "linbox-dpkg: 提示: 部分 deb 未能完成前缀重写，对应包可能安装失败" \
+         "（重试 pkg update / 安装命令即可）" >&2
+fi
+
+# ---- 包装器自检（fix8.5）----
+# 不信任 debfix 的记账与返回值，直接字节级复查每个 deb 参数；仍有
+# 官方前缀字节则可见地再修一次。扫描器异常（空输出）也按脏处理。
+if command -v dpkg-deb >/dev/null 2>&1; then
+    for a in "$@"; do
+        case "$a" in
+            *.deb)
+                [ -f "$a" ] || continue
+                _sc=$PREFIX/tmp/.linbox-scan.$$
+                _dirty=1
+                if dpkg-deb --fsys-tarfile "$a" > "$_sc" 2>/dev/null && [ -s "$_sc" ]; then
+                    _dirty=0
+                    grep -aqm1 'com\.termux' "$_sc" 2>/dev/null && _dirty=1
+                fi
+                rm -f "$_sc" 2>/dev/null
+                if [ "$_dirty" -eq 1 ]; then
+                    echo "linbox-dpkg: 警告: 自检发现 $a 仍含官方前缀字节，再次修复" >&2
+                    log "自检: $a 仍脏 → 再次 debfix"
+                    [ -x "$FIX" ] && "$FIX" "$a" >/dev/null 2>&1
+                fi
+                ;;
+        esac
+    done
+else
+    log "自检跳过: dpkg-deb 不在 PATH"
+fi
+
+# ---- 真身执行 ----
+"$REAL" "$@"
+rc=$?
+
+# ---- 兜底重试（fix8.4）----
+# 正常情况下 debfix 已在执行前把所有 deb 参数重写干净；若 dpkg 仍
+# 失败，对 deb 参数再跑一轮 debfix（字节级扫描，命中即修复）。
+# 只有【确有修复发生】才重试一次——真实错误（依赖冲突等）不会被
+# 无意义地重复执行。
+if [ "$rc" -ne 0 ] && [ "$_seen_deb" -eq 1 ]; then
+    _repaired=0
+    for a in "$@"; do
+        case "$a" in
+            *.deb)
+                [ -f "$a" ] || continue
+                if [ -x "$FIX" ]; then
+                    _n=$("$FIX" "$a" 2>/dev/null | tail -n 1)
+                    case "$_n" in
+                        LINBOX_REPAIRED=1) _repaired=1 ;;
+                    esac
+                fi
+                ;;
+        esac
+    done
+    log "dpkg rc=$rc → 兜底重试扫描, 修复=$_repaired"
+    if [ "$_repaired" -eq 1 ]; then
+        echo "linbox-dpkg: 检测到 deb 仍含官方前缀成员，已修复并自动重试一次..." >&2
+        "$REAL" "$@"
+        rc=$?
+    fi
+fi
+log "===== 调用结束 rc=$rc ====="
+unset _seen_deb _repaired _n
+
+# ---- 自愈（运行后）：本次若升级了 dpkg 包，bin/dpkg 已被覆盖 ----
+heal_bin_dpkg
+
+# ---- 安全网：按 dpkg 清单增量重写安装内容 ----
+if [ -x "$REPREFIX" ]; then
+    "$REPREFIX" --quiet
+fi
+
+exit $rc

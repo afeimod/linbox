@@ -1,0 +1,255 @@
+name: Build LinBox APK
+
+# ============================================================================
+# 仅手动触发（workflow_dispatch），不绑定 push / pull_request / schedule
+# 在 GitHub 仓库 → Actions 标签页 → 选择 "Build LinBox APK" → Run workflow
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "构建类型"
+        required: true
+        type: choice
+        default: "release"
+        options:
+          - debug
+          - release
+          - both
+      java_version:
+        description: "JDK 版本"
+        required: true
+        type: choice
+        default: "17"
+        options:
+          - "17"
+          - "21"
+      gradle_version:
+        description: "Gradle 版本（覆盖 wrapper）"
+        required: false
+        type: string
+        default: "8.7"
+      upload_apk:
+        description: "上传 APK 作为 artifact"
+        required: true
+        type: boolean
+        default: true
+
+# 同一分支相同构建类型的旧排队任务不自动取消，按顺序执行
+concurrency:
+  group: build-${{ github.ref }}-${{ github.event.inputs.build_type }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build APK (${{ github.event.inputs.build_type }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ============ 1. 检出代码 ============
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # ============ 2. 设置 JDK ============
+      - name: ☕ Set up JDK ${{ github.event.inputs.java_version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ github.event.inputs.java_version }}
+
+      # ============ 3. 设置 Gradle ============
+      # 使用 setup-gradle 而非依赖 gradlew，规避 gradle-wrapper.jar 缺失问题
+      # ubuntu-latest 镜像已预装 Android SDK（compileSdk 34 + build-tools）
+      - name: 🛠️ Set up Gradle ${{ github.event.inputs.gradle_version }}
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: ${{ github.event.inputs.gradle_version }}
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # ============ 3.5 安装 NDK（Termux 移植：libtermux.so 原生编译） ============
+      # app/build.gradle.kts 中 ndkVersion = "26.3.11579264"，此处需安装同版本
+      - name: 🔬 Install NDK 26.3.11579264
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "(no existing ndk dir)"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.3.11579264" > /dev/null 2>&1 || \
+          yes | sdkmanager "ndk;26.3.11579264" > /dev/null 2>&1
+          echo "=== Installed NDK versions ==="
+          ls "$ANDROID_HOME/ndk"
+
+      # ============ 4. 确保 gradle-wrapper.jar 存在 ============
+      - name: 🔧 Ensure gradle-wrapper.jar exists
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "⚠️  gradle-wrapper.jar not found, generating it with: gradle wrapper"
+            gradle wrapper --gradle-version ${{ github.event.inputs.gradle_version }} --distribution-type bin
+            echo "✅ Wrapper generated"
+          else
+            echo "✅ gradle-wrapper.jar already exists"
+          fi
+          ls -lh gradle/wrapper/
+
+      # ============ 5. 生成 release keystore ============
+      # debug 签名签的 release APK 会被标记 testOnly=true，Android 14 系统
+      # 安装器拒绝安装；此处生成真正的 release keystore（V1+V2+V3 签名）
+      - name: 🔑 Generate release keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore linbox-release.keystore \
+            -alias linbox \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass linbox-release-pass-2026 \
+            -keypass linbox-release-pass-2026 \
+            -dname "CN=LinBox, OU=Dev, O=LinBox, L=Beijing, ST=Beijing, C=CN"
+          echo "✅ Release keystore generated"
+          ls -lh linbox-release.keystore
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/linbox-release.keystore
+          KEYSTORE_PASS: linbox-release-pass-2026
+          KEY_ALIAS: linbox
+          KEY_PASS: linbox-release-pass-2026
+
+      # ============ 6. 校验项目结构 ============
+      - name: 🔍 Validate project structure
+        run: |
+          echo "=== Project root ==="
+          ls -la
+          echo ""
+          echo "=== AndroidManifest ==="
+          test -f app/src/main/AndroidManifest.xml && echo "✓ Manifest found" || (echo "✗ Manifest missing" && exit 1)
+          echo ""
+          echo "=== Source files count ==="
+          echo "$(find app/src/main/java -name '*.kt' | wc -l) Kotlin files"
+          echo "$(find app/src/main/java -name '*.java' | wc -l) Java files"
+          echo ""
+          echo "=== Gamepad module (虚拟手柄) ==="
+          ls app/src/main/java/com/linbox/core/input/gamepad/
+          echo ""
+          echo "=== Assets ==="
+          find app/src/main/assets -maxdepth 2 -type d | sort
+
+      # ============ 7. 写入 local.properties（SDK 路径） ============
+      - name: 📝 Write local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "✓ local.properties written"
+
+      # ============ 8. 构建 Debug APK ============
+      - name: 🔨 Build Debug APK
+        if: github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both'
+        run: gradle assembleDebug --stacktrace --no-daemon
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/linbox-release.keystore
+          KEYSTORE_PASS: linbox-release-pass-2026
+          KEY_ALIAS: linbox
+          KEY_PASS: linbox-release-pass-2026
+
+      # ============ 9. 构建 Release APK（release keystore 签名） ============
+      - name: 🔨 Build Release APK
+        if: github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both'
+        run: gradle assembleRelease --stacktrace --no-daemon
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/linbox-release.keystore
+          KEYSTORE_PASS: linbox-release-pass-2026
+          KEY_ALIAS: linbox
+          KEY_PASS: linbox-release-pass-2026
+
+      # ============ 10. 列出并验证 APK ============
+      - name: 📦 List and verify APKs
+        if: success()
+        run: |
+          echo "=== Built APK files ==="
+          find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \; || echo "No APK found"
+          echo ""
+          echo "=== APK signature & testOnly verification ==="
+          for apk in $(find app/build/outputs/apk -name "*.apk" 2>/dev/null); do
+            echo "----------------------------------------"
+            echo "File: $apk"
+            if unzip -l "$apk" | grep -q "META-INF/.*\.RSA"; then
+              echo "✓ 签名: 有 V2/V3 签名 (RSA 文件存在)"
+            elif unzip -l "$apk" | grep -q "META-INF/CERT\.SF"; then
+              echo "✓ 签名: 有 V1 签名 (CERT.SF 存在)"
+            else
+              echo "✗ 签名: 无签名！(APK 无法安装)"
+            fi
+            if command -v aapt2 >/dev/null 2>&1; then
+              badging=$(aapt2 dump badging "$apk" 2>/dev/null)
+              if echo "$badging" | grep -q "testOnly='true'"; then
+                echo "✗ testOnly: TRUE (Android 系统安装器会拒绝安装！)"
+              else
+                echo "✓ testOnly: false (可正常安装)"
+              fi
+              echo ""
+              echo "APK info:"
+              echo "$badging" | head -8
+            fi
+          done
+
+      # ============ 11. 上传 APK Artifact ============
+      - name: 📤 Upload Debug APK
+        if: github.event.inputs.upload_apk == 'true' && (github.event.inputs.build_type == 'debug' || github.event.inputs.build_type == 'both')
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      - name: 📤 Upload Release APK
+        if: github.event.inputs.upload_apk == 'true' && (github.event.inputs.build_type == 'release' || github.event.inputs.build_type == 'both')
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-release-${{ github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      # ============ 12. 上传构建报告（失败时排查用） ============
+      - name: 📤 Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-build-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            build/reports/
+            **/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # ============ 13. 构建摘要 ============
+      - name: 📊 Build summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| App | LinBox (Termux + X11) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | \`com.linbox\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| X11 Display | \`:13\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | \`${{ github.event.inputs.build_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| JDK | \`${{ github.event.inputs.java_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gradle | \`${{ github.event.inputs.gradle_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | \`${{ job.status }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.upload_apk }}" = "true" ]; then
+            find app/build/outputs/apk -name "*.apk" 2>/dev/null | while read apk; do
+              echo "- \`$(basename $apk)\` ($(du -h "$apk" | cut -f1))" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "- Artifact upload disabled" >> $GITHUB_STEP_SUMMARY
+          fi

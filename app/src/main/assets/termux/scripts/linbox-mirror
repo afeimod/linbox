@@ -1,0 +1,225 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-mirror — apt 软件源体检与自动切换（pool 级真实验证）
+# ============================================================
+# 背景：老版 termux-tools 的 pkg select_mirror 只测 dists/Release
+# 就把源加权轮换到 packages-cf.termux.org（Cloudflare）。该镜像
+# dists 可读、pool/*.deb 却一律 403 Forbidden——表现为 apt update
+# 正常、所有包下载全部失败。本工具对候选镜像做「Release 头 +
+# 真实 .deb 分段下载」双重验证，通过后才切源；并同步 sources.list.d
+# 里的附加源（gpkg 等，新根下不可用时保持原样不动）。
+#
+# 用法:
+#   linbox-mirror            当前源可用则保留，否则自动切换
+#   linbox-mirror --force    跳过当前源体检，强制按候选列表重选
+#   linbox-mirror --quiet    只输出最终结论（供脚本调用）
+# ============================================================
+set -u
+
+PREFIX=/data/data/com.linbox/files/usr
+SRC_LIST="$PREFIX/etc/apt/sources.list"
+SRC_DIR="$PREFIX/etc/apt/sources.list.d"
+ARCH=$(dpkg --print-architecture 2>/dev/null || echo aarch64)
+
+# 候选仓库根：主源 = <根>/termux-main。
+# .cn 高校镜像优先（速度快，且 .cn 域名可让老版 pkg 的镜像轮换
+# 永久跳过本源，避免再次被轮换回坏镜像）。
+# 注：glibc 附加源（termux-glibc）不在任何镜像站，由下方
+# fix_glibc_source 在 cf 缓存域 / 官方直连域之间体检切换。
+CANDIDATES='
+https://mirrors.tuna.tsinghua.edu.cn/termux/apt
+https://mirrors.bfsu.edu.cn/termux/apt
+https://mirror.iscas.ac.cn/termux/apt
+https://packages.termux.dev/apt
+https://packages-cf.termux.org/apt
+'
+
+QUIET=0
+FORCE=0
+for a in "$@"; do
+    case "$a" in
+        --quiet)   QUIET=1 ;;
+        --force)   FORCE=1 ;;
+        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    esac
+done
+
+say() { [ "$QUIET" = 1 ] || echo "[linbox-mirror] $*"; }
+
+TMP_BASE="${TMPDIR:-$PREFIX/tmp}"
+TMP=$(mktemp "$TMP_BASE/linbox-mirror.XXXXXX" 2>/dev/null) \
+    || TMP="$TMP_BASE/linbox-mirror.$$"
+trap 'rm -f "$TMP" "$TMP.deb" "$TMP.plain"' EXIT
+
+fetch() { # $1=url，成功时内容落在 $TMP
+    curl -fsL --connect-timeout 5 --max-time 30 -o "$TMP" "$1" 2>/dev/null
+}
+
+fetch_range() { # $1=url，分段下载（服务端 403/404 时 curl -f 直接失败）
+    curl -fsL --connect-timeout 5 --max-time 30 -r 0-65535 -o "$TMP" "$1" 2>/dev/null
+}
+
+# 仓库双验证：Release 头 + 真实 pool deb 分段下载（403 检测关键）。
+# $1=仓库完整基址（含仓库名，如 <根>/termux-main 或 …/termux-glibc）
+# $2=suite（如 stable/glibc） $3=component（如 main/stable）
+# $4=验证用包名
+# pool deb 的 Filename 相对仓库根，分段下载可拦截 pool 被 403 的坏镜像。
+test_repo() {
+    fetch "$1/dists/$2/Release" 2>/dev/null || return 1
+    grep -q '^Architectures:' "$TMP" || return 1
+    if fetch "$1/dists/$2/$3/binary-$ARCH/Packages.gz" 2>/dev/null; then
+        gunzip -c "$TMP" 2>/dev/null > "$TMP.plain" || return 1
+        mv -f "$TMP.plain" "$TMP"
+    else
+        fetch "$1/dists/$2/$3/binary-$ARCH/Packages" 2>/dev/null || return 1
+    fi
+    deb=$(sed -n "/^Package: $4$/,/^$/s/^Filename: //p" "$TMP" \
+        | sed -n '1p')
+    [ -n "$deb" ] || return 1
+    fetch_range "$1/$deb" || return 1
+    head -c 8 "$TMP" 2>/dev/null | grep -q '!<arch>' || return 1
+    return 0
+}
+
+# 主源验证（termux-main：suite=stable，component=main）
+test_main() { # $1=仓库根
+    test_repo "$1/termux-main" stable main termux-tools
+}
+
+# glibc 附加源验证（suite=glibc，component=stable；
+# 该仓库不在任何镜像站，只有官方 cf 缓存域与直连域）
+test_glibc_repo() { # $1=仓库完整基址（含 termux-glibc）
+    test_repo "$1" glibc stable glibc-runner
+}
+
+# glibc 附加源体检（glibc-repo 安装时写入 sources.list.d/glibc.list）：
+# cloudflare 缓存域 pool 验证失败时自动换官方直连域。
+fix_glibc_source() {
+    [ -f "$SRC_DIR/glibc.list" ] || return 0
+    grep -q '^deb https://packages-cf\.termux\.dev/apt/termux-glibc' \
+        "$SRC_DIR/glibc.list" || return 0
+    if test_glibc_repo "https://packages-cf.termux.dev/apt/termux-glibc"; then
+        say "glibc 源（cloudflare 缓存域）可用"
+        return 0
+    fi
+    if test_glibc_repo "https://packages.termux.dev/apt/termux-glibc"; then
+        sed -i 's#^deb https://packages-cf\.termux\.dev/apt/termux-glibc/#deb https://packages.termux.dev/apt/termux-glibc/#' \
+            "$SRC_DIR/glibc.list"
+        say "glibc 源已切换到官方直连域（packages.termux.dev）"
+    else
+        say "警告: glibc 源两个域均不可用，保持原样"
+    fi
+    return 0
+}
+
+# 把文件内已知坏源/老源/轮换源地址重写到指定仓库根。
+rewrite_file() { # $1=文件 $2=新根
+    sed -i \
+        -e 's#https\?://packages-cf\.termux\.org/apt#'"$2"'#g' \
+        -e 's#https\?://packages\.termux\.org/apt#'"$2"'#g' \
+        -e 's#https\?://packages\.termux\.dev/apt#'"$2"'#g' \
+        -e 's#https\?://deb\.kcubeterm\.me/termux-main#'"$2"'/termux-main#g' \
+        -e 's#https\?://termux\.mentality\.rip/termux-main#'"$2"'/termux-main#g' \
+        -e 's#https\?://termux\.librehat\.com/apt/termux-main#'"$2"'/termux-main#g' \
+        -e 's#https\?://grimler\.se/termux-packages-24#'"$2"'/termux-main#g' \
+        "$1"
+}
+
+# 附加源（glibc 等）同步：逐行解析 deb 行的仓库尾段与 suite，
+# 在新根下真实可用才改写；任一行验证失败则整个文件保持原样
+# （防止把附加源切到没有该仓库的镜像，如 TUNA 无 termux-glibc）。
+sync_extra() { # $1=文件 $2=新根
+    grep -E '^deb ' "$1" > "$TMP.deb" 2>/dev/null || return 0
+    ok=1
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        rest=$(printf '%s\n' "$line" | sed -E 's/^deb (\[[^]]*\] )?//')
+        url=${rest%% *}
+        suite_r=${rest#*" "}
+        [ "$suite_r" = "$rest" ] && suite_r=""
+        suite=${suite_r%% *}
+        [ -n "$suite" ] || suite=stable
+        case "$url" in
+            */termux-main|*/termux-main/) continue ;;   # 主源任何候选根都有
+        esac
+        tail=${url#*/apt/}              # 根式地址 …/apt/<repo>
+        if [ "$tail" = "$url" ]; then   # 平铺地址（host/<repo>）
+            tail=${url#*://}
+            tail=${tail#*/}
+        fi
+        tail=${tail%/}
+        [ -n "$tail" ] || continue
+        if ! fetch "$2/$tail/dists/$suite/Release" 2>/dev/null \
+            || ! grep -q '^Architectures:' "$TMP"; then
+            say "附加源 $tail（suite=$suite）在新根下不可用，$(basename "$1") 保持原样"
+            ok=0
+        fi
+    done < "$TMP.deb"
+    rm -f "$TMP.deb"
+    [ "$ok" = 1 ] && rewrite_file "$1" "$2"
+    return 0
+}
+
+main() {
+    [ -f "$SRC_LIST" ] || { say "未找到 $SRC_LIST"; exit 1; }
+
+    current_url=$(grep -E '^deb (\[[^]]*\] )?https?://' "$SRC_LIST" 2>/dev/null \
+        | sed -E 's/^deb (\[[^]]*\] )?//' \
+        | sed -E 's/ .*//' \
+        | sed -n '1p')
+    cur_root=$(printf '%s' "$current_url" \
+        | sed -E 's#/termux-main/?$##' | sed -E 's#/$##')
+
+    chosen=""
+    if [ "$FORCE" != 1 ] && [ -n "$cur_root" ]; then
+        say "体检当前源: $current_url"
+        if test_main "$cur_root"; then
+            say "当前源可用（含 pool 下载验证）"
+            chosen="$cur_root"
+        else
+            say "当前源 pool 下载验证失败，开始选择替代镜像…"
+        fi
+    fi
+
+    if [ -z "$chosen" ]; then
+        for root in $CANDIDATES; do
+            [ "$root" = "$cur_root" ] && continue
+            say "测试镜像: $root"
+            if test_main "$root"; then
+                chosen="$root"
+                say "通过: $root"
+                break
+            fi
+            say "不可用: $root"
+        done
+    fi
+
+    if [ -z "$chosen" ]; then
+        say "所有候选镜像均不可用（检查网络），保持源配置不变"
+        exit 1
+    fi
+
+    if [ "$chosen" != "$cur_root" ]; then
+        rewrite_file "$SRC_LIST" "$chosen"
+        say "主源已切换: $chosen/termux-main"
+        if [ -d "$SRC_DIR" ]; then
+            for f in "$SRC_DIR"/*.list "$SRC_DIR"/*.sources; do
+                [ -f "$f" ] || continue
+                sync_extra "$f" "$chosen" || true
+            done
+        fi
+        say "建议执行: apt update"
+    else
+        # 当前主源可用：仍同步附加源（修复指向坏镜像的附加源）
+        if [ -d "$SRC_DIR" ]; then
+            for f in "$SRC_DIR"/*.list "$SRC_DIR"/*.sources; do
+                [ -f "$f" ] || continue
+                sync_extra "$f" "$chosen" || true
+            done
+        fi
+    fi
+    fix_glibc_source
+    exit 0
+}
+
+main

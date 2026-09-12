@@ -1,0 +1,17 @@
+┌────────────────────────────────────────────┐
+│  LinBox Terminal · 真实 Termux 环境        │
+└────────────────────────────────────────────┘
+  pkg install <包名>   安装软件包（官方 apt 源）
+  pkg search <关键字>  搜索软件包
+  pkg update           更新软件源
+  linbox-mirror        体检/切换 apt 软件源（下载 403 时用）
+  linbox-glibc         一键安装 glibc 运行环境
+  linbox-x11           启动内置 X11 桌面（pkg install xfce4 后体验）
+  theme win11          切换 LinBox 桌面主题
+  apps / start 浏览器  联动 LinBox 应用
+  help                 查看更多
+
+欢迎使用由 LinBox 移植的 Termux 环境。
+本环境基于 termux-packages 官方 bootstrap，
+已重写为 LinBox 的包名与路径前缀；
+官方源安装的软件包亦会自动完成前缀重写。

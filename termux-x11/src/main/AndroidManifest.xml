@@ -1,32 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ============================================================
+     v2.22.2 内置 X11 桌面 · termux-x11 模块清单（LinBox 适配版）
+     与参考实现的差异：
+     - 组件声明（MainActivity / KeyInterceptor / LoriePreferences$Receiver）
+       移入本清单，随资源合并自动进入 LinBox 主 APK；
+     - 精简权限：剔除与宿主冲突的 WRITE_/READ_EXTERNAL_STORAGE
+       （宿主已有带 maxSdkVersion 的同名声明）及无关的
+       READ_PHONE_STATE / GET_TASKS / VR / Oculus uses-feature。
+     ============================================================ -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-feature
         android:glEsVersion="0x00020000"
         android:required="true" />
-    <uses-feature
-        android:name="android.hardware.vr.headtracking"
-        android:required="false" />
-    <uses-feature
-        android:name="com.oculus.feature.PASSTHROUGH"
-        android:required="false" />
-    <uses-feature
-        android:name="oculus.software.overlay_keyboard"
-        android:required="false" />
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.GET_TASKS" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <application>
+
+        <!-- X11 桌面：全屏显示端（不嵌入终端界面）。
+             终端侧 termux-x11 客户端每秒广播 ACTION_START（附带连接
+             fd 的 binder），本 Activity 的动态接收器收到后完成连接并
+             渲染；LinBox 桌面（开始菜单/桌面图标）也可直接拉起本页
+             等待连接。singleTask 避免重复广播拉起多个实例。 -->
+        <activity
+            android:name="com.termux.x11.MainActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:theme="@style/AppTheme"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden" />
+
+        <!-- 可选辅助服务：拦截实体键盘事件转发给 X11（用户在系统设置
+             中手动启用； preferences 里可配置自动启动） -->
+        <service
+            android:name="com.termux.x11.utils.KeyInterceptor"
+            android:exported="true"
+            android:label="LinBox X11 KeyInterceptor"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 偏好变更接收器（termux-x11-preference 等命令行工具使用） -->
+        <receiver
+            android:name="com.termux.x11.LoriePreferences$Receiver"
+            android:exported="true"
+            android:enabled="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="com.termux.x11.CHANGE_PREFERENCE" />
+            </intent-filter>
+        </receiver>
+
+        <meta-data
+            android:name="android.allow_multiple_resumed_activities"
+            android:value="true" />
+    </application>
 
 </manifest>

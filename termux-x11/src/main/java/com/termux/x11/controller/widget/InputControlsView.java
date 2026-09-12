@@ -447,14 +447,18 @@ public class InputControlsView extends View {
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_POINTER_UP:
                 case MotionEvent.ACTION_CANCEL:
+                    // LinBox（v2.22.3 fix10）：逐指释放 —— 原实现对每个指针
+                    // 都用 actionIndex 的 pointerId，多指同时按住时松开其中
+                    // 一指会错误释放其它指（手柄按钮"粘键/串键"）。
                     for (byte i = 0, count = (byte) event.getPointerCount(); i < count; i++) {
                         float x = event.getX(i);
                         float y = event.getY(i);
+                        int pid = event.getPointerId(i);
                         for (ControlElement element : profile.getElements())
-                            if (element.handleTouchUp(pointerId, x, y)) {
+                            if (element.handleTouchUp(pid, x, y)) {
                                 handled = true;
                             }
-                        if (!handled) {
+                        if (!handled && actionMasked == MotionEvent.ACTION_CANCEL) {
                             touchpadView.onTouchEvent(event);
                         }
                     }

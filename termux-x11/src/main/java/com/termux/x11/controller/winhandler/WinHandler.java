@@ -5,8 +5,8 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 
 
-import com.termux.x11.MainActivity;
 import com.termux.x11.controller.core.StringUtils;
+import com.termux.x11.controller.widget.InputControlsView;
 import com.termux.x11.controller.inputcontrols.ControlsProfile;
 import com.termux.x11.controller.inputcontrols.ExternalController;
 import com.termux.x11.controller.inputcontrols.GamepadState;
@@ -42,11 +42,20 @@ public class WinHandler {
     private final ArrayDeque<byte[]> gamepadStateQueue = new ArrayDeque<>();
     private InetAddress localhost;
     private byte dinputMapperType = DINPUT_MAPPER_TYPE_XINPUT;
-    private final MainActivity activity;
+    /**
+     * LinBox（v2.22.3 fix10）：宿主解耦 —— 原先强绑定 MainActivity，
+     * 导致 X11 桌面浮动窗口（com.linbox X11Surface）模式下虚拟手柄
+     * 完全不可用（浮动窗口没有 Activity 实例）。现改为极小 Host 接口，
+     * MainActivity 与 X11InputHub（浮动窗口）都可以充当宿主。
+     */
+    public interface Host {
+        InputControlsView getInputControlsView();
+    }
+    private final Host host;
     private final List<Integer> gamepadClients = new CopyOnWriteArrayList<>();
 
-    public WinHandler(MainActivity activity) {
-        this.activity = activity;
+    public WinHandler(Host host) {
+        this.host = host;
     }
 
     private boolean sendPacket(int port) {
@@ -249,7 +258,7 @@ public class WinHandler {
             case RequestCodes.GET_GAMEPAD: {
                 boolean isXInput = receiveData.get() == 1;
                 boolean notify = receiveData.get() == 1;
-                final ControlsProfile profile = activity.getInputControlsView().getProfile();
+                final ControlsProfile profile = getActiveProfile();
                 boolean useVirtualGamepad = profile != null && profile.isVirtualGamepad();
 
                 if (!useVirtualGamepad && (currentController == null || !currentController.isConnected())) {
@@ -282,7 +291,7 @@ public class WinHandler {
             }
             case RequestCodes.GET_GAMEPAD_STATE: {
                 int gamepadId = receiveData.getInt();
-                final ControlsProfile profile = activity.getInputControlsView().getProfile();
+                final ControlsProfile profile = getActiveProfile();
                 boolean useVirtualGamepad = profile != null && profile.isVirtualGamepad();
                 final boolean enabled = currentController != null || useVirtualGamepad;
 
@@ -322,20 +331,26 @@ public class WinHandler {
         }
     }
 
+    /**
+     * LinBox hotfix：本方法绝不能在主线程执行网络/DNS 操作。
+     * 原实现把 InetAddress.getLocalHost()（StrictMode 网络操作）直接暴露在
+     * 调用线程 —— 主线程调用会抛 NetworkOnMainThreadException 闪退。
+     * 现将 DNS 解析与 socket bind 全部收纳进后台线程，任何线程调用均安全。
+     */
     public void start() {
-        try {
-            localhost = InetAddress.getLocalHost();
-        }
-        catch (UnknownHostException e) {
-            try {
-                localhost = InetAddress.getByName("127.0.0.1");
-            }
-            catch (UnknownHostException ex) {}
-        }
-
         running = true;
         startSendThread();
         Executors.newSingleThreadExecutor().execute(() -> {
+            try {
+                localhost = InetAddress.getLocalHost();
+            }
+            catch (UnknownHostException e) {
+                try {
+                    localhost = InetAddress.getByName("127.0.0.1");
+                }
+                catch (UnknownHostException ex) {}
+            }
+
             try {
                 socket = new DatagramSocket(null);
                 socket.setReuseAddress(true);
@@ -354,10 +369,17 @@ public class WinHandler {
         });
     }
 
+    /** LinBox（v2.22.3 fix10）：统一取当前活跃的手柄配置（宿主可能未就绪）。 */
+    private ControlsProfile getActiveProfile() {
+        if (host == null) return null;
+        InputControlsView v = host.getInputControlsView();
+        return v != null ? v.getProfile() : null;
+    }
+
     public void sendGamepadState() {
         Log.d("sendGamepadState","port:"+initReceived);
         if (!initReceived || gamepadClients.isEmpty()) return;
-        final ControlsProfile profile = activity.getInputControlsView().getProfile();
+        final ControlsProfile profile = getActiveProfile();
         final boolean useVirtualGamepad = profile != null && profile.isVirtualGamepad();
         final boolean enabled = currentController != null || useVirtualGamepad;
 

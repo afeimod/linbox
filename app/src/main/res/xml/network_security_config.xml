@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 允许所有明文 HTTP 流量（参考 APK 风格、兼容老站点如 4399.com） -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <!-- 额外放行常见游戏 / 老站点域名（即使将 base 关闭也可用） -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">4399.com</domain>
+        <domain includeSubdomains="true">4399ol.com</domain>
+        <domain includeSubdomains="true">3366.com</domain>
+        <domain includeSubdomains="true">7k7k.com</domain>
+        <domain includeSubdomains="true">17173.com</domain>
+        <domain includeSubdomains="true">baidu.com</domain>
+        <domain includeSubdomains="true">qq.com</domain>
+        <domain includeSubdomains="true">taobao.com</domain>
+        <domain includeSubdomains="true">tmall.com</domain>
+        <domain includeSubdomains="true">jd.com</domain>
+        <domain includeSubdomains="true">sina.com.cn</domain>
+        <domain includeSubdomains="true">weibo.com</domain>
+        <domain includeSubdomains="true">csdn.net</domain>
+        <domain includeSubdomains="true">cn</domain>
+    </domain-config>
+</network-security-config>

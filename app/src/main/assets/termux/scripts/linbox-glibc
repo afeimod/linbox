@@ -1,0 +1,55 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-glibc — 一键安装 glibc 运行环境（官方 gpkg 流程）
+# ============================================================
+# glibc-repo 在 termux 主仓库（添加 gpkg 软件源并携带官方签名 key），
+# glibc-runner 来自 gpkg 源，提供 glibc 运行时与 grun 包装器。
+# 安装过程经 dpkg 包装器自动重写前缀，grun 在 LinBox 下开箱即用。
+# ============================================================
+set -e
+
+echo "[linbox-glibc] 0/2 检查软件源（pool 级验证，403 自动切换镜像）..."
+# 老版 pkg 的镜像轮换可能把源切到 pool 下载 403 的 packages-cf，
+# 先用 linbox-mirror 验证/切换到真实可用的镜像再安装。
+command -v linbox-mirror >/dev/null 2>&1 && linbox-mirror --quiet \
+    || echo "[linbox-glibc] 警告: linbox-mirror 不可用，跳过源体检"
+
+echo "[linbox-glibc] 1/2 安装 glibc-repo（termux 主仓库，添加 gpkg 源）..."
+pkg install -y glibc-repo
+
+# glibc-repo 会写入 glibc 附加源（termux-glibc，仅官方 cf 缓存域/
+# 直连域提供）；linbox-mirror 会验证其 pool 可用性，失败时自动
+# 切换到直连域，避免第 2 步下载 glibc-runner 失败。
+command -v linbox-mirror >/dev/null 2>&1 && linbox-mirror --quiet || true
+
+echo "[linbox-glibc] 2/2 安装 glibc-runner（glibc 运行时 + grun）..."
+pkg install -y glibc-runner
+
+# ============================================================
+# fix10：恢复 LinBox 增强版 glibc-runner（v3.2-linbox3）
+# pkg 安装的官方 glibc-runner 会覆盖 bin/glibc-runner，丢掉两个
+# LinBox 专属能力：
+#   [Z1] z 盘修复 —— 悬空盘符自动重建、z: 指向 /（旧版悬空后
+#        wine 里 z 盘一片空白）
+#   [R1] 分辨率握手 —— -d 分辨率写入 tmp/.linbox-x11-res，
+#        LinBox X11 窗口按游戏分辨率渲染（旧版游戏缩成一小块）
+# 主副本在 etc/linbox/glibc-runner（bootstrap 安装时部署）；主副本
+# 缺失时保留 pkg 官方版（功能可用，仅少 LinBox 增强）。
+# ============================================================
+GR_BIN="$PREFIX/bin/glibc-runner"
+GR_MASTER="$PREFIX/etc/linbox/glibc-runner"
+if [ -r "$GR_MASTER" ]; then
+    if ! grep -q 'v3\.2-linbox' "$GR_BIN" 2>/dev/null || [ "$GR_BIN" -ot "$GR_MASTER" ] 2>/dev/null; then
+        if cp -f "$GR_MASTER" "$GR_BIN" 2>/dev/null && chmod 700 "$GR_BIN" 2>/dev/null; then
+            echo "[linbox-glibc] 已恢复 LinBox 增强版 glibc-runner（z 盘修复 + 分辨率握手）"
+        else
+            echo "[linbox-glibc] 警告: 恢复增强版 glibc-runner 失败（权限？），当前为官方版"
+        fi
+    fi
+fi
+
+echo
+echo "[linbox-glibc] 完成。常用命令："
+echo "  grun <命令>          以 glibc 环境运行指定命令，如 grun ./a.out"
+echo "  grun-install <deb>   安装 glibc 版 .deb 软件包"
+echo "  更多用法见 github.com/termux/glibc-packages"

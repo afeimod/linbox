@@ -1,0 +1,503 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# LinBox X11 桌面一键启动（v2.22.4 rev21）
+# ============================================================
+# 用法：
+#   linbox-x11              启动 X11 服务（显示号默认 :13）并自动尝试
+#                           启动已安装的桌面会话（xfce4 / openbox 等）
+#   linbox-x11 :0           指定显示号
+#   linbox-x11 :13 xterm     服务就绪后运行单个 X 程序
+#   linbox-x11 doctor       体检：逐项检查 X11 组件与依赖，缺失项
+#                           直接给出处理/安装命令（不启动服务）
+#
+# 服务启动后 LinBox 桌面内会自动弹出 X11 窗口（fix9.6 起，不再占用
+# 整屏）：窗口可自由拖拽/缩放，控制条可切换分辨率、一键真全屏；
+# 若未自动弹出，点击桌面/开始菜单的 X11 桌面图标即可。
+# 手动启动会话请带 dbus-launch（避免桌面无会话总线黑屏）：
+#   env DISPLAY=:13 dbus-launch startxfce4
+# 停止服务：linbox-x11-stop
+#
+# 依赖说明（重要）：
+#   X 服务本体（CmdEntryPoint + libXlorie.so）内置于 LinBox APK，
+#   不依赖任何 pkg 包；termux-x11-nightly 并非必需依赖（装不装都不
+#   影响内置 X11）。只有桌面会话 / X 应用（xfce4、openbox、xterm…）
+#   需要 pkg install x11-repo 后自行安装——装了什么就自动用什么，
+#   什么都没装则服务照常启动，只是没有可显示的窗口。
+#   用 linbox-x11 doctor 可随时查看缺什么。
+#
+# rev18 会话依赖自检：dbus-daemon/xfwm4/xfce4-panel/xfdesktop 启动会话前
+#   逐个探测动态链接，缺库（CANNOT LINK EXECUTABLE）时直接给出
+#   pkg install/reinstall 精确修复命令（不再只见 dbus-launch 一句费解
+#   的 "EOF in dbus-launch reading address from bus daemon"）；并兜底
+#   导出 LD_LIBRARY_PATH=$PREFIX/lib。doctor 的桌面依赖区同步增加
+#   链接自检。
+#
+# rev19 预检自动自愈：fix9.9 排查实锤 pkg/apt 自身也可能无法链接
+#   （bootstrap 缺陷：libexpat.so 以 dev 名入库且 SYMLINKS.txt 无
+#   libexpat.so.1 条目；dpkg 事故还可能丢 liblz4.so.1 —— pkg 全灭
+#   后无法用包管理器自救）。预检失败时先自动跑 linbox-pkgfix
+#   （离线补 soname 链接 + 救援库兜底，幂等），生效则照常启动会话；
+#   仍失败才给出 pkg 修复命令。手动全量诊断：linbox-pkgfix
+#
+# rev20（fix9.10）：9.7~9.9 fresh 安装全灭根因修复——x11-xkb.tar.gz
+#   独立资产在 CI 仓库管线中整文件丢失，导致安装收尾一步全盘报废、
+#   revision 永不落盘（每次启动迁移重跑再失败）。改随 bootstrap
+#   归档分发 + 三级容错；pkgfix v1.1 新增宿主 APK 内嵌 bootstrap
+#   提取救援库（预检自愈链在纯 shell 下亦可闭环）
+#
+# rev21（fix11c）：glibc-runner 自愈 —— bin/glibc-runner 被 pkg 安装/
+#   升级覆盖为官方裸脚本后，-d 分辨率握手（.linbox-x11-res）与 z 盘
+#   修复全部失效（症状：游戏锁死在小窗口/黑边，控制条显示"X: 跟随
+#   窗口"）。启动时检测标记，被覆盖即从 etc/linbox/glibc-runner 主
+#   副本恢复；doctor 同步增加体检项。
+#
+# rev14 排障增强：启动全程写入 $PREFIX/tmp/linbox-x11.log（前置检查、
+#   自愈动作、X 服务输出一站齐全，日志不再出现"空白"）；X 服务静默
+#   失败（原因仅在 logcat）时自动附带 logcat 相关摘要；ps 探测增加
+#   busybox/toybox 兼容兜底。
+# rev13 自愈：`pkg install termux-x11-nightly` 会用官方客户端脚本覆盖
+#   bin/termux-x11（官方脚本经前缀重写后引用的类名并不存在，启动即
+#   崩）。启动前按标记检测，被覆盖即从 etc/linbox/x11 主副本恢复。
+#
+# rev22（fix23 [P1]）：pulseaudio 会话级一次启动 —— X 服务就位后自动
+#   拉起 pulse（TCP 127.0.0.1:4713，--exit-idle-time=-1 常驻）：端口
+#   已通则直接复用（游戏零开销）；运行中但未开 TCP 的旧实例先请下场
+#   再重启（否则 wine 连不上）；并导出 PULSE_SERVER=127.0.0.1 供全会
+#   话使用。用户不再需要每次手工:
+#     pulseaudio --start --exit-idle-time=-1 \
+#       --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1
+#       auth-anonymous=1"
+#   glibc-runner 侧的 glr_start_pulse 保留为兑底（会话中途 pulse 被
+#   杀时补拉）。doctor 新增音频服务体检项。
+# ============================================================
+
+PREFIX=/data/data/com.linbox/files/usr
+# rev18：会话/桌面程序的动态库都在 $PREFIX/lib（bionic 不认 DT_RUNPATH，
+# 全靠 LD_LIBRARY_PATH 解析，上游 Termux 亦为会话固定设置）。此处无条件
+# 兜底导出，防个别入口（异常 shell/被清过的环境）导致 CANNOT LINK。
+export LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+X11_LOG="$PREFIX/tmp/linbox-x11.log"
+mkdir -p "$PREFIX/tmp" 2>/dev/null
+
+# fix10：分辨率握手协议复位 —— 桌面会话场景 X 屏幕回归"跟随窗口"。
+# （游戏分辨率由 glibc-runner -d 写入同一文件；linbox-x11 启动即覆盖为
+# native，避免上次游戏的固定分辨率一直粘住桌面会话。）
+printf 'native\n' > "$PREFIX/tmp/.linbox-x11-res" 2>/dev/null || true
+
+# lorie 需要 XDG_RUNTIME_DIR 存放 Wayland 运行时 socket
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-$PREFIX/tmp}}"
+mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null
+
+# 进程存在性探测（优先 procps 的 ps -ef，逐级兜底 busybox/toybox ps）
+ps_all() {
+    ps -ef 2>/dev/null || ps ax 2>/dev/null || ps 2>/dev/null
+}
+x11_running() {
+    ps_all | grep 'linboxx11' | grep -v grep >/dev/null 2>&1
+}
+
+# ---- 会话依赖库自检（rev18 引入，rev19 扩展自动自愈） ----
+# bionic 链接失败时 stderr 形如：
+#   CANNOT LINK EXECUTABLE "...": library "libexpat.so.1" not found: ...
+# 动态链接发生在参数解析之前 —— 对 ELF 二进制喂无害参数（--version）
+# 即可安全探测，不会产生副作用。
+soname_to_pkg() {
+    case "$1" in
+        libexpat.so.1) echo libexpat ;;
+        libdbus-1.so.3) echo dbus ;;
+        libdbus-glib-1.so.2) echo dbus-glib ;;
+        libglib-2.0.so.0|libgobject-2.0.so.0|libgio-2.0.so.0|libgmodule-2.0.so.0) echo glib ;;
+        libffi.so.8) echo libffi ;;
+        libz.so.1) echo zlib ;;
+        liblzma.so.5) echo xz-utils ;;
+        libpng16.so.16) echo libpng ;;
+        libjpeg.so.62) echo libjpeg-turbo ;;
+        libpixman-1.so.0) echo pixman ;;
+        libcairo.so.2) echo cairo ;;
+        libpango-1.0.so.0|libpangocairo-1.0.so.0|libpangoft2-1.0.so.0) echo pango ;;
+        libatk-1.0.so.0|libatk-bridge-2.0.so.0) echo atk ;;
+        libgtk-3.so.0|libgdk-3.so.0) echo gtk3 ;;
+        libharfbuzz.so.0) echo harfbuzz ;;
+        libfontconfig.so.1) echo fontconfig ;;
+        libfreetype.so.6) echo freetype ;;
+        libxml2.so.2) echo libxml2 ;;
+        libX11.so.6) echo libx11 ;;
+        libxcb.so.1) echo libxcb ;;
+        libXext.so.6) echo libxext ;;
+        libXrender.so.1) echo libxrender ;;
+        libXrandr.so.2) echo libxrandr ;;
+        libXinerama.so.1) echo libxinerama ;;
+        libXcursor.so.1) echo libxcursor ;;
+        libXi.so.6) echo libxi ;;
+        libxkbcommon.so.0) echo libxkbcommon ;;
+        libxkbfile.so.1) echo libxkbfile ;;
+        libICE.so.6) echo libice ;;
+        libSM.so.6) echo libsm ;;
+        libXt.so.6) echo libxt ;;
+        libXtst.so.6) echo libxtst ;;
+        libssl.so.3|libcrypto.so.3) echo openssl ;;
+        *) echo "" ;;
+    esac
+}
+
+# link_ok <二进制路径> [自检参数…]：退出 0=链接正常，1=缺动态库/符号；
+# 并置全局 _MISSING_SONAME（缺失库）与 _FIX_PKG（对应 pkg 包名，可为空）。
+link_ok() {
+    _lk_bin="$1"; shift
+    _MISSING_SONAME=""; _FIX_PKG=""
+    [ -x "$_lk_bin" ] || return 0
+    if command -v timeout >/dev/null 2>&1; then
+        _lk_out="$(timeout 8 "$_lk_bin" "$@" 2>&1)" || true
+    else
+        _lk_out="$("$_lk_bin" "$@" 2>&1)" || true
+    fi
+    case "$_lk_out" in
+        *"CANNOT LINK"*|*"not found: needed by"*|*"cannot locate symbol"*)
+            _MISSING_SONAME="$(printf '%s\n' "$_lk_out" | sed -n 's/.*library "\([^"]*\)" not found.*/\1/p' | head -n 1)"
+            if [ -n "$_MISSING_SONAME" ]; then
+                _FIX_PKG="$(soname_to_pkg "$_MISSING_SONAME")"
+                [ -n "$_FIX_PKG" ] || _FIX_PKG="$(dpkg -S "$_MISSING_SONAME" 2>/dev/null | head -n 1 | sed 's/:.*//')"
+            fi
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# ---- doctor 子命令：一键体检（不启动服务） ----
+if [ "${1:-}" = "doctor" ] || [ "${1:-}" = "--doctor" ]; then
+    _fails=0
+    _ok()  { echo "  [OK] $1"; }
+    _bad() { echo "  [!!] $1"; _fails=$((_fails + 1)); }
+    _none() { echo "  [--] $1"; }
+    echo "==== LinBox X11 体检（rev21）===="
+    echo
+    echo "[1/4] X 服务组件（内置于 LinBox APK，无需 pkg 安装）"
+    if [ -x "$PREFIX/bin/termux-x11" ] && grep -q 'LINBOX_X11_CLIENT' "$PREFIX/bin/termux-x11" 2>/dev/null; then
+        _ok "bin/termux-x11 内置客户端就绪"
+    else
+        _bad "bin/termux-x11 缺失/被覆盖/不可执行 → 打开一次 LinBox 主界面触发组件迁移（rev20），或确认 APK 为 fix9.6 及以上"
+    fi
+    if [ -x "$PREFIX/bin/glibc-runner" ] && grep -q 'linbox-x11-res' "$PREFIX/bin/glibc-runner" 2>/dev/null; then
+        _ok "bin/glibc-runner 增强版就绪（-d 分辨率握手/z 盘修复）"
+    elif [ -r "$PREFIX/etc/linbox/glibc-runner" ]; then
+        _bad "bin/glibc-runner 为官方裸脚本（无 -d 分辨率握手，游戏会锁死小窗）→ 下次 linbox-x11 启动自动恢复；或手动：cp $PREFIX/etc/linbox/glibc-runner $PREFIX/bin/glibc-runner && chmod 700 $PREFIX/bin/glibc-runner"
+    else
+        _none "glibc-runner 未安装（游戏场景由 linbox-glibc 部署）"
+    fi
+    if [ -r "$PREFIX/etc/linbox/x11/termux-x11" ]; then
+        _ok "主副本 etc/linbox/x11/termux-x11 就绪（防覆盖自愈源）"
+    else
+        _bad "主副本 etc/linbox/x11/termux-x11 缺失 → 打开一次 LinBox 主界面即自动部署"
+    fi
+    if [ -r "$PREFIX/etc/linbox-x11.env" ]; then
+        _ok "etc/linbox-x11.env 就绪"
+        _apk="$(sed -n 's/^LINBOX_APK_PATH=//p' "$PREFIX/etc/linbox-x11.env" | head -n 1)"
+        _nat="$(sed -n 's/^LINBOX_NATIVE_DIR=//p' "$PREFIX/etc/linbox-x11.env" | head -n 1)"
+        if [ -n "$_apk" ] && [ -r "$_apk" ]; then
+            _ok "宿主 APK 可读（$_apk）"
+        else
+            _bad "宿主 APK 不可读（$_apk）→ 打开一次 LinBox 主界面自动刷新"
+        fi
+        if [ -n "$_nat" ] && [ -f "$_nat/libXlorie.so" ]; then
+            _ok "libXlorie.so 就绪（$_nat）"
+        else
+            _bad "libXlorie.so 缺失（$_nat）→ 确认 APK 与本机 ABI 匹配（建议 universal 包）"
+        fi
+    else
+        _bad "etc/linbox-x11.env 缺失 → 打开一次 LinBox 主界面即自动生成"
+    fi
+    if [ -x /system/bin/app_process ]; then
+        _ok "/system/bin/app_process 就绪"
+    else
+        _bad "/system/bin/app_process 缺失（非标准 Android 系统）"
+    fi
+    if [ -d "$PREFIX/etc/linbox/x11/xkb/rules" ] || [ -r "$PREFIX/etc/linbox/x11/xkb.tar.gz" ] || [ -d "$PREFIX/share/X11/xkb/rules" ]; then
+        _ok "XKB 键盘数据就绪（X 服务零 pkg 依赖）"
+    else
+        _bad "XKB 键盘数据缺失 → 打开一次 LinBox 主界面重新部署（rev20 三级容错），或 pkg install xkeyboard-config"
+    fi
+    if [ -w "$XDG_RUNTIME_DIR" ]; then
+        _ok "XDG_RUNTIME_DIR 可写（$XDG_RUNTIME_DIR）"
+    else
+        _bad "XDG_RUNTIME_DIR 不可写（$XDG_RUNTIME_DIR）→ 重启 LinBox 终端重试"
+    fi
+    echo
+    echo "[2/4] 桌面会话 / X 应用（这部分才需要 pkg 安装，至少装一个）"
+    _any=0
+    for _c in startxfce4 xfce4-session openbox-session startlxde xterm; do
+        if command -v "$_c" >/dev/null 2>&1; then
+            _ok "检测到 $_c"
+            _any=1
+        else
+            _none "未安装 $_c"
+        fi
+    done
+    if [ "$_any" -eq 0 ]; then
+        echo "  → 完整桌面：pkg install x11-repo && pkg install xfce4 dbus"
+        echo "  → 最小测试：pkg install x11-repo && pkg install xterm（先确认 X 服务可用）"
+    fi
+    echo
+    echo "  [2/4 追加] 动态库链接自检（rev19）——防会话组件 CANNOT LINK EXECUTABLE"
+    for _pb in dbus-daemon xfwm4 xfce4-panel xfdesktop; do
+        command -v "$_pb" >/dev/null 2>&1 || continue
+        if link_ok "$PREFIX/bin/$_pb" --version; then
+            _ok "$_pb 动态库依赖完整"
+        elif [ -n "$_FIX_PKG" ]; then
+            _bad "$_pb 缺动态库 $_MISSING_SONAME → 离线自愈：linbox-pkgfix ；或 pkg install $_FIX_PKG（若提示已安装改用 pkg reinstall $_FIX_PKG）"
+        else
+            _bad "$_pb 无法链接（缺 ${_MISSING_SONAME:-未知库}/符号）→ 离线自愈：linbox-pkgfix ；或用 pkg search 查装对应库"
+        fi
+    done
+    echo
+    echo "  [2/4 追加] 音频服务 pulseaudio（游戏声音; fix23 会话级启动）"
+    if command -v pulseaudio >/dev/null 2>&1; then
+        if bash -c '(exec 3<>/dev/tcp/127.0.0.1/4713) 2>/dev/null'; then
+            _ok "pulseaudio 服务端就绪 (127.0.0.1:4713, TCP)"
+        else
+            _bad "pulseaudio 已安装但未运行/未开 TCP → 重跑 linbox-x11 自动拉起；或 glibc-runner --fix-audio"
+        fi
+    else
+        _none "pulseaudio 未安装 → pkg install pulseaudio"
+    fi
+    echo
+    echo "[3/4] logcat 近期 X11 相关记录（上次失败的线索）"
+    _lc="$(logcat -d -t 500 2>/dev/null | grep -iE 'lorie|CmdEntryPoint|linboxx11|Xwayland' | tail -n 12)"
+    if [ -n "$_lc" ]; then
+        echo "$_lc" | sed 's/^/  | /'
+    else
+        echo "  （无相关记录）"
+    fi
+    echo
+    echo "[4/4] 结论"
+    if [ "$_fails" -eq 0 ]; then
+        echo "  X 服务侧组件全部就绪，直接运行 linbox-x11 :13 即可。"
+    else
+        echo "  存在 $_fails 项缺失（X 服务侧/会话依赖），按上面 [!!] 提示处理后重试。"
+    fi
+    echo "  再次说明：termux-x11-nightly 不是必需依赖（X 服务本体已内置）；"
+    echo "  只有桌面 / X 应用需要通过 pkg 安装。"
+    exit 0
+fi
+
+DISP=":13"
+if [ $# -gt 0 ]; then
+    case "$1" in
+        :*) DISP="$1"; shift ;;
+        *[!0-9]*) ;;          # 非显示号参数（直接透传给会话命令）
+        *) DISP=":$1"; shift ;;
+    esac
+fi
+
+# ---- 启动日志：从第一行写起，任何失败都能 cat 回传定位 ----
+echo "==== linbox-x11 启动 $(date '+%Y-%m-%d %H:%M:%S') rev22 显示号 $DISP ====" >"$X11_LOG"
+note() { echo "$1"; echo "[linbox-x11] $1" >>"$X11_LOG"; }
+die() {
+    echo "linbox-x11: $1" >&2
+    echo "[前置检查失败] $1" >>"$X11_LOG"
+    exit 1
+}
+
+# ---- 自愈：官方 termux-x11-nightly 包覆盖内置客户端后自动恢复 ----
+X11_MASTER="$PREFIX/etc/linbox/x11/termux-x11"
+X11_CLIENT="$PREFIX/bin/termux-x11"
+if [ -r "$X11_MASTER" ]; then
+    if [ ! -x "$X11_CLIENT" ] || ! grep -q 'LINBOX_X11_CLIENT' "$X11_CLIENT" 2>/dev/null; then
+        if cp -f "$X11_MASTER" "$X11_CLIENT" 2>/dev/null && chmod 700 "$X11_CLIENT" 2>/dev/null; then
+            note "已恢复内置 termux-x11 客户端（曾被官方包覆盖或已损坏）"
+        else
+            note "警告：主副本存在但恢复 bin/termux-x11 失败（权限？）"
+        fi
+    fi
+fi
+
+# ---- fix11c 自愈：glibc-runner 被 pkg 覆盖为官方裸脚本后自动恢复增强版 ----
+# 增强版特征：含 linbox-x11-res 握手协议（官方脚本无此字符串）。
+GR_MASTER="$PREFIX/etc/linbox/glibc-runner"
+GR_BIN="$PREFIX/bin/glibc-runner"
+if [ -r "$GR_MASTER" ]; then
+    if [ -x "$GR_BIN" ] && ! grep -q 'linbox-x11-res' "$GR_BIN" 2>/dev/null; then
+        if cp -f "$GR_MASTER" "$GR_BIN" 2>/dev/null && chmod 700 "$GR_BIN" 2>/dev/null; then
+            note "已恢复增强版 glibc-runner（官方裸脚本无 -d 分辨率握手/z 盘修复）"
+        else
+            note "警告：主副本存在但恢复 bin/glibc-runner 失败（权限？）"
+        fi
+    fi
+fi
+
+# ---- 前置检查：客户端本体（缺它必然空转，日志会是一片空白） ----
+if [ ! -x "$X11_CLIENT" ] || [ ! -s "$X11_CLIENT" ]; then
+    die "内置客户端 $X11_CLIENT 缺失/不可执行/为空 —— 请先打开一次 LinBox 主界面（触发组件迁移）再试；若仍失败请确认 APK 为 fix9.6 及以上版本"
+fi
+
+# ---- 前置检查：libXlorie.so（X 服务引擎，缺失则启动必然失败） ----
+if [ -r "$PREFIX/etc/linbox-x11.env" ]; then
+    # shellcheck disable=SC1090
+    . "$PREFIX/etc/linbox-x11.env"
+    if [ -n "${LINBOX_NATIVE_DIR:-}" ] && [ ! -f "$LINBOX_NATIVE_DIR/libXlorie.so" ]; then
+        die "libXlorie.so 不在 $LINBOX_NATIVE_DIR —— APK 可能与本机 ABI 不匹配（建议 universal 包），或安装不完整（重装 APK）"
+    fi
+else
+    note "警告：etc/linbox-x11.env 缺失，X 服务可能无法定位宿主组件——打开一次 LinBox 主界面自动生成"
+fi
+
+# ---- 前置检查：XKB 键盘数据（X server 初始化必需） ----
+if [ ! -d "$PREFIX/etc/linbox/x11/xkb/rules" ] \
+    && [ ! -r "$PREFIX/etc/linbox/x11/xkb.tar.gz" ] \
+    && [ ! -d "$PREFIX/share/X11/xkb/rules" ]; then
+    die "缺少 XKB 键盘数据 —— 打开一次 LinBox 主界面重新部署组件（rev20 三级容错），或执行 pkg install xkeyboard-config"
+fi
+
+termux-x11 "$DISP" >>"$X11_LOG" 2>&1 &
+
+# 等待服务进程就位（最多约 8 秒；app_process 冷启动在低端机上较慢）
+_n=0
+while [ "$_n" -lt 8 ]; do
+    sleep 1
+    if x11_running; then
+        break
+    fi
+    _n=$((_n + 1))
+done
+
+if ! x11_running; then
+    echo "linbox-x11: X11 服务启动失败" >&2
+    echo "---- $X11_LOG 最近 10 行 ----" >&2
+    tail -n 10 "$X11_LOG" 2>/dev/null | sed 's/^/  | /'
+    # X 服务的失败原因常只写 logcat（native 层），这里自动附带摘要
+    _lc="$(logcat -d -t 500 2>/dev/null | grep -iE 'lorie|CmdEntryPoint|linboxx11|Xwayland' | tail -n 12)"
+    if [ -n "$_lc" ]; then
+        echo "---- logcat 相关摘要 ----" >&2
+        echo "$_lc" | sed 's/^/  | /'
+    fi
+    echo "linbox-x11: 完整日志: cat $X11_LOG ；一键体检: linbox-x11 doctor" >&2
+    exit 1
+fi
+echo "X11 服务已启动（显示号 $DISP），LinBox 桌面窗口将自动弹出并连接……"
+echo "[linbox-x11] X11 服务进程已就位（显示号 $DISP）" >>"$X11_LOG"
+
+# ---- fix23 [P1]: pulseaudio 会话级一次启动(TCP 127.0.0.1:4713) ----
+# 语义与 glibc-runner glr_start_pulse 一致(端口已通→复用; 运行中未
+# 开 TCP→重启; 不在→拉起后等就绪)，但在 X 会话启动时执行一次 ——
+# 之后每次游戏(glibc-runner)启动时端口已通，直接零开销复用，不再
+# 每次重新拉起。pulseaudio 从 $PREFIX/bin 经 PATH 解析执行，
+# /proc/self/exe 与编译期路径同源，不触发 "cannot self execute"。
+pa_port_up() {
+    bash -c '(exec 3<>/dev/tcp/127.0.0.1/4713) 2>/dev/null'
+}
+linbox_pulse_start() {
+    command -v pulseaudio >/dev/null 2>&1 || {
+        note "未安装 pulseaudio (pkg install pulseaudio)，游戏将无声音"
+        return 0
+    }
+    if pa_port_up; then
+        note "pulseaudio 已在运行 (TCP 127.0.0.1:4713)，直接复用"
+        export PULSE_SERVER="127.0.0.1"
+        return 0
+    fi
+    # 运行中但未开 TCP 的旧实例(裸配拉起/手工启动): 先请下场，
+    # 否则 wine 客户端连不上 4713 → 无声
+    if pulseaudio --check >/dev/null 2>&1; then
+        pulseaudio -k >/dev/null 2>&1
+        sleep 1
+    fi
+    pulseaudio --start \
+        --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" \
+        --exit-idle-time=-1 >/dev/null 2>&1
+    _n=0
+    while [ "$_n" -lt 8 ]; do
+        pa_port_up && break
+        sleep 1
+        _n=$((_n + 1))
+    done
+    if pa_port_up; then
+        note "pulseaudio 已启动 (TCP 127.0.0.1:4713; 本次会话一次，游戏零开销复用)"
+    else
+        note "警告: pulseaudio 拉起后 4713 未就绪；游戏启动时 glibc-runner 会再兑底"
+    fi
+    export PULSE_SERVER="127.0.0.1"
+}
+linbox_pulse_start
+
+# ---- 会话依赖预检（rev19）：先离线自愈，仍失败才给修复命令并暂停 ----
+# ---- 自动启动会话（X 服务与 X11 窗口不受影响，修复后重跑即可）    ----
+# 典型场景：dbus 在而 libexpat 缺（bootstrap 缺陷：libexpat.so 以 dev
+# 名入库且无 soname 链接；dpkg 事故还可能丢 liblz4.so.1 → pkg 全灭），
+# bionic 报 "CANNOT LINK EXECUTABLE ... library ... not found"，dbus-
+# launch 只尾随一句费解的 "EOF in dbus-launch reading address from bus
+# daemon"。rev19 起预检失败先自动跑 linbox-pkgfix（离线补 soname 链
+# 接 + 救援库兑底，不依赖 pkg/apt/网络，幂等），生效则照常起会话。
+_sess_fail=0
+_fail_pb=""
+if [ $# -eq 0 ]; then
+    if command -v dbus-launch >/dev/null 2>&1 && ! link_ok "$PREFIX/bin/dbus-daemon" --version; then
+        _sess_fail=1
+        _fail_pb=""
+    fi
+    if [ "$_sess_fail" -eq 0 ] && command -v startxfce4 >/dev/null 2>&1; then
+        for _pb in xfwm4 xfce4-panel xfdesktop; do
+            command -v "$_pb" >/dev/null 2>&1 || continue
+            if ! link_ok "$PREFIX/bin/$_pb" --version; then
+                _sess_fail=1
+                _fail_pb="$_pb"
+                break
+            fi
+        done
+    fi
+    # rev19：先离线自愈再重测（linbox-pkgfix 幂等，失败场景最多耗时数秒）
+    if [ "$_sess_fail" -eq 1 ] && [ -x "$PREFIX/bin/linbox-pkgfix" ]; then
+        note "会话组件缺动态库，先离线自愈（linbox-pkgfix）……"
+        "$PREFIX/bin/linbox-pkgfix" --quiet >/dev/null 2>&1
+        _sess_fail=0
+        _fail_pb=""
+        if command -v dbus-launch >/dev/null 2>&1; then
+            if ! link_ok "$PREFIX/bin/dbus-daemon" --version; then _sess_fail=1; _fail_pb=""; fi
+        fi
+        if [ "$_sess_fail" -eq 0 ] && command -v startxfce4 >/dev/null 2>&1; then
+            for _pb in xfwm4 xfce4-panel xfdesktop; do
+                command -v "$_pb" >/dev/null 2>&1 || continue
+                if ! link_ok "$PREFIX/bin/$_pb" --version; then
+                    _sess_fail=1
+                    _fail_pb="$_pb"
+                    break
+                fi
+            done
+        fi
+        [ "$_sess_fail" -eq 0 ] && note "自愈生效，继续启动桌面会话"
+    fi
+    # 仍失败：给出精确修复命令（link_ok 已刷新 _MISSING_SONAME/_FIX_PKG）
+    if [ "$_sess_fail" -eq 1 ]; then
+        _who="dbus-daemon"; [ -n "${_fail_pb:-}" ] && _who="$_fail_pb"
+        if [ -n "$_FIX_PKG" ]; then
+            note "会话依赖缺失：$_who 无法链接（缺 $_MISSING_SONAME）→ 修复：pkg install $_FIX_PKG ；若提示已安装则 pkg reinstall $_FIX_PKG，然后重跑 linbox-x11 $DISP（pkg 本身也报 CANNOT LINK 时先跑 linbox-pkgfix）"
+        else
+            note "会话依赖缺失：$_who 无法链接（缺 ${_MISSING_SONAME:-未知库}/符号）→ 全量诊断：linbox-pkgfix ；或用 pkg search 查装对应库后重跑，或将日志回传"
+        fi
+    fi
+fi
+
+# 会话启动策略：显式命令 > xfce4 > openbox > 提示（预检不过则不自动起会话）
+if [ $# -gt 0 ]; then
+    env DISPLAY="$DISP" "$@" &
+elif [ "$_sess_fail" -eq 1 ]; then
+    :   # 预检失败：保留 X 服务与 X11 窗口等待页，装齐库后重跑即可
+elif command -v dbus-launch >/dev/null 2>&1 && command -v startxfce4 >/dev/null 2>&1; then
+    echo "检测到 xfce4，正在启动桌面会话……"
+    env DISPLAY="$DISP" dbus-launch --exit-with-session startxfce4 >/dev/null 2>&1 &
+elif command -v xfce4-session >/dev/null 2>&1; then
+    env DISPLAY="$DISP" dbus-launch --exit-with-session xfce4-session >/dev/null 2>&1 &
+elif command -v openbox-session >/dev/null 2>&1; then
+    env DISPLAY="$DISP" openbox-session >/dev/null 2>&1 &
+elif command -v startlxde >/dev/null 2>&1; then
+    env DISPLAY="$DISP" dbus-launch --exit-with-session startlxde >/dev/null 2>&1 &
+else
+    echo
+    echo "未检测到桌面环境（X 服务本身正常）。可选："
+    echo "  pkg install x11-repo && pkg install xfce4 dbus   # 安装 xfce4 桌面（推荐）"
+    echo "  pkg install x11-repo && pkg install openbox      # 轻量窗口管理器"
+    echo "  pkg install x11-repo && pkg install xterm        # 最小化验证"
+    echo "  env DISPLAY=$DISP xterm                          # 或直接运行单个 X 程序"
+    echo "  手动启动 xfce4 请带 dbus-launch（否则无会话总线，桌面可能黑屏）："
+    echo "  env DISPLAY=$DISP dbus-launch startxfce4"
+    echo "  提示：linbox-x11 doctor 可随时体检组件与依赖"
+fi

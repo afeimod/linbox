@@ -1,0 +1,2271 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# ============================================================
+# glibc-runner v3.0-linbox1 —— LinBox (com.linbox) 增强版
+#
+# 血统:
+#   * Termux gpkg glibc-runner 2.0 (termux/glibc-packages)
+#   * v2.0-linbox1: LinBox 修复版 [F1]-[F4]
+#   * v3.0: 合并 startonwine v2.6 (@咔咔龙@zhongerxll@kakadragonn)
+#     的 wine 快捷启动 / conf 读取 / 盘符管理, 并做 LinBox 环境适配
+#
+# v2.0 修复保留:
+#  [F1] 脚本体运行期强制 LD_LIBRARY_PATH=$PREFIX/lib (bionic)
+#  [F2] 子进程 LD_LIBRARY_PATH 固定 $GLIBC_PREFIX/lib (glibc 隔离)
+#  [F3] 启动前移除指向 com.termux 的陈旧 ld.so.cache
+#  [F4] 显式经 ld-linux-aarch64.so.1 启动
+#
+# v3.0 新增:
+#  [W1] wine 模式: .exe/.msi/.bat 或任意 wine 子命令自动经 box64+wine 启动
+#  [W2] conf 读取: 兼容 mobox 的 opt/scripts/configs(load_configs) 与
+#       opt/conf/wine_path.conf; 优先级: 环境变量 > conf > 内置默认
+#  [W3] -d[WxH] 虚拟桌面 / -g OpenGL3 / -x DX11 / -u Unity 单线程
+#  [W4] -a 透传 wine 参数 / --debug 详细调试日志
+#  [W5] 盘符管理: --drives (列表/查内容) / --adddrive / --rmdrive
+#  [W6] --kill --init --winecfg --regedit --taskmgr --wine=路径 --version
+#  [W7] --install-prefix [--force]: 用 repack 资产一键重建游戏前缀
+#       (directx/dxvk/turnip/redist/盘符; 资产缺失自动跳过; 旧前缀先备份)
+#  [W8] pulseaudio / XDG_RUNTIME_DIR / LC_ALL / taskset 绑核 /
+#       DISPLAY 自动探测 / 日志落盘 (tee 到 $LOG_PATH)
+#
+# v3.1 补齐 (startonwine 对齐):
+#  [W9]  -d 不带分辨率 = 全屏启动 (不再默认 800x600 虚拟桌面)
+#  [W10] --fix-prefix: 修补前缀 (缺失/损坏/win32 → 备份后重建 win64 + 补盘符)
+#  [W11] --fix-drives: 补齐 z: c: d: e: 标准盘符 (DRIVE_D/DRIVE_E 可自定义;
+#        --init / --fix-prefix / 每次启动自动静默补齐)
+#
+#  !! 兼容性重映射: -d 现在是"虚拟桌面/全屏"(startonwine 语义);
+#     原 strace 调试改用 -D/--strace [0-4]
+#
+# v3.2 (LinBox fix10 —— 修复用户实测四大问题):
+#  [Z1] z 盘真正可用: 指向 / (wine 标准, 永不为空); 悬空/失效盘符
+#       自动重建 (旧逻辑 [ -e ]||[ -L ] 对悬空链接误判为"已存在",
+#       z: 悬空后永不修复 → wine 里 z 盘一片空白)
+#  [R1] 分辨率握手: -d 分辨率写入 $PREFIX/tmp/.linbox-x11-res,
+#       LinBox X11 窗口监听后把 X 屏幕调成目标分辨率并等比缩放显示
+#       (修复"X11 窗口不按 -d 分辨率显示, 游戏缩成一小块")
+#
+# v3.3 (LinBox fix12 —— 游戏画面黑边根治):
+#  [R2] -dWxH 不再用 explorer /desktop 虚拟桌面: 虚拟桌面把游戏窗口
+#       居中放在黑底上(游戏分辨率≠桌面分辨率时), 黑边直接烧进 X 画面,
+#       Android 显示层怎么拉伸都去不掉。改为游戏直接全屏启动 ——
+#       X 屏幕 = -d 指定分辨率(经握手生效), wine 全屏窗口铺满 X 屏幕,
+#       D3D 后备缓冲拉伸呈现, 无黑边 (Winlator 同语义)。
+#       虚拟桌面: -v/--vd 选项或 GLR_VD=1 前缀启用 (fix19 [R4], 轩宇剑4
+#       类老 DDraw 游戏必须运行在虚拟桌面内才不报错)
+#
+# v3.6 (LinBox fix19 —— 拉伸铺满策略反转 + 虚拟桌面选项):
+#  [R4] -v[WxH], --vd[=WxH], --virtual-desktop[=WxH]: wine 虚拟桌面
+#       (explorer /desktop=shell,WxH)。轩宇剑4 等游戏离开虚拟桌面会
+#       报错/黑屏, 必须运行在虚拟桌面内; VD 尺寸=握手分辨率 →
+#       VD 窗口恰好铺满 X 屏幕, 无黑边。GLR_VD=1 环境变量仍有效。
+#  [R5] -F, --fitwin: 撑满模式（把游戏窗口 resize 到整个 X 屏幕，
+#       现代游戏跟随 WM_SIZE 重绘 → 原生分辨率渲染）。默认不用：老
+#       游戏接受 resize 后仍在原分辨率区域绘制（X 层假稳定 → 右/下
+#       黑区, 用户实测 fix18 后仍须手动匹配分辨率才撑满）。
+#  [R6] -d 默认改为"贴合拉伸"（fix19 App 侧策略反转）：X 屏幕由
+#       X11FitClient 自适应缩成游戏客户区尺寸 + 显示层拉伸铺满 ——
+#       任意窗口化游戏（含固定分辨率老游戏）无黑边，不再依赖游戏
+#       自己全屏。握手文件携带 "fitwin" 标记（-F）选择撑满模式。
+#
+# v3.7 (LinBox fix20 —— Wine 声音管线修复):
+#  [A1] pulseaudio 服务端启动加固。旧代码两处致命伤:
+#       (a) 在 glr_env_core 切换 LD_LIBRARY_PATH=glibc/lib 之后才启动
+#           bionic pulseaudio → bionic linker 拒载(CANNOT LINK), 服务端
+#           静默失败 → wine 无声; 现 bionic 隔离子壳执行。
+#       (b) 经 /data/user/N/ 绑定路径启动时 /proc/self/exe 与编译期
+#           绝对路径不一致 → "cannot self execute. Are you playing
+#           games?" → 守护进程拒启; 现自动改写为 /data/data/ 形式。
+#       另: TCP 4713 就绪等待(防 winepulse 抢跑回退 alsa);
+#       运行中但未开 TCP 的旧实例自动重启。
+#  [A2] glibc 侧音频客户端库自动补装。wine 经 box64 包装库加载
+#       native aarch64 的 libpulse.so.0/winealsa 载 libasound.so.2,
+#       缺库时报 "Error initializing native libpulse.so.0"。
+#       官方 gpkg 源的 libpulse-glibc/alsa-lib-glibc 缺失时自动
+#       pkg 安装(一次记账防重试, --fix-audio 可强制)。
+#       顺带补 grep-glibc/sed-glibc: 消灭 wine 会话内 bionic
+#       grep/sed 带 glibc LD_LIBRARY_PATH 执行的 CANNOT LINK 噪声。
+#  [A3] PULSE_SERVER=127.0.0.1 保留导出, 启动横幅显示音频就绪状态。
+#  [A4] --fix-audio: 一键修复/诊断(强杀旧实例→清运行时→补库→
+#       重启服务端→端口探测→注册表驱动自愈→诊断输出)。
+#  [A5] Mobox 迁移前缀把 HKCU\Software\Wine\Drivers 钉死为 alsa
+#       时自动改写为 "pulse,alsa"(记账只跑一次)——即使 winepulse
+#       可用也会被该注册表值屏蔽。
+#  [A6] bionic 工具安全化: -f/--findlib 的 sed 管线改纯 bash;
+#       pgrep/taskset 探测移入 bionic 子壳; date/head 走安全包装。
+#
+# v3.8 (LinBox fix21 —— 声音偏小/"被压住"音量归一化):
+#  [V1] pulse sink 音量归一化。服务端就绪后自动 pactl 解除静音 +
+#       set-sink-volume 归一(默认 100%)。Android 上 sles sink 默认
+#       音量可能 <100%, flat-volumes 下 wine 流注册音量亦会拉低总
+#       音量 → 声音"能出但被压住"。GLR_AUDIO_VOLUME=50~300 可调
+#       (>100 为软件增益, 会放大底噪/削顶, 逐档试听)。
+#  [V2] --fix-audio 诊断增强: 输出 sink 名称/状态/静音/音量与活动
+#       流(sink-inputs), 音量异常一眼可辨; pactl 统一走 bionic
+#       隔离子壳(glr_pactl, PULSE_SERVER=127.0.0.1)。
+#  [V3] 启动横幅 audio 行显示生效音量。
+#  [V4] 音量设置在 sink 未就绪(服务端刚拉起)时重试 3 次。
+#  [V5] 修复 fix20 遗留: glr_port_up 的 "exec 3>&- 3<&- 2>/dev/null"
+#       把脚本 stderr 永久吞进 /dev/null → 端口就绪后的所有警告
+#       (含音量警告)静默丢失; 已删除该行(fd3 随子壳自动关闭)。
+#
+# v3.9 (LinBox fix22 —— 前缀构建修复 + Z 盘新指向 + zink 渲染):
+#  [B1] 修复"无 .wine 前缀时无法构建前缀/没有正确 wineboot": 根因
+#       是 [W11]/[Z1] 的"每次启动自动补盘符"在 wineboot 之前就
+#       mkdir -p 了 dosdevices/ —— 而 wine(server 端)只在"自己亲
+#       手创建 dosdevices"时才会顺带创建 drive_c 与 c:/z: 链接
+#       (wine server.c: mkdir dosdevices 成功 → 建 drive_c/c:/z:;
+#       EEXIST → 整段跳过)。预创建的空壳 dosdevices → C: 盘永不
+#       出现 → 前缀报废, wine 每次启动刷
+#         "could not open working directory C:\\windows\\system32"
+#       且旧成功判据只查 system.reg → 半成品也放行("假成功")。
+#       修复: (a) glr_ensure_std_drives 在前缀未初始化(无
+#       system.reg)时整体跳过, 绝不预创建 dosdevices; (b) 自动初始
+#       化改走 startonwine 语义的 glr_bootstrap_prefix: 旧/半成品前
+#       缺先备份挪走 → 干净环境下 wineboot -u(dynarec 干扰项与
+#       esync 按参考脚本关闭, mono/gecko/gstreamer 屏蔽) →
+#       system.reg+drive_c+c: 三重验收; --init/--fix-prefix 同源
+#       收敛; (c) 已损坏前缀(有 system.reg 无 drive_c)自动检测重建。
+#  [B2] Z 盘指向改为 /data/data/com.linbox/files/usr (DRIVE_Z 环境
+#       变量/conf 可改, DRIVE_Z=/ 恢复 wine 标准根文件系统) —— Z:
+#       覆盖整个 Termux 前缀, 对齐 Mobox z:=files 语义。旧指向 / 
+#       自动迁移(一次性提示); 用户自设其它有效目标保留。
+#       --install-prefix 同步。
+#  [B3] CWD 盘符映射守卫: wine 把 Unix 工作目录映射为 Windows CWD,
+#       未映射时回退 C:\\windows 并刷 "could not find DOS drive…"
+#       警告(游戏相对路径资源/CD 检测跟着丢)。z: 改指 usr 后终端默
+#       认目录 $HOME 恰在 z: 之外 —— 守卫自动切换到 游戏目录(可映
+#       射)或 $APP_PREFIX(z: 根, 恒可映射)。
+#  [K1] -z/--zink (GLR_ZINK=1 同效): mesa zink 渲染(OpenGL on
+#       Vulkan; Adreno GPU 经 Turnip 硬件加速)。zink_dri.so 缺失时
+#       自动补装 mesa-glibc + vulkan-icd-loader-glibc +
+#       mesa-vulkan-icd-freedreno-glibc(离线资产 opt/mesa/
+#       mesa-zink.tar.gz 优先, 一次记账; GLR_NO_GRAPHICS_SETUP=1
+#       逃生门), 并导出 MESA_LOADER_DRIVER_OVERRIDE/GALLIUM_DRIVER/
+#       __GLX_VENDOR_LIBRARY_NAME/LIBGL_DRIVERS_PATH + Turnip ICD
+#       (VK_DRIVER_FILES + VK_ICD_FILENAMES 兼容)。
+#  [K2] zink 诊断: 启动横幅 gl 行 + -i 信息输出 dri 驱动与 ICD 状态;
+#       Turnip ICD 缺失(非 Adreno)时提示而非硬失败。
+#
+# v3.10 (LinBox fix23 —— zink libGL 链 / pulse 会话启动 / repack 前缀资产):
+#  [K3] zink "游戏 dlopen 不到 libGL.so.1" 根治。链路实测(termux-glibc
+#       24.2.6 + libglvnd-glibc 1.7.0 deb 解包): libGL.so.1 / libGLX.so.0 /
+#       libGLdispatch.so.0 由 **libglvnd-glibc(独立包)** 提供,
+#       libGLX_mesa.so.0 / libgallium-*.so / dri/zink_dri.so 由 mesa-glibc
+#       提供, libvulkan.so.1 由 vulkan-icd-loader-glibc 提供 —— wine
+#       opengl32 的完整加载链: dlopen libGL.so.1[GLVND] → libGLX →
+#       (__GLX_VENDOR_LIBRARY_NAME=mesa) libGLX_mesa → libgallium →
+#       dri/zink_dri → dlopen libvulkan.so.1 → VK_DRIVER_FILES → Turnip。
+#       旧 [K1] 只验 dri/zink_dri.so 一件: 离线 tar 只含 dri+icd 布局
+#       (或半安装环境)时误报"就绪" → 游戏 dlopen("libGL.so.1") 失败,
+#       zink 全灭。现全链五件齐检 + 缺件精确报归属包名 + libglvnd-glibc
+#       显式入自动安装列表(四包); __GLX_VENDOR_LIBRARY_NAME 仅在
+#       libGLX_mesa.so.0 实际存在时导出(GLVND 找不到指定 vendor 时 GLX
+#       直接初始化失败, 比不设更糟); 新增 --fix-zink 一键修复/链路逐件
+#       诊断; -i 信息与启动横幅同步输出链路状态。
+#  [F4] 前缀构建自动应用 repack 资产(Mobox 惯例资产与前缀同在 opt/prefix;
+#       startonwine v2.6 同款语义, 资产存在才生效):
+#         fix-fonts.tar.xz  → 解压到 drive_c/windows (字体修复)
+#         user.reg/system.reg/fix-services.reg → 经 wine regedit 导入
+#         marlett.ttf       → drive_c/windows/Fonts
+#         dxvk-*.tar.gz     → 解压到 drive_c/windows (opt/dxvk1/ 优先,
+#           前缀根/ 兑底; 标准 dxvk 发布包 x64/x32 布局自动映射
+#           system32/syswow64; virgl 模式跳过)
+#       资产查找: 前缀根 → prefix.bak.*(fix22 重建时把资产连旧前缀一起
+#       挪进了备份 —— 升级现场自动找回); user.reg/system.reg 与 wine 活体
+#       注册表同名, 先嗅探文件头("WINE REGISTRY Version 2"=活体, 绝不
+#       自我导入; "Windows Registry Editor"/"REGEDIT4"=regedit 资产)。
+#       幂等标记(moboxmeta/): fonts-fix-applied / services-fix-applied
+#       (startonwine 兼容) / .linbox-repk-regs-applied /
+#       .linbox-dxvk-applied —— 已建前缀(含 fix22 构建的裸前缀)首次
+#       启动自动补齐, 不会重复应用; --init/--fix-prefix/自动构建三路
+#       同源。
+#  [P2] pulseaudio 服务端改为会话级一次启动: linbox-x11(rev22) 在 X
+#       会话拉起时启动一次(TCP 4713; 端口已通则复用, 运行中未开 TCP
+#       则重启), 本脚本的 glr_start_pulse 保留为兑底(端口已通时零开
+#       销复用) —— 用户不再需要每次手工:
+#         pulseaudio --start --exit-idle-time=-1 \
+#           --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1
+#           auth-anonymous=1"
+#  [S1] bionic 工具安全化补全(旧 [A6] 只覆盖音频路径): 资产解压的
+#       tar/cp/7z 经 bionic 隔离子壳执行(glr_run_bionic, stderr 保留
+#       进日志); 备份后缀时间戳改 glr_epoch(bionic date); 资产查找的
+#       ls|head 改纯 bash glob(glr_first_match)。
+#
+# v3.11 (LinBox fix24 —— repack 资产直读 startonwine 固定目录 + linboxmeta):
+#  [F5] 资产查找/注册表导入/DXVK 安装按 startonwine v2.6 原样直读固定
+#       目录 ${GLIBC_PREFIX}/opt/prefix
+#       (= /data/data/com.linbox/files/usr/glibc/opt/prefix):
+#         marlett.ttf       → drive_c/windows/Fonts
+#         user.reg → system.reg → fix-services.reg 依次经 wine regedit
+#           原样导入(顺序= startonwine; 不再嗅探文件头 —— 资产固定在
+#           opt/prefix, 不再从前缀根/prefix.bak.* 搜索找回)
+#         fix-fonts.tar.xz  → tar 解压到 drive_c/windows
+#         drive_c.7z / directx.7z / start/ / mesa/ / d3d/ 同目录直读
+#       DXVK 唯一来源 ${GLIBC_PREFIX}/opt/dxvk1/dxvk-*.tar.gz, 直接
+#         tar 解压到 drive_c/windows(移除 x64/x32 → system32/syswow64
+#         布局映射 —— 与 startonwine 一致只做解压, 不找 mobox)
+#  [M1] 前缀幂等标记目录 moboxmeta → linboxmeta(构建前缀/自愈/盘符
+#       迁移/音频/虚拟桌面清理等标记全部改存 ${WINEPREFIX}/linboxmeta/;
+#       旧 moboxmeta 目录不再读写, 升级后各修复项首启重新应用一次)
+#
+# v3.12 (LinBox fix25 —— -f 强制窗口直出, wine10/proton + 去 wine 蓝色背景桌面):
+#  [R7] 新增 -f[WxH]/--force-desktop[=WxH], 三个动作与 -d 完全同源:
+#       (1) 画面直出 ([R2] 同款): 不传任何 explorer /desktop 参数,
+#           游戏窗口直接渲染在项目 X11 桌面窗口里; 握手分辨率 =
+#           -f 尺寸 → X 屏幕 = 指定尺寸 (用户图二 -d 效果);
+#       (2) 去 wine 蓝色背景桌面 ([R3] 同款手段, "强制"升级): 每次
+#           -f 启动都经 wine reg delete 清除 HKCU\Software\Wine\
+#           Explorer 的 Desktop 值与 Explorer\Desktops 键, 不做
+#           一次性记账 —— Mobox 迁移/winecfg 勾选"模拟虚拟桌面"/
+#           repack user.reg 资产会持久化虚拟桌面, 不清除则所有程序
+#           被关进蓝底 wine 桌面、游戏窗口居中缩水 (用户截图一)。
+#       (3) 填满与 -d 完全同源 (linbox4 引入 fitwin → linbox5 推翻,
+#           用户实测 linbox4 "一样的黑边"): linbox4 曾让 -f 握手值
+#           固定携带 "fitwin" 标记 (自动叠加 -F 撑满) —— 实测推翻:
+#           撑满把游戏窗口客户区 resize 到整个 X 屏幕, 但 DirectDraw
+#           固定分辨率老游戏 (仙剑2/轩剑类) "接受" resize 后仍按原
+#           分辨率区域绘制 → X 层看到 "窗口==屏幕" 假稳定 (App 侧
+#           fix19 注释原文记载过同一现象: -d1024x768 只画 868x652,
+#           右/下黑区烧在 X 画面内部), 整块含黑区的 X 画面被显示层
+#           拉伸后黑边依旧 —— 即用户实测 "一样的黑边"。
+#           linbox5 定稿: -f 握手与 -d 完全同源 (写 "WxH", 不带
+#           fitwin) → App 侧走 fix19 默认"贴合"策略: 游戏窗口只需
+#           平移到 (0,0), X 屏幕缩成游戏客户区尺寸, 显示层把画面
+#           拉伸铺满整个桌面窗口 —— 对任意窗口化游戏 (含 DirectDraw
+#           固定分辨率老游戏) 可靠无黑边, 与用户实测有效的 -d 填满
+#           效果逐位一致; "撑满" 降回 -F/--fitwin 显式可选 (仅对能
+#           跟随 WM_SIZE 重绘的现代游戏有意义), 需要时 -f -F 叠加。
+#       (4) 设备残留状态加固 + 诊断 (linbox6, 用户实测 rev36 "-d 也
+#           黑块"): rev35→36 对 -d 零代码差异 (脚本/App 侧均未动
+#           -d 路径), 黑块定性为前缀内残留注册表状态 —— linbox1
+#           时代 -f 曾 reg add 注册表虚拟桌面, 被 wine 持久化进
+#           user.reg; 而 [R3] 对 -d 的清理是一次性 (标记盖章后永
+#           不再清), 残留把游戏关进缩水 wine 桌面 → 四周黑块。
+#           linbox6 两动作: ① [R3] 升级为每次启动前清理 (与 -f
+#           [R7] 同款, reg delete 对直出会话零风险); ② 新增
+#           --x11-diag 诊断命令 (extras 修订/握手文件/user.reg
+#           Explorer 残留/logcat X11 日志, 纯读取不启 wine),
+#           后续问题凭输出定位, 不再盲修。
+#       (5) proton 收缩级联根治 (linbox7, 用户深采样 logcat 铁证:
+#           wine-9.2 的 -d/-f 都能铺满, proton 的 -d/-f 都右/下
+#           黑边): proton 游戏自带全屏管理器, X 屏 (root) 每变化
+#           一次它就把自己的窗口重设为新 root 的 ~96% (1280x720
+#           → 窗口 1232x693, 恰 ×0.9625); 旧 App 侧贴合策略见
+#           "窗口≠X 屏"就把 X 屏缩到窗口尺寸 → fit 缩屏 → proton
+#           缩窗 → fit 再缩屏 级联 2-3 轮 (1232x693→1186x667→
+#           1129x634), 画面越缩越小四周黑边; wine-9.2 对 root
+#           变化无此反应, 贴合一次即收敛 —— 即差异根源。
+#           App 侧 fix28 (X11FitClient 决策环, 握手协议零变化):
+#           ① 稳定门 (窗口尺寸连续两轮一致才允许动 root); ② 缩屏
+#           预算 (每次握手 applyFit 至多 2 次, 级联结构性不可能);
+#           ③ 对抗窗+钉满 (贴合后 4s 内窗口再缩水 = proton 对抗,
+#           反手把窗口撑回覆盖整个 root, root 不动); ④ 对抗上限
+#           (钉满 4 轮仍被改回 → 放手, 绝不缩屏); ⑤ 缩屏下限
+#           (不低于握手面积 50%)。脚本侧同步: --x11-diag logcat
+#           采样加深至 -t 20000 (旧 -t 240 抓不到完整决策链)。
+#       修订史: linbox1 实现"reg add 开注册表桌面"; linbox2 改
+#       "explorer /desktop=shell,WxH 直传参数" —— 两者是同一个
+#       wine 桌面窗口的两种入口, 都带蓝底背景 (用户实测截图确认),
+#       linbox3 定稿: explorer 参数一并去掉, -f = -d 画面直出 +
+#       每次强制清注册表桌面; 旧版遗留的注册表键与 .linbox-vd-on
+#       记账在 -f/非 -f 启动时均自动清除; linbox4 曾补 fitwin 撑满
+#       (实测假稳定黑边, 已废弃); linbox5 握手回归 -d 同源贴合 ——
+#       至此 -f 与 -d 在 App 侧会话逐位一致, 仅多每次清桌面。
+#       兼容性重映射: 短选项 -f 由 --findlib 让给 --force-desktop,
+#       --findlib 保留长选项 (glibc 原生模式缺库检查)。
+# ============================================================
+
+APP_PREFIX="${GLR_APP_PREFIX:-/data/data/com.linbox/files/usr}"
+GLIBC_PREFIX="${APP_PREFIX}/glibc"
+GLR_LD=${GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1
+GLR_VERSION="3.12-linbox7"
+
+# [R1] 分辨率握手协议文件 (LinBox X11 窗口监听此文件)
+GLR_RES_FILE="${APP_PREFIX}/tmp/.linbox-x11-res"
+
+_glr_message() { echo "Message from glibc-runner: $1"; }
+_glr_error()   { echo "Error from glibc-runner: $1" >&2; exit 1; }
+_glr_warn()    { echo "Warning from glibc-runner: $1" >&2; }
+
+# ---- 基础检查（保留官方语义） ----
+[ -d "${GLIBC_PREFIX}/lib" ] || _glr_error "'${GLIBC_PREFIX}/lib/' not found, are you sure glibc is installed?"
+[ -f "${GLR_LD}" ]           || _glr_error "interpreter not found: ${GLR_LD}"
+
+# ---- [F1] 脚本体环境隔离（bionic） ----
+export LD_LIBRARY_PATH="${APP_PREFIX}/lib"
+unset LD_PRELOAD
+
+# ---- PATH 纳入 glibc/bin ----
+case ":${PATH}:" in
+    *":${GLIBC_PREFIX}/bin:"*) : ;;
+    *) export PATH="${GLIBC_PREFIX}/bin:${PATH}" ;;
+esac
+
+# ---- 官方 bashrc（存在则加载） ----
+GLR_BASHRC=${APP_PREFIX}/etc/glibc-runner.bashrc
+[ -f "${GLR_BASHRC}" ] && . "${GLR_BASHRC}"
+
+# ---- [F3] 陈旧 ld.so.cache 清理 ----
+GLR_CACHE=${GLIBC_PREFIX}/etc/ld.so.cache
+if [ -f "${GLR_CACHE}" ] && [ -x "${APP_PREFIX}/bin/grep" ]; then
+    if "${APP_PREFIX}/bin/grep" -aq com.termux "${GLR_CACHE}" 2>/dev/null; then
+        rm -f "${GLR_CACHE}"
+        _glr_message "removed stale ld.so.cache (contained com.termux paths)"
+    fi
+fi
+
+GLR_ZENITY=$(command -v zenity 2>/dev/null)
+
+show_error() {
+    echo "Error from glibc-runner: $1" >&2
+    [ -n "${GLR_ZENITY}" ] && "${GLR_ZENITY}" --error --text="glibc-runner: $1" >/dev/null 2>&1
+    exit 1
+}
+show_warning() {
+    echo "Warning from glibc-runner: $1" >&2
+    [ -n "${GLR_ZENITY}" ] && "${GLR_ZENITY}" --warning --text="glibc-runner: $1" --timeout 3 >/dev/null 2>&1 &
+}
+
+# ============================================================
+# fix22 [K] + fix23 [K3]: mesa zink 渲染 (OpenGL on Vulkan, Adreno/Turnip)
+# ============================================================
+# 加载链(逐件归属 —— 实测 termux-glibc 24.2.6/1.7.0 deb):
+#   wine opengl32 --dlopen--> libGL.so.1        [libglvnd-glibc]
+#     └ libGLX.so.0 + libGLdispatch.so.0        [libglvnd-glibc]
+#   __GLX_VENDOR_LIBRARY_NAME=mesa
+#     └ libGLX_mesa.so.0                        [mesa-glibc]
+#         └ libgallium-*.so → dri/zink_dri.so   [mesa-glibc]
+#             └ dlopen libvulkan.so.1           [vulkan-icd-loader-glibc]
+#                 └ VK_DRIVER_FILES → Turnip ICD [mesa-vulkan-icd-freedreno-glibc]
+# ⚠ libGL.so.1 由 libglvnd-glibc **独立**提供(不在 mesa-glibc 里):
+#   只装 mesa / 离线 tar 只含 dri 布局时, 游戏 dlopen("libGL.so.1")
+#   直接失败 —— 这正是 fix23 要修的 "zink 游戏读取不到 libGL.so.1"。
+
+GLR_ZINK_PKGS="mesa-glibc libglvnd-glibc vulkan-icd-loader-glibc mesa-vulkan-icd-freedreno-glibc"
+
+glr_zink_dri() {  # [K2] 兼容保留: 单件检测 dri/zink_dri.so
+    local _p="${GLIBC_PREFIX}/lib/dri/zink_dri.so"
+    if [ -e "${_p}" ]; then printf '%s\n' "${_p}"; return 0; fi
+    return 1
+}
+
+glr_zink_icd() {  # 检测 Turnip(freedreno) ICD json(找到则回显路径)
+    local _f
+    for _f in "${GLIBC_PREFIX}"/share/vulkan/icd.d/*freedreno*.json \
+              "${GLIBC_PREFIX}"/share/vulkan/icd.d/*turnip*.json; do
+        [ -f "${_f}" ] || continue
+        printf '%s\n' "${_f}"
+        return 0
+    done
+    return 1
+}
+
+# [K3] 全链完整性: 输出缺失件清单(带归属包名), 全就绪时静默返回 0。
+# 只验关键五件: libGL.so.1(入口)/libGLX.so.0(GLVND GLX)/
+# libGLX_mesa.so.0(vendor)/dri/zink_dri.so(驱动)/libvulkan.so.1(出口)
+# (libGLdispatch/libgallium 是同包伴随件, 任一入口件在即跟随)
+glr_zink_chain() {
+    local _miss="" _g
+    [ -e "${GLIBC_PREFIX}/lib/libGL.so.1" ]       || _miss="${_miss}libGL.so.1(libglvnd-glibc) "
+    [ -e "${GLIBC_PREFIX}/lib/libGLX.so.0" ]      || _miss="${_miss}libGLX.so.0(libglvnd-glibc) "
+    [ -e "${GLIBC_PREFIX}/lib/libGLX_mesa.so.0" ] || _miss="${_miss}libGLX_mesa.so.0(mesa-glibc) "
+    [ -e "${GLIBC_PREFIX}/lib/libvulkan.so.1" ]   || _miss="${_miss}libvulkan.so.1(vulkan-icd-loader-glibc) "
+    [ -e "${GLIBC_PREFIX}/lib/dri/zink_dri.so" ]  || _miss="${_miss}dri/zink_dri.so(mesa-glibc) "
+    _g=""
+    for _g in "${GLIBC_PREFIX}"/lib/libgallium-*.so; do
+        [ -e "${_g}" ] && break
+    done
+    [ -n "${_g}" ] && [ -e "${_g}" ] || _miss="${_miss}libgallium-*.so(mesa-glibc) "
+    if [ -n "${_miss}" ]; then
+        printf '%s\n' "${_miss% }"
+        return 1
+    fi
+    return 0
+}
+
+# [K3] 链路逐件体检(--fix-zink / -i 共用; 纯 bash无外部工具依赖)
+glr_zink_report() {
+    local _row _f _pkg
+    for _row in "lib/libGL.so.1|libglvnd-glibc" \
+                "lib/libGLX.so.0|libglvnd-glibc" \
+                "lib/libGLX_mesa.so.0|mesa-glibc" \
+                "lib/libvulkan.so.1|vulkan-icd-loader-glibc" \
+                "lib/dri/zink_dri.so|mesa-glibc"; do
+        _f="${GLIBC_PREFIX}/${_row%%|*}"
+        _pkg="${_row#*|}"
+        if [ -e "${_f}" ]; then
+            echo " [OK] ${_row%%|*}  (${_pkg})"
+        else
+            echo " [缺] ${_row%%|*} → pkg install ${_pkg}"
+        fi
+    done
+    _f=""
+    for _f in "${GLIBC_PREFIX}"/lib/libgallium-*.so; do
+        [ -e "${_f}" ] && break
+    done
+    if [ -n "${_f}" ] && [ -e "${_f}" ]; then
+        echo " [OK] $(basename "${_f}")  (mesa-glibc)"
+    else
+        echo " [缺] libgallium-*.so → pkg install mesa-glibc"
+    fi
+}
+
+# [K1/K3] zink 组件自动补装(全链验证; 离线资产优先; 一次记账)
+glr_ensure_zink_libs() {
+    [ "${GLR_NO_GRAPHICS_SETUP:-0}" = "1" ] && return 0
+    glr_zink_chain >/dev/null && return 0
+    local _mark="${GLIBC_PREFIX}/opt/.linbox-zink-libs-tried"
+    # 离线资产: repack 侧预置 tar 包(tar 根 = glibc 前缀, 应含
+    # lib/libGL.so.1 + lib/libGLX_mesa.so.0 + lib/dri/zink_dri.so +
+    # lib/libvulkan.so.1 + share/vulkan/icd.d/ 全链布局)
+    local _tgz="${GLIBC_PREFIX}/opt/mesa/mesa-zink.tar.gz"
+    if [ -f "${_tgz}" ]; then
+        # fix23: 解压后必须**全链复验** —— 旧逻辑只回查 dri/zink_dri.so,
+        # 只含 dri+icd 布局的 tar 会误报就绪, 游戏读不到 libGL.so.1
+        glr_run_bionic tar -xzf "${_tgz}" -C "${GLIBC_PREFIX}" 2>/dev/null
+        if glr_zink_chain >/dev/null; then
+            echo " [K1] 已从离线资产安装 mesa zink 全链: ${_tgz}"
+            return 0
+        fi
+        echo " [K1] 离线资产缺 GL 链件(libGL.so.1/libGLX_mesa 等), 转包管理器补装..."
+    fi
+    # 已尝试且失败 → 不每次启动都联网重试(--fix-zink 清记账强制)
+    if [ -f "${_mark}" ]; then
+        _glr_warn "mesa zink 链缺件: $(glr_zink_chain); 之前自动安装失败已跳过。修复: glibc-runner --fix-zink"
+        return 1
+    fi
+    local _apt_cmd=""
+    command -v pkg >/dev/null 2>&1 && _apt_cmd="pkg"
+    [ -z "${_apt_cmd}" ] && command -v apt >/dev/null 2>&1 && _apt_cmd="apt"
+    if [ -z "${_apt_cmd}" ]; then
+        _glr_warn "mesa zink 链缺件且无 pkg/apt 可用; 手工: pkg install ${GLR_ZINK_PKGS}"
+        return 1
+    fi
+    echo " [K1] 首次 zink: 安装 mesa + GLVND(libGL.so.1!) + Vulkan 组件 (${GLR_ZINK_PKGS}, 需网络, 体量较大, 请稍候...)"
+    (
+        export PATH="${APP_PREFIX}/bin:${PATH}"
+        export PREFIX="${PREFIX:-${APP_PREFIX}}"
+        export LD_LIBRARY_PATH="${APP_PREFIX}/lib"
+        export TMPDIR="${APP_PREFIX}/tmp"
+        export HOME="${HOME:-${APP_PREFIX}/home}"
+        unset LD_PRELOAD
+        mkdir -p "${HOME}" "${TMPDIR}" 2>/dev/null
+        "${_apt_cmd}" install -y ${GLR_ZINK_PKGS} 2>&1 | tail -n 8
+    )
+    mkdir -p "${GLIBC_PREFIX}/opt" 2>/dev/null
+    : > "${_mark}" 2>/dev/null
+    if glr_zink_chain >/dev/null; then
+        echo " [K1] mesa zink 全链安装成功 (libGL→GLX_mesa→zink_dri→vulkan)"
+        rm -f "${_mark}" 2>/dev/null
+        return 0
+    fi
+    _glr_warn "zink 自动安装未生效(仍缺: $(glr_zink_chain)); 修复: glibc-runner --fix-zink"
+    return 1
+}
+
+# [K1/K2/K3] -z/GLR_ZINK=1 时启用: 补装组件 + 导出选择变量 + 状态汇报
+glr_zink_setup() {
+    [ "${GLR_ZINK:-0}" = "1" ] || return 0
+    glr_ensure_zink_libs
+    export MESA_LOADER_DRIVER_OVERRIDE="zink"     # mesa 22+ 强制驱动
+    export GALLIUM_DRIVER="zink"                   # 旧版 mesa 兼容
+    export LIBGL_DRIVERS_PATH="${LIBGL_DRIVERS_PATH:-${GLIBC_PREFIX}/lib/dri}"
+    # [K3] GLVND vendor 指定仅在实际存在 libGLX_mesa.so.0 时导出 ——
+    # GLVND 在找不到指定 vendor 时 GLX 初始化直接失败, 比不设更糟
+    if [ -e "${GLIBC_PREFIX}/lib/libGLX_mesa.so.0" ]; then
+        export __GLX_VENDOR_LIBRARY_NAME="mesa"   # GLVND 选 mesa vendor
+    else
+        unset __GLX_VENDOR_LIBRARY_NAME || true
+    fi
+    local _icd _miss
+    _icd="$(glr_zink_icd)"
+    if [ -n "${_icd}" ]; then
+        # 显式指定 ICD: glibc 加载器默认搜索路径不含 $GLIBC_PREFIX/
+        # share/vulkan/icd.d, 不指定会找不到 Turnip
+        export VK_DRIVER_FILES="${_icd}"
+        export VK_ICD_FILENAMES="${_icd}"           # 旧加载器兼容
+    fi
+    _miss="$(glr_zink_chain)"
+    if [ -z "${_miss}" ]; then
+        if [ -n "${_icd}" ]; then
+            GLR_ZINK_STATUS="zink 全链就绪 (ICD: $(basename "${_icd}"))"
+        else
+            _glr_warn "未检测到 Turnip(freedreno) Vulkan ICD —— zink 需 Adreno GPU; 安装: pkg install mesa-vulkan-icd-freedreno-glibc (非 Adreno 设备无硬件加速)"
+            GLR_ZINK_STATUS="zink 就绪 (无 Turnip ICD: 无硬件加速)"
+        fi
+    else
+        GLR_ZINK_STATUS="zink 不可用 (缺: ${_miss})"
+        _glr_warn "zink 链缺件 → 游戏 dlopen libGL.so.1 会失败; 修复: glibc-runner --fix-zink"
+    fi
+    return 0
+}
+
+usage() {
+    cat <<'USAGE'
+glibc-runner v3.12-linbox7 —— glibc 启动器 + wine 快捷启动 (startonwine 合并版)
+
+【wine 快捷启动】glibc-runner [选项] <游戏.exe | wine子命令>
+ -d[WxH], --desktop[=WxH]  X 屏幕 = 指定分辨率; 窗口化游戏自动贴合
+                           拉伸铺满无黑边（X 屏随游戏窗口自适应）;
+                           -d 不加分辨率 = 全屏 (默认 1280x720)
+ -v[WxH], --vd[=WxH]      启用 wine 虚拟桌面 (explorer /desktop);
+                           轩宇剑4类游戏必须运行在虚拟桌面内才不报错;
+                           不加分辨率默认 1280x720; 需指定尺寸时紧贴:
+                           -v1024x768 或 -d1024x768 -v
+ -f[WxH], --force-desktop[=WxH]
+                          强制窗口直出 (针对 wine10 和 proton 版 wine
+                          及以上), 与 -d 同源的两个动作: ① 不传
+                          explorer /desktop 参数, 游戏窗口直接显示
+                          在项目 X11 桌面窗口 (画面直出); ② 每次启
+                          动前清除注册表 wine 蓝色背景桌面 (HKCU\
+                          Software\Wine\Explorer 的 Desktop 值与
+                          Desktops 键, Mobox 迁移/winecfg 勾选/repack
+                          资产常持久化它 → 游戏被关进蓝底桌面、窗口
+                          居中缩水); 铺满与 -d 完全同源: 握手同款
+                          (窗口化游戏 App 侧自动贴合拉伸铺满, 无黑边,
+                          老游戏不再被 resize 战斗卡住); 不加分辨率
+                          默认 1280x720 (与 -d 同款), 需指定时紧贴:
+                          -f1280x720 (GLR_FORCE_VD=1 同效); 现代游戏
+                          想原生分辨率渲染可再叠 -F (见下)
+ -F, --fitwin             撑满模式: 把游戏窗口 resize 到 X 屏幕尺寸
+                           (现代游戏按 -d 分辨率原生渲染, 比拉伸清晰;
+                           老游戏建议不加, 用默认贴合拉伸)
+ -g, --opengl              以 OpenGL3 渲染驱动启动 (--rendering-driver opengl3)
+ -z, --zink                mesa zink 渲染 (OpenGL→Vulkan, Adreno+Turnip
+                            硬件加速; 组件缺失自动安装; GLR_ZINK=1 同效)
+ -x, --dx11                给游戏追加 -dx11 参数
+ -u, --unity               Unity 单线程渲染 (-force-gfx-direct)
+ -a, --args <参数>         透传给 wine 的参数, 可多次使用
+     --debug               详细调试日志 (BOX64_LOG=1, WINEDEBUG=err+all)
+ -b, --ib                  同时启动 ib.exe (存在才生效)
+ -5, --f5taskmgr           同时启动 f5taskmgr (存在才生效, 已运行则不重复拉起)
+ -w, --wow64               兼容选项: 本环境为纯 wow64 wine 无 box86, 自动忽略
+     --wine <路径>         指定 wine 可执行文件 (默认 conf 或自动探测 wine-*)
+
+【盘符 / 前缀管理】
+ --drives[=X:]             列出 WINEPREFIX 全部盘符; --drives=c: 查看该盘内容
+ --adddrive <X:/路径>      添加盘符, 如 --adddrive e:/sdcard/exagear
+ --rmdrive <X:>            移除盘符 (c: 受保护)
+ --kill                    终止 wineserver (wineserver -k)
+ --init                    创建/初始化 win64 前缀 (wineboot -i)
+ --install-prefix [--force] 用 repack 资产一键重建游戏前缀
+                           (directx/dxvk/redist/盘符; 已构建过需加 --force)
+ --fix-prefix              修补前缀: 缺失/损坏/win32 → 备份后重建 win64 + 补盘符
+ --fix-drives              补齐标准盘符 z: c: d: e: (DRIVE_D/DRIVE_E=路径 自定义)
+ --winecfg / --regedit / --taskmgr   快捷打开对应工具
+ --fix-audio                一键修复/诊断 wine 声音 (pulse 服务端 +
+                            glibc 音频库 + 注册表驱动自愈 + 音量归一 +
+                            诊断输出)
+ --fix-zink                一键修复/诊断 zink 渲染链 (libGL.so.1/
+                            libGLX_mesa/zink_dri/libvulkan 逐件体检 +
+                            缺件自动补装; 修复 "游戏读取不到
+                            libGL.so.1")
+
+【glibc 原生模式】(传入 Linux/box64 二进制时自动走此模式)
+ -c/--configure            patchelf 配置二进制 (rpath+interpreter)
+ --findlib                检查二进制缺失的动态库 (原短选项 -f 已让给
+                           强制窗口直出 --force-desktop, 本功能保留长选项)
+ -n/--no-linker            不经由 ld.so 直接启动
+ -s/--shell                进入 glibc bash (或执行其命令)
+ -i/--info                 打印环境信息 (含 wine/前缀/盘符)
+ --x11-diag                X11 黑块排障体检: extras 修订/握手文件/
+                           user.reg Explorer 残留/logcat X11 日志
+                           (纯读取, 不启 wine; 输出发给开发者)
+ -t/--teg                  启用 libtermux-exec.so 预加载
+ -D/--strace [0-4]         strace 调试 (v3.0 前的 -d)
+     --version             显示版本
+
+示例:
+ glibc-runner -d /sdcard/game/game.exe            # 全屏启动游戏 (不加分辨率)
+ glibc-runner -d1280x720 /sdcard/game/game.exe    # 虚拟桌面 1280x720 启动
+ glibc-runner -f /sdcard/game/game.exe            # 强制窗口直出+清wine蓝色背景桌面 (默认 1280x720, 铺满同 -d)
+ glibc-runner -f800x600 /sdcard/game/game.exe     # 同上, X 屏幕 800x600
+ glibc-runner -g /sdcard/game/game.exe            # OpenGL3 驱动启动
+ glibc-runner taskmgr                             # 直接启动 wine 程序
+ glibc-runner --drives                            # 列出盘符
+ glibc-runner --adddrive e:/sdcard/exagear        # 添加盘符
+ glibc-runner --install-prefix --force            # 用 repack 资产重建前缀
+ glibc-runner ${PREFIX}/glibc/bin/box64 ${PREFIX}/glibc/wine-9.8-staging-wow64/bin/wine taskmgr
+
+注意:
+ * 选项必须写在 exe 路径之前 (exe 之后的参数原样传给游戏)
+ * 日志默认追加写入 $LOG_PATH (默认 /sdcard/mobox_log.txt), 终端同时回显
+ * 盘符指向: z:=/data/data/com.linbox/files/usr (DRIVE_Z 可改, =/ 恢复
+   wine 标准根文件系统); d:/e: 可用 DRIVE_D/DRIVE_E 自定义
+ * -d 分辨率会实时同步给 LinBox X11 窗口 (游戏按真实分辨率渲染)
+ * wine10/proton 上要窗口显示且去掉 wine 蓝色背景桌面: 加 -f 启动
+   (同 -d 画面直出 + 每次清除注册表持久化桌面, 铺满同 -d 贴合拉伸,
+   详见上方 -f 说明)
+ * 声音: pulse 服务端/glibc 音频库自动拉起补装; 无声先跑 --fix-audio
+ * 音量偏小: GLR_AUDIO_VOLUME=50~300 (默认 100; 150=软件增益 1.5 倍,
+   过大有削顶/底噪, 逐档试听; 亦检查 Android 媒体音量与游戏内音量)
+ * 需要 zink 渲染的游戏: 加 -z 启动 (GLR_ZINK=1 同效; Adreno 经
+   Turnip 硬件加速, mesa/GLVND/Vulkan 组件缺失时自动联网安装;
+   libGL.so.1 由 libglvnd-glibc 独立提供, 链路诊断: --fix-zink)
+ * pulse 服务端由 linbox-x11 会话启动时拉起一次(游戏零开销复用,
+   不再每次重启; 无声时 glibc-runner --fix-audio)
+ * 前缀构建自动应用 repack 资产(opt/prefix: fix-fonts.tar.xz/
+   user.reg/system.reg/dxvk-*.tar.gz; 已建前缀首启自动补齐, 幂等)
+ * 完全跳过音频初始化: 环境变量 GLR_NO_AUDIO_SETUP=1
+ * 前缀异常 (闪退报 32-bit/registry 无效): glibc-runner --fix-prefix
+USAGE
+}
+
+# ---- 状态变量 ----
+GLR_MODE_INFO=0; GLR_MODE_SHELL=0; GLR_MODE_CONF=0; GLR_MODE_FINDLIB=0
+GLR_MODE_DIAG=0   # linbox6: --x11-diag 黑块排障体检
+GLR_NO_LINKER=0; GLR_TEG=0; GLR_DEBUG=0
+GLR_WINE=0; GLR_SHOWLOG=0; GLR_FORCE=0; GLR_ADMIN=0; GLR_SERVER_DIRECT=0
+GLR_OPT_DESKTOP=""; GLR_OPT_WINE=""; GLR_ENV_WINE="${GLR_WINE_BIN:-}"
+GLR_DESKTOP_GIVEN=0   # [R1] 是否显式传了 -d (与 -dWxH 区分全屏场景)
+GLR_FITWIN=0          # fix19 [R5]: -F/--fitwin 撑满模式（握手值带 fitwin 标记）
+GLR_FORCE_VD="${GLR_FORCE_VD:-0}"  # fix25 [R7]: -f/--force-desktop 强制窗口直出 (GLR_FORCE_VD=1 环境变量同效)
+GLR_CMD_DRIVES=0; GLR_DRIVES_ARG=""; GLR_OPT_ADDDRIVE=""; GLR_OPT_RMDRIVE=""
+GLR_CMD_KILL=0; GLR_CMD_INIT=0; GLR_CMD_INSTALL=0; GLR_CMD_FIXPREFIX=0; GLR_CMD_FIXDRIVES=0
+GLR_CMD_WINECFG=0; GLR_CMD_REGEDIT=0; GLR_CMD_TASKMGR=0; GLR_CMD_FIXAUDIO=0; GLR_CMD_FIXZINK=0
+GLR_PULSE_READY=0   # fix20 [A1]: 127.0.0.1:4713 就绪标记(启动横幅用)
+GLR_AUDIO_VOL_APPLIED=""  # fix21 [V1]: 已生效的 sink 音量(横幅/诊断用)
+GLR_ZINK="${GLR_ZINK:-0}"  # fix22 [K1]: -z/--zink 或环境变量置 1
+GLR_ZINK_STATUS=""         # fix22 [K2]: zink 状态(横幅/诊断用)
+use_opengl=0; dx_dx11=0; unity_mode=0; glr_wow64flag=0; startib=0; f5taskmgr=0
+wine_args=(); additional_args=(); resolution=(); GLR_TASKSET=()
+
+# ---- 参数解析 (+ = 不重排, 位置参数后的内容原样透传) ----
+if ! GLR_PARSED=$(getopt -o "+d::a:hwub5gzxnistcv::FD::f::" \
+      --long "desktop::,vd::,virtual-desktop::,force-desktop::,fitwin,args:,help,wow64,unity,ib,f5taskmgr,opengl,dx11,zink,no-linker,info,shell,configure,findlib,x11-diag,teg,strace::,debug,drives::,adddrive:,rmdrive:,kill,wine:,init,fix-prefix,fix-drives,fix-audio,fix-zink,install-prefix,force,winecfg,regedit,taskmgr,version" \
+      -n "glibc-runner" -- "$@" 2>&1); then
+    echo "$GLR_PARSED" >&2
+    usage
+    exit 1
+fi
+eval "set -- $GLR_PARSED"
+
+while :; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -i|--info) GLR_MODE_INFO=1 ;;
+        --x11-diag) GLR_MODE_DIAG=1 ;;   # linbox6: 握手/注册表/日志体检
+        -s|--shell) GLR_MODE_SHELL=1 ;;
+        -c|--configure) GLR_MODE_CONF=1 ;;
+        -f|--force-desktop)
+            # fix25 [R7] (linbox5 修订): 强制窗口直出 —— 与 -d [R2]
+            # 同款画面直出 (不传 explorer /desktop 参数, 直传参数与
+            # 注册表是同一个蓝底 wine 桌面的两种入口); 每次启动前
+            # 清除注册表 wine 蓝色背景桌面; 握手与 -d 完全同源
+            # (写 "WxH", 不带 fitwin) → App 侧贴合拉伸铺满, 与 -d
+            # 填满效果一致 (linbox4 曾强制叠加 -F 撑满, 实测 DirectDraw
+            # 老游戏假稳定黑边, 已回退)。裸 -f 默认 1280x720
+            # (与 -d 同款), -fWxH 指定尺寸(紧贴)。
+            GLR_FORCE_VD=1
+            GLR_WINE=1
+            if [ -n "${2:-}" ]; then
+                if [[ "$2" =~ ^[0-9]+x[0-9]+$ ]]; then
+                    GLR_OPT_DESKTOP="$2"
+                    GLR_DESKTOP_GIVEN=1
+                else
+                    show_error "分辨率格式错误: '$2' (应为 1280x720 形式且紧贴选项: -f1280x720; -f 不带分辨率默认 1280x720)"
+                fi
+            fi
+            shift ;;
+        --findlib) GLR_MODE_FINDLIB=1 ;;   # fix25: 短选项 -f 让给 --force-desktop, 保留长选项
+        -t|--teg) GLR_TEG=1 ;;
+        -n|--no-linker) GLR_NO_LINKER=1 ;;
+        -D|--strace)
+            case "${2:-}" in
+                [0-4]) GLR_DEBUG=$2 ;;
+                *)     GLR_DEBUG=1 ;;
+            esac
+            shift ;;
+        -d|--desktop)
+            GLR_WINE=1
+            GLR_DESKTOP_GIVEN=1
+            # v3.1 [W9]: 单独 -d = 全屏 (不开虚拟桌面); -dWxH = 指定分辨率
+            if [ -n "${2:-}" ]; then
+                if [[ "$2" =~ ^[0-9]+x[0-9]+$ ]]; then
+                    GLR_OPT_DESKTOP="$2"
+                else
+                    show_error "分辨率格式错误: '$2' (应为 1280x720 形式且紧贴选项: -d1280x720; -d 不带分辨率即全屏)"
+                fi
+            fi
+            shift ;;
+        -v|--vd|--virtual-desktop)
+            # fix19 [R4]: wine 虚拟桌面 —— 轩宇剑4 类 DDraw 游戏离开
+            # 虚拟桌面会报错/黑屏, 必须运行在 explorer /desktop 内。
+            # -vWxH / --vd=WxH 指定尺寸(视同 -d); 裸 -v 默认 1280x720。
+            # 环境变量 GLR_VD=1 仍有效（同效）。
+            GLR_WINE=1
+            GLR_VD=1
+            if [ -n "${2:-}" ]; then
+                if [[ "$2" =~ ^[0-9]+x[0-9]+$ ]]; then
+                    GLR_OPT_DESKTOP="$2"
+                    GLR_DESKTOP_GIVEN=1
+                else
+                    show_error "分辨率格式错误: '$2' (应为 1280x720 形式且紧贴选项: -v1280x720; -v 不带分辨率默认 1280x720)"
+                fi
+            fi
+            shift ;;
+        -F|--fitwin)
+            # fix19 [R5]: 撑满模式（把游戏窗口 resize 到 X 屏幕，现代
+            # 游戏原生分辨率渲染）。老游戏不加 → 默认贴合拉伸。
+            GLR_FITWIN=1
+            GLR_WINE=1 ;;
+        -a|--args) wine_args+=("$2"); shift ;;
+        -g|--opengl) use_opengl=1; GLR_WINE=1 ;;
+        -x|--dx11) dx_dx11=1; GLR_WINE=1 ;;
+        -z|--zink)
+            # fix22 [K1]: mesa zink 渲染(OpenGL on Vulkan; Adreno/
+            # Turnip 硬件加速)。GLR_ZINK=1 环境变量同效。
+            GLR_ZINK=1; GLR_WINE=1 ;;
+        -u|--unity) unity_mode=1; GLR_WINE=1 ;;
+        -w|--wow64) glr_wow64flag=1 ;;
+        -b|--ib) startib=1; GLR_WINE=1 ;;
+        -5|--f5taskmgr) f5taskmgr=1; GLR_WINE=1 ;;
+        --debug) GLR_SHOWLOG=1 ;;
+        --drives)
+            GLR_CMD_DRIVES=1; GLR_ADMIN=1
+            # util-linux getopt 对可选项会输出 '' 占位符, 必须无条件 shift
+            [ -n "${2:-}" ] && GLR_DRIVES_ARG="$2"
+            shift ;;
+        --adddrive) GLR_OPT_ADDDRIVE="${2:-}"; GLR_ADMIN=1; shift ;;
+        --rmdrive) GLR_OPT_RMDRIVE="${2:-}"; GLR_ADMIN=1; shift ;;
+        --kill) GLR_CMD_KILL=1; GLR_ADMIN=1 ;;
+        --fix-prefix) GLR_CMD_FIXPREFIX=1; GLR_ADMIN=1 ;;
+        --fix-drives) GLR_CMD_FIXDRIVES=1; GLR_ADMIN=1 ;;
+        --fix-audio)  GLR_CMD_FIXAUDIO=1; GLR_ADMIN=1 ;;
+        --fix-zink)   GLR_CMD_FIXZINK=1;  GLR_ADMIN=1 ;;
+        --wine) GLR_OPT_WINE="${2:-}"; shift ;;
+        --init) GLR_CMD_INIT=1; GLR_ADMIN=1; GLR_WINE=1 ;;
+        --install-prefix) GLR_CMD_INSTALL=1; GLR_ADMIN=1; GLR_WINE=1 ;;
+        --force) GLR_FORCE=1 ;;
+        --winecfg) GLR_CMD_WINECFG=1; GLR_WINE=1 ;;
+        --regedit) GLR_CMD_REGEDIT=1; GLR_WINE=1 ;;
+        --taskmgr) GLR_CMD_TASKMGR=1; GLR_WINE=1 ;;
+        --version) echo "glibc-runner ${GLR_VERSION}"; exit 0 ;;
+        --) shift; break ;;
+        *) show_error "'$1' 不是一个选项。" ;;
+    esac
+    shift
+done
+
+# ---- 无任何参数 → 帮助 ----
+if [ "$#" -eq 0 ] && [ "${GLR_WINE}" = "0" ] && [ "${GLR_ADMIN}" = "0" ] \
+   && [ "${GLR_MODE_INFO}" = "0" ] && [ "${GLR_MODE_SHELL}" = "0" ] \
+   && [ "${GLR_MODE_CONF}" = "0" ] && [ "${GLR_MODE_FINDLIB}" = "0" ] \
+   && [ "${GLR_MODE_DIAG}" = "0" ]; then
+    usage
+    exit 0
+fi
+
+# ---- [F2] 切换到 glibc 隔离环境 ----
+glr_switch_env() {
+    export LD_LIBRARY_PATH="${GLIBC_PREFIX}/lib${GRUN_EXTRA_LD_LIBRARY_PATH:+:${GRUN_EXTRA_LD_LIBRARY_PATH}}"
+    if [ "${GLR_TEG}" = "1" ]; then
+        GLR_TEG_LIB=${GLIBC_PREFIX}/lib/libtermux-exec.so
+        [ -f "${GLR_TEG_LIB}" ] || _glr_error "not found '${GLR_TEG_LIB}' (install termux-exec-glibc)"
+        export LD_PRELOAD="${GLR_TEG_LIB}${LD_PRELOAD:+:${LD_PRELOAD}}"
+    fi
+}
+
+# ---- [W2] conf 读取: 环境变量 > conf 文件 > 内置默认 ----
+glr_load_conf() {
+    local _env_wpfx="${WINEPREFIX:-}" _env_wpath="${WINE_PATH:-}"
+    local _env_log="${LOG_PATH:-}"   _env_disp="${DISPLAY:-}"
+    [ -f "${GLIBC_PREFIX}/opt/scripts/configs" ]     && . "${GLIBC_PREFIX}/opt/scripts/configs"
+    [ -f "${GLIBC_PREFIX}/opt/conf/wine_path.conf" ] && . "${GLIBC_PREFIX}/opt/conf/wine_path.conf"
+    command -v load_configs >/dev/null 2>&1 && load_configs
+    [ -n "${_env_wpfx}" ]  && WINEPREFIX="${_env_wpfx}"
+    [ -n "${_env_wpath}" ] && WINE_PATH="${_env_wpath}"
+    [ -n "${_env_log}" ]   && LOG_PATH="${_env_log}"
+    [ -n "${_env_disp}" ]  && DISPLAY="${_env_disp}"
+    WINEPATH="${WINEPATH:-${WINE_PATH:-}}"
+    return 0
+}
+
+# ---- wine 可执行文件解析: --wine > $GLR_WINE_BIN > conf WINE_PATH > 自动探测 ----
+glr_pick_wine() {
+    GLR_WINE_BIN=""; GLR_WINE_BASE=""
+    local base="" d
+    if [ -n "${GLR_OPT_WINE}" ]; then
+        [ -f "${GLR_OPT_WINE}" ] || _glr_error "--wine 指定的文件不存在: ${GLR_OPT_WINE}"
+        GLR_WINE_BIN="${GLR_OPT_WINE}"
+    elif [ -n "${GLR_ENV_WINE}" ] && [ -f "${GLR_ENV_WINE}" ]; then
+        GLR_WINE_BIN="${GLR_ENV_WINE}"
+    else
+        if [ -n "${WINE_PATH:-}" ] && [ -f "${WINE_PATH}/bin/wine" ]; then
+            base="${WINE_PATH}"
+        else
+            for d in "${GLIBC_PREFIX}"/wine-*wow64*/bin/wine "${GLIBC_PREFIX}"/wine-*/bin/wine; do
+                [ -f "$d" ] || continue
+                base="${d%/bin/wine}"
+                break
+            done
+        fi
+        [ -n "$base" ] || return 1
+        GLR_WINE_BASE="$base"
+        # 旧式双目录构建: 存在 i386-unix 时用 wine64; wow64 新构建用 wine
+        if [ -d "$base/lib/wine/i386-unix" ] && [ -f "$base/bin/wine64" ]; then
+            GLR_WINE_BIN="$base/bin/wine64"
+        else
+            GLR_WINE_BIN="$base/bin/wine"
+        fi
+    fi
+    [ -n "${GLR_WINE_BASE}" ] || GLR_WINE_BASE="$(dirname "$(dirname "${GLR_WINE_BIN}")")"
+    return 0
+}
+
+# ---- -i 信息（扩展: wine/前缀/盘符） ----
+if [ "${GLR_MODE_INFO}" = "1" ]; then
+    echo "glibc-runner version : ${GLR_VERSION}"
+    echo "APP_PREFIX='${APP_PREFIX}'"
+    echo "GLIBC_PREFIX='${GLIBC_PREFIX}'"
+    echo "interpreter='${GLR_LD}'"
+    echo "LD_LIBRARY_PATH(script body)='${APP_PREFIX}/lib' (bionic)"
+    echo "LD_LIBRARY_PATH(child)='${GLIBC_PREFIX}/lib'"
+    echo "PATH='${PATH}'"
+    if [ -x "${APP_PREFIX}/bin/strings" ]; then
+        "${APP_PREFIX}/bin/strings" "${GLIBC_PREFIX}/lib/libc.so.6" 2>/dev/null \
+            | "${APP_PREFIX}/bin/grep" -m1 'GNU C Library' || true
+    fi
+    glr_load_conf 2>/dev/null
+    if glr_pick_wine 2>/dev/null; then
+        echo "wine='${GLR_WINE_BIN}'"
+        echo "WINEPREFIX='${WINEPREFIX}'"
+        if [ -d "${WINEPREFIX}/dosdevices" ]; then
+            echo "drives:"
+            ( cd "${WINEPREFIX}/dosdevices" 2>/dev/null && \
+              for _d in *:; do echo "  ${_d%:} -> $(readlink "$_d" 2>/dev/null)"; done )
+        fi
+        # fix22 [K2] + fix23 [K3]: zink 加载链逐件体检 + Turnip ICD
+        echo "zink    : (链路体检; -z/GLR_ZINK=1 启用, 修复: --fix-zink)"
+        while IFS= read -r _glr_zl; do
+            echo "  ${_glr_zl}"
+        done < <(glr_zink_report)
+        _glr_icd="$(glr_zink_icd 2>/dev/null)"
+        if [ -n "${_glr_icd}" ]; then
+            echo "vulkan  : ${_glr_icd} (Turnip ICD)"
+        else
+            echo "vulkan  : (无 Turnip ICD; Adreno 加速需 mesa-vulkan-icd-freedreno-glibc)"
+        fi
+    else
+        echo "wine='(未找到, 检查 ${GLIBC_PREFIX}/wine-*/ 或 conf)'"
+    fi
+    exit 0
+fi
+
+# ---- -c 配置二进制 ----
+if [ "${GLR_MODE_CONF}" = "1" ]; then
+    [ -n "$1" ] && [ -f "$1" ] || _glr_error "binary not specified or not found"
+    GLR_PATCHELF=${GLIBC_PREFIX}/bin/patchelf
+    [ -f "${GLR_PATCHELF}" ] || _glr_error "patchelf not found in '${GLIBC_PREFIX}/bin' (pkg install patchelf-glibc)"
+    glr_switch_env
+    exec "${GLR_LD}" "${GLR_PATCHELF}" --set-rpath "${GLIBC_PREFIX}/lib" --set-interpreter "${GLR_LD}" "$@"
+fi
+
+# ---- -f 缺库检查 ----
+if [ "${GLR_MODE_FINDLIB}" = "1" ]; then
+    [ -n "$1" ] && [ -f "$1" ] || _glr_error "binary not specified or not found"
+    GLR_READELF=${GLIBC_PREFIX}/bin/readelf
+    [ -f "${GLR_READELF}" ] || _glr_error "readelf not found in '${GLIBC_PREFIX}/bin' (pkg install binutils-glibc)"
+    glr_switch_env
+    # fix20 [A6]: sed 管线改纯 bash —— 此处在 glr_switch_env 之后,
+    # bionic sed 带 glibc LD_LIBRARY_PATH 执行会触发 bionic linker 拒载
+    # (CANNOT LINK EXECUTABLE "sed": cannot find "libc.so" from verneed)
+    GLR_NEEDED=""
+    _glr_ln=""
+    while IFS= read -r _glr_ln; do
+        [[ "${_glr_ln}" =~ Shared\ library:\ \[(.*)\] ]] \
+            && GLR_NEEDED+="${BASH_REMATCH[1]}"$'\n'
+    done < <("${GLR_LD}" "${GLR_READELF}" -d "$1" 2>/dev/null)
+    GLR_MISS=0
+    for GLR_LIB in ${GLR_NEEDED}; do
+        case "${GLR_LIB}" in linux-vdso*) continue ;; esac
+        if [ -e "${GLIBC_PREFIX}/lib/${GLR_LIB}" ]; then
+            _glr_message "found: ${GLR_LIB}"
+        else
+            _glr_message "MISSING: ${GLR_LIB} (not in ${GLIBC_PREFIX}/lib)"
+            GLR_MISS=$((GLR_MISS + 1))
+        fi
+    done
+    if [ "${GLR_MISS}" = "0" ]; then
+        _glr_message "all libraries satisfied"
+    else
+        _glr_message "${GLR_MISS} library/libraries missing"
+    fi
+    exit 0
+fi
+
+# ---- --x11-diag: X11 握手/注册表/日志体检 (linbox6; 纯读取, 不启 wine) ----
+# 黑块/填不满排障: 一次性输出脚本侧与 App 侧全链路状态 —— extras 修订
+# (确认脚本代际), 握手文件内容与写入时间 (确认 -d/-f 分辨率到达),
+# user.reg 的 Wine\\Explorer 残留 (持久化虚拟桌面 = 缩水+黑块高危源),
+# 以及 logcat 里 X11ResolutionLink/X11FitClient 的应用轨迹 (确认 App
+# 是否收到并执行握手/贴合)。把完整输出发给开发者即可精确定位。
+if [ "${GLR_MODE_DIAG}" = "1" ]; then
+    _diag_wpfx="${WINEPREFIX:-${GLIBC_PREFIX}/opt/prefix}"
+    echo "== glibc-runner X11 诊断 (${GLR_VERSION}) =="
+    echo "[1] extras 修订 : $(cat "${APP_PREFIX}/var/lib/linbox/install-revision" 2>/dev/null || echo '未知(文件缺失)')"
+    echo "[2] 握手文件    : ${GLR_RES_FILE}"
+    if [ -f "${GLR_RES_FILE}" ]; then
+        echo "    内容        : $(cat "${GLR_RES_FILE}" 2>/dev/null)  (mtime: $(date -r "${GLR_RES_FILE}" '+%m-%d %H:%M:%S' 2>/dev/null || echo '?'))"
+    else
+        echo "    (不存在 — 本代脚本从未写入过握手)"
+    fi
+    echo "[3] wine 前缀   : ${_diag_wpfx}"
+    if [ -f "${_diag_wpfx}/user.reg" ]; then
+        if grep -Fq 'Software\\\\Wine\\\\Explorer' "${_diag_wpfx}/user.reg" 2>/dev/null; then
+            echo "    !! user.reg 残留 Wine\\Explorer 持久化 (虚拟桌面/桌面键):"
+            grep -F -A6 'Software\\\\Wine\\\\Explorer' "${_diag_wpfx}/user.reg" 2>/dev/null | sed 's/^/       /'
+            echo "    → 黑块/缩水高危残留; 重跑一次 -d/-f 即自动清除 [R3]/[R7]"
+        else
+            echo "    user.reg 无 Wine\\Explorer 残留 (干净)"
+        fi
+    else
+        echo "    (user.reg 不存在 — 前缀未初始化)"
+    fi
+    echo "[4] App 侧 X11 日志 (最近 20000 行中的匹配项, 覆盖完整决策链):"
+    if command -v logcat >/dev/null 2>&1; then
+        logcat -d -t 20000 2>/dev/null | grep -E "X11ResolutionLink|X11FitClient|LorieView|X11Surface" | tail -120 | sed 's/^/       /'
+        echo "       (logcat 采样完毕; 深采样 -t 20000, 覆盖最近完整决策链)"
+    else
+        echo "       (本环境无 logcat 命令)"
+    fi
+    echo "== 诊断结束: 请把以上全部输出发给开发者 =="
+    exit 0
+fi
+
+# ---- -s glibc shell ----
+if [ "${GLR_MODE_SHELL}" = "1" ]; then
+    GLR_BASH=${GLIBC_PREFIX}/bin/bash
+    [ -f "${GLR_BASH}" ] || _glr_error "glibc bash not found (pkg install bash-glibc)"
+    glr_switch_env
+    GLR_CMD="$*"
+    if [ -z "${GLR_CMD}" ]; then exec "${GLR_LD}" "${GLR_BASH}"; fi
+    exec "${GLR_LD}" "${GLR_BASH}" -c "${GLR_CMD}"
+fi
+
+# ============================================================
+# wine 模式 (startonwine v2.6 合并 + LinBox 适配)
+# ============================================================
+
+# ---- wine 模式公共前置: conf + wine + box64 + LD 隔离 + WINEPREFIX ----
+# $1 = 1: wine 必须存在 (启动类); 0: 允许缺失 (盘符管理等)
+glr_env_core() {
+    glr_load_conf
+    if ! glr_pick_wine; then
+        if [ "${1:-1}" = "1" ]; then
+            _glr_error "找不到 wine (conf WINE_PATH 与 ${GLIBC_PREFIX}/wine-*/ 均未命中, 可用 --wine 指定)"
+        fi
+        GLR_WINE_BIN="(未找到)"
+    fi
+    GLR_BOX64="${GLIBC_PREFIX}/bin/box64"
+    [ -f "${GLR_BOX64}" ] || GLR_BOX64=$(command -v box64 2>/dev/null)
+    [ -n "${GLR_BOX64}" ] && [ -f "${GLR_BOX64}" ] || _glr_error "box64 未找到 (${GLIBC_PREFIX}/bin/box64)"
+    WINEPREFIX="${WINEPREFIX:-${GLIBC_PREFIX}/opt/prefix}"
+    export WINEPREFIX
+    GLR_DOSDEVICES="${WINEPREFIX}/dosdevices"
+    glr_ensure_std_drives quiet   # [W11] 每次自动静默补齐缺失的 zcde 盘符
+    glr_switch_env   # [F2] LD_LIBRARY_PATH=glibc/lib
+    export GLIBC_BIN="${GLIBC_PREFIX}/bin"
+    if [ -n "${GLR_WINE_BASE}" ]; then
+        export BOX64_PATH="${GLR_WINE_BASE}/bin${BOX64_PATH:+:${BOX64_PATH}}"
+        local _bxld=""
+        [ -d "${GLR_WINE_BASE}/lib/wine/i386-unix" ]   && _bxld="${GLR_WINE_BASE}/lib/wine/i386-unix"
+        [ -d "${GLR_WINE_BASE}/lib/wine/x86_64-unix" ] && _bxld="${_bxld:+${_bxld}:}${GLR_WINE_BASE}/lib/wine/x86_64-unix"
+        [ -n "$_bxld" ] && export BOX64_LD_LIBRARY_PATH="${_bxld}${BOX64_LD_LIBRARY_PATH:+:${BOX64_LD_LIBRARY_PATH}}"
+    fi
+    return 0
+}
+
+# ---- fix20 [A6]: bionic 工具安全包装 ----
+# glr_switch_env 之后 LD_LIBRARY_PATH=glibc/lib, bionic 二进制直接执行
+# 会触发 bionic linker 拒载(CANNOT LINK); 经 bionic 隔离子壳执行。
+glr_bionic() {
+    ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+      "$@" ) 2>/dev/null
+}
+# fix23 [S1]: bionic 工具执行但保留 stderr(资产解压的报错要进日志;
+# glr_bionic 会丢 stderr, 只适合探测类调用)
+glr_run_bionic() {
+    ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+      "$@" )
+}
+# fix23 [S1]: 备份后缀时间戳(bionic 安全; 失败退 $$)
+glr_epoch() {
+    local _e
+    _e="$(glr_bionic date +%s)"
+    case "${_e}" in ''|*[!0-9]*) echo "$$" ;; *) echo "${_e}" ;; esac
+}
+# fix23 [S1]: 纯 bash glob 首匹配(替代 ls|head —— bionic 链路安全)
+glr_first_match() {
+    local _f
+    for _f in "$@"; do
+        [ -e "${_f}" ] && { printf '%s\n' "${_f}"; return 0; }
+    done
+    return 1
+}
+# date 替代(日志时间戳): bionic 子壳优先, 失败退纯文本
+glr_now() {
+    glr_bionic date '+%F %T' || date '+%F %T' 2>/dev/null || echo "(no-date)"
+}
+# head -1 替代(读 system.reg 首行): 纯 bash
+glr_first_line() {
+    local _l=""
+    while IFS= read -r _l; do printf '%s\n' "$_l"; return 0; done < "$1" 2>/dev/null
+    return 0
+}
+
+# ---- fix20 [A1]: TCP 端口探测(纯 bash /dev/tcp, 不依赖任何外部工具) ----
+glr_port_up() {
+    local _host="${1:-127.0.0.1}" _port="${2:-4713}"
+    ( exec 3<>"/dev/tcp/${_host}/${_port}" ) 2>/dev/null || return 1
+    return 0
+}
+# fix21 [V5]: 旧版此处有一行 "exec 3>&- 3<&- 2>/dev/null" —— 无命令的
+# exec 带重定向会把整个脚本的 stderr 永久指向 /dev/null: 端口探测
+# 成功后(fix20 环境下每次启动都会)后续全部 _glr_warn 警告被静默吞
+# 掉(音量未生效/任务绑定失败/握手警告等), bash -x 调试也断流。
+# fd 3 只在子壳内打开、随子壳退出自动关闭, 无需也无法在主壳关闭;
+
+# ---- fix20 [A1]: pulseaudio 服务端(bionic)启动加固 ----
+# 责任链: 端口已在听→复用; 运行中但没开 TCP→重启; 不在→拉起; 拉起后
+# 等端口就绪(防 winepulse 抢跑回退 alsa → 无声)。
+# fix23 [P2]: linbox-x11(rev22) 在 X 会话启动时已拉起一次 pulse ——
+# 本函数在会话内通常走"端口已通→零开销复用"分支, 仅作兜底(会话中途
+# pulse 被杀/设备重启后首次直接进游戏等场景)。
+glr_start_pulse() {
+    [ "${GLR_NO_AUDIO_SETUP:-0}" = "1" ] && return 0
+    local _pa="${APP_PREFIX}/bin/pulseaudio"
+    if [ ! -x "${_pa}" ]; then
+        _glr_warn "未找到 ${_pa} (pkg install pulseaudio 可补); wine 将无声音"
+        return 1
+    fi
+    # (b) 自检路径改写: pulseaudio 启动时校验 /proc/self/exe 必须指向
+    # 编译期绝对路径(/data/data/com.linbox/...); 经 /data/user/N/ 绑定
+    # 路径执行必报 "cannot self execute. Are you playing games?"
+    case "${_pa}" in
+        /data/user/*) _pa="/data/data/com.linbox/files/usr/bin/pulseaudio" ;;
+    esac
+    [ -x "${_pa}" ] || _pa="${APP_PREFIX}/bin/pulseaudio"
+
+    if glr_port_up 127.0.0.1 4713; then
+        GLR_PULSE_READY=1
+        return 0
+    fi
+
+    # (a) bionic 隔离子壳: 此处(含被 glr_env_full 调用时) LD_LIBRARY_PATH
+    # 已被切到 glibc/lib, 直接 exec bionic pulseaudio 会静默拒载。
+    (
+        export LD_LIBRARY_PATH="${APP_PREFIX}/lib"
+        unset LD_PRELOAD
+        export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${APP_PREFIX}/tmp}"
+        mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+        chmod 700 "${XDG_RUNTIME_DIR}" 2>/dev/null
+        # 运行中但未开 TCP 的旧实例(start-tfm 裸配/手工拉起): 先请下场
+        "${_pa}" --check >/dev/null 2>&1 && "${_pa}" -k >/dev/null 2>&1
+        sleep 1
+        "${_pa}" --start \
+            --load="module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1" \
+            --exit-idle-time=-1 >/dev/null 2>&1
+    )
+    local _i
+    for _i in 1 2 3 4 5 6 7 8; do
+        if glr_port_up 127.0.0.1 4713; then
+            GLR_PULSE_READY=1
+            return 0
+        fi
+        sleep 1
+    done
+    _glr_warn "pulseaudio 已拉起但 127.0.0.1:4713 未就绪; 手工诊断: ${_pa} --start --load='module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1' --exit-idle-time=-1"
+    return 1
+}
+
+# ---- fix21 [V2]: bionic 隔离子壳内连 TCP 服务端执行 pactl ----
+# (pactl 是 bionic 二进制, 不能吃 glibc LD 环境; PULSE_SERVER 指向
+#  本机 TCP 4713 —— 与 wine 侧客户端同一服务端)
+glr_pactl() {
+    local _pactl="${APP_PREFIX}/bin/pactl"
+    [ -x "${_pactl}" ] || return 127
+    ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+      export PULSE_SERVER="127.0.0.1"
+      "${_pactl}" "$@" ) 2>/dev/null
+}
+
+# ---- fix21 [V1]: sink 音量归一化(默认 100%, GLR_AUDIO_VOLUME=50~300) ----
+# 现象: 声音能出但明显偏小("像被什么压住")。Android 上 pulse 默认
+# sink(sles 输出)音量可能低于 100%; flat-volumes 下 wine 流注册
+# 音量也会拉低总音量; 亦可能残留静音。服务端就绪后统一归一。
+glr_pulse_volume() {
+    [ "${GLR_NO_AUDIO_SETUP:-0}" = "1" ] && return 0
+    [ "${GLR_PULSE_READY:-0}" = "1" ] || return 0
+    local _vol="${GLR_AUDIO_VOLUME:-100}"
+    case "${_vol}" in ''|*[!0-9]*) _vol=100 ;; esac
+    [ "${_vol}" -ge 50 ] && [ "${_vol}" -le 300 ] || _vol=100
+    local _i
+    for _i in 1 2 3; do   # [V4] sink 未就绪(服务端刚拉起)时稍候重试
+        glr_pactl set-sink-mute @DEFAULT_SINK@ 0 >/dev/null 2>&1
+        if glr_pactl set-sink-volume @DEFAULT_SINK@ "${_vol}%" >/dev/null 2>&1; then
+            GLR_AUDIO_VOL_APPLIED="${_vol}"
+            return 0
+        fi
+        sleep 1
+    done
+    _glr_warn "pulse 音量设置未生效(sink 未就绪?); 手工: pactl set-sink-volume @DEFAULT_SINK@ 100%"
+    return 0
+}
+
+# ---- fix20 [A2]: glibc 侧音频客户端库补装(box64 包装库用) ----
+# wine 的 winepulse/winealsa 经 box64 包装库加载 native aarch64 glibc
+# 库; 缺 libpulse.so.0 时报:
+#   Error initializing native libpulse.so.0 (last dlerror is ...)
+#   Error initializing native libasound.so.2 (last dlerror is ...)
+# 官方 gpkg 源提供 libpulse-glibc/alsa-lib-glibc(依赖闭包完整,
+# RPATH 指向前缀内 pulseaudio 子目录, linbox-debfix 安装时等长重写)。
+glr_ensure_audio_libs() {
+    [ "${GLR_NO_AUDIO_SETUP:-0}" = "1" ] && return 0
+    [ -e "${GLIBC_PREFIX}/lib/libpulse.so.0" ] && return 0
+    local _mark="${GLIBC_PREFIX}/opt/.linbox-audio-libs-tried"
+    # 离线资产: repack 侧预置 tar 包则直接展开(tar 根 = glibc 前缀,
+    # 内含 lib/libpulse.so.0 等布局)
+    local _tgz="${GLIBC_PREFIX}/opt/pulse/pulse-glibc.tar.gz"
+    if [ -f "${_tgz}" ]; then
+        tar -xzf "${_tgz}" -C "${GLIBC_PREFIX}" 2>/dev/null \
+            && [ -e "${GLIBC_PREFIX}/lib/libpulse.so.0" ] \
+            && { echo " [A2] 已从离线资产安装 glibc 音频库: ${_tgz}"; return 0; }
+    fi
+    # 已尝试且失败 → 不每次启动都联网重试(--fix-audio 清记账强制)
+    if [ -f "${_mark}" ]; then
+        _glr_warn "glibc 音频库缺失(libpulse.so.0); 之前自动安装失败已跳过。修复: glibc-runner --fix-audio"
+        return 1
+    fi
+    local _apt_cmd=""
+    command -v pkg >/dev/null 2>&1 && _apt_cmd="pkg"
+    [ -z "${_apt_cmd}" ] && command -v apt >/dev/null 2>&1 && _apt_cmd="apt"
+    if [ -z "${_apt_cmd}" ]; then
+        _glr_warn "glibc 音频库缺失且无 pkg/apt 可用; 手工: pkg install libpulse-glibc alsa-lib-glibc"
+        return 1
+    fi
+    echo " [A2] 首次启动: 安装 glibc 音频库 (libpulse-glibc alsa-lib-glibc, 需网络, 请稍候...)"
+    (
+        export PATH="${APP_PREFIX}/bin:${PATH}"
+        export PREFIX="${PREFIX:-${APP_PREFIX}}"
+        export LD_LIBRARY_PATH="${APP_PREFIX}/lib"
+        export TMPDIR="${APP_PREFIX}/tmp"
+        export HOME="${HOME:-${APP_PREFIX}/home}"
+        unset LD_PRELOAD
+        mkdir -p "${HOME}" "${TMPDIR}" 2>/dev/null
+        "${_apt_cmd}" install -y libpulse-glibc alsa-lib-glibc grep-glibc sed-glibc 2>&1 | tail -n 8
+    )
+    mkdir -p "${GLIBC_PREFIX}/opt" 2>/dev/null
+    : > "${_mark}" 2>/dev/null
+    if [ -e "${GLIBC_PREFIX}/lib/libpulse.so.0" ]; then
+        echo " [A2] glibc 音频库安装成功 (winepulse/winealsa 可用)"
+        return 0
+    fi
+    _glr_warn "libpulse-glibc 自动安装未生效(网络/源问题)。修复: glibc-runner --fix-audio"
+    return 1
+}
+
+# ---- 启动类操作追加: 显示/音频/性能/区域 ----
+glr_env_full() {
+    glr_env_core 1
+    # DISPLAY: 已设(或 conf 提供) > 自动探测 X socket > :0
+    if [ -z "${DISPLAY:-}" ]; then
+        local _xd _sock
+        for _xd in "${APP_PREFIX}/tmp/.X11-unix" /tmp/.X11-unix "${TMPDIR:-/tmp}/.X11-unix"; do
+            [ -d "$_xd" ] || continue
+            for _sock in "$_xd"/X[0-9]*; do
+                [ -e "$_sock" ] || continue
+                DISPLAY=":${_sock##*X}"
+            done
+        done
+        [ -n "${DISPLAY:-}" ] || DISPLAY=":0"
+        export DISPLAY
+    fi
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-${APP_PREFIX}/tmp}}"
+    mkdir -p "${XDG_RUNTIME_DIR}" 2>/dev/null
+    # fix20 [A2/A3]: 声音管线 —— glibc 客户端库 + bionic 服务端 + PULSE_SERVER。
+    # 旧代码在此直接 exec bionic pulseaudio, 而此处 LD_LIBRARY_PATH 已被
+    # glr_env_core 切到 glibc/lib → bionic linker 拒载 → 服务端静默失败。
+    glr_ensure_audio_libs
+    glr_start_pulse
+    glr_pulse_volume   # fix21 [V1]: sink 音量归一(默认100%, GLR_AUDIO_VOLUME 可调)
+    glr_zink_setup     # fix22 [K1]: -z/GLR_ZINK=1 时启用 mesa zink(缺件自动补装)
+    export PULSE_SERVER="${PULSE_SERVER:-127.0.0.1}"
+    # box64 动态翻译稳定性预设 (mwine 同款; 环境变量已设则尊重用户)
+    export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-0}"
+    export BOX64_DYNAREC_SAFEFLAGS="${BOX64_DYNAREC_SAFEFLAGS:-2}"
+    export BOX64_DYNAREC_FASTNAN="${BOX64_DYNAREC_FASTNAN:-1}"
+    export BOX64_DYNAREC_FASTROUND="${BOX64_DYNAREC_FASTROUND:-1}"
+    export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+    GLR_HAD_WINEDEBUG="${WINEDEBUG+yes}"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+    [ -f "${GLIBC_PREFIX}/opt/locale.conf" ] && \
+        export LC_ALL="$(cat "${GLIBC_PREFIX}/opt/locale.conf" 2>/dev/null)"
+    if [ -n "${PRIMARY_CORES:-}" ]; then
+        if ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+             command -v taskset >/dev/null 2>&1 \
+             && taskset -c "${PRIMARY_CORES}" true ) 2>/dev/null; then
+            GLR_TASKSET=(taskset -c "${PRIMARY_CORES}")
+        else
+            show_warning "绑定 CPU 核心 (${PRIMARY_CORES}) 失败, 改由系统调度; Termux 在后台时请检查电池权限"
+        fi
+    fi
+    # virgl (repack 标记存在才拉起; fix20 [A6]: pgrep 移入 bionic 子壳)
+    if [ -e "${GLIBC_PREFIX}/opt/virgl/virgl-enabled" ] \
+       && [ -f "${GLIBC_PREFIX}/opt/virgl/libvirgl_test_server.so" ] \
+       && ! ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+              pgrep -f libvirgl_test_server.so ) >/dev/null 2>&1; then
+        "${GLIBC_PREFIX}/opt/virgl/libvirgl_test_server.so" >/dev/null 2>&1 &
+    fi
+    return 0
+}
+
+# ---- 日志落盘 ----
+glr_setup_log() {
+    GLR_LOG="${LOG_PATH:-/sdcard/mobox_log.txt}"
+    mkdir -p "$(dirname "${GLR_LOG}")" 2>/dev/null
+    if ! : >> "${GLR_LOG}" 2>/dev/null; then
+        GLR_LOG="${APP_PREFIX}/tmp/mobox_log.txt"
+        mkdir -p "$(dirname "${GLR_LOG}")" 2>/dev/null
+        : >> "${GLR_LOG}" 2>/dev/null || GLR_LOG=""
+    fi
+    if [ -n "${GLR_LOG}" ]; then
+        GLR_TEE="tee -a ${GLR_LOG}"
+        GLR_LOGBOOT="${GLR_LOG}_wineboot.txt"
+    else
+        GLR_TEE="cat"
+        GLR_LOGBOOT="${APP_PREFIX}/tmp/mobox_wineboot.txt"
+    fi
+}
+
+glr_side_launch() {  # 附加 wine 工具后台启动 (ib / f5taskmgr)
+    if [ -n "${GLR_LOG}" ]; then
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" \
+            ${resolution[@]+"${resolution[@]}"} "$1" >> "${GLR_LOG}" 2>&1 &
+    else
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" \
+            ${resolution[@]+"${resolution[@]}"} "$1" >/dev/null 2>&1 &
+    fi
+}
+
+# ---- fix22 [B3]: Unix 工作目录 → 盘符映射守卫 ----
+# wine 启动时把 Unix CWD 映射为 Windows 工作目录(getcwd→盘符根);
+# 未映射(不在任何盘符下)时回退 C:\\windows 并刷警告:
+#   "Warning: could not find DOS drive for current working directory ..."
+# 游戏的相对路径资源(CD 检测/存档/视频)跟着丢。z: 改指 $APP_PREFIX
+# 后, 终端默认目录 $HOME(…/files/home)恰在 z: 之外 —— 这正是高频
+# 踩中的场景。策略: 已映射不动; 未映射 → 游戏所在目录(可映射则用)
+# → $APP_PREFIX(z: 根, 恒可映射)。
+glr_ensure_cwd() {
+    local _gdir="${1:-}" _cwd _tgt _rt _rg _mapped="" _l
+    _cwd="$(pwd -P 2>/dev/null)" || _cwd=""
+    if [ -z "${_cwd}" ]; then
+        cd "${APP_PREFIX}" 2>/dev/null
+        return 0
+    fi
+    # 收集"已映射根": 各盘符目标(相对链接按 dosdevices 解析)+drive_c 本体
+    if [ -d "${GLR_DOSDEVICES}" ]; then
+        for _tgt in "${GLR_DOSDEVICES}"/*:; do
+            [ -e "${_tgt}" ] || [ -L "${_tgt}" ] || continue
+            _l="$(readlink "${_tgt}" 2>/dev/null)"
+            [ -n "${_l}" ] || continue
+            case "${_l}" in
+                /*) ;;
+                *)  _l="${GLR_DOSDEVICES}/${_l}" ;;
+            esac
+            _rt="$(cd "${_l}" 2>/dev/null && pwd -P)"
+            [ -n "${_rt}" ] && _mapped="${_mapped}${_rt}"$'\n'
+        done
+    fi
+    [ -d "${WINEPREFIX}/drive_c" ] && _mapped="${_mapped}${WINEPREFIX}/drive_c"$'\n'
+    if [ -z "${_mapped}" ]; then
+        cd "${APP_PREFIX}" 2>/dev/null
+        echo " [B3] 工作目录守卫: 无可用盘符, 已切换到 ${APP_PREFIX}"
+        return 0
+    fi
+    while IFS= read -r _rt; do
+        [ -n "${_rt}" ] || continue
+        if [ "${_cwd}" = "${_rt}" ] || [[ "${_cwd}" == "${_rt}"/* ]]; then
+            return 0
+        fi
+    done <<< "${_mapped}"
+    # 未映射: 游戏目录可映射则优先
+    if [ -n "${_gdir}" ] && [ -d "${_gdir}" ]; then
+        _rg="$(cd "${_gdir}" 2>/dev/null && pwd -P)"
+        if [ -n "${_rg}" ]; then
+            while IFS= read -r _rt; do
+                [ -n "${_rt}" ] || continue
+                if [ "${_rg}" = "${_rt}" ] || [[ "${_rg}" == "${_rt}"/* ]]; then
+                    cd "${_gdir}" 2>/dev/null \
+                        && echo " [B3] 工作目录未映射盘符, 已切换到游戏目录: ${_gdir}"
+                    return 0
+                fi
+            done <<< "${_mapped}"
+        fi
+    fi
+    cd "${APP_PREFIX}" 2>/dev/null \
+        && echo " [B3] 工作目录未映射盘符, 已切换: ${APP_PREFIX} (z: 根; 游戏相对路径按此解析)"
+    return 0
+}
+
+# ---- [W5] 盘符管理 ----
+glr_cmd_drives() {
+    glr_env_core 0
+    [ -d "${GLR_DOSDEVICES}" ] || _glr_error "dosdevices 不存在: ${GLR_DOSDEVICES} (前缀未初始化? 试: glibc-runner --init)"
+    # --drives 或 --drives=X: 或位置参数 X:
+    if [ -z "${GLR_DRIVES_ARG}" ] && [ "$#" -ge 1 ] && [[ "$1" =~ ^[a-zA-Z]:?$ ]]; then
+        GLR_DRIVES_ARG="$1"
+    fi
+    local d letter target
+    if [ -n "${GLR_DRIVES_ARG}" ]; then
+        letter="${GLR_DRIVES_ARG%:}"; letter="${letter,,}"
+        [ -e "${GLR_DOSDEVICES}/${letter}:" ] || [ -L "${GLR_DOSDEVICES}/${letter}:" ] \
+            || _glr_error "盘符不存在: ${letter}:"
+        target="$(cd "${GLR_DOSDEVICES}" && realpath -L "${letter}:" 2>/dev/null)"
+        echo "== ${letter}: -> ${target}"
+        ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; exec ls -la "${target}" )
+    fi
+    echo "== WINEPREFIX 盘符 (${GLR_DOSDEVICES})"
+    for d in "${GLR_DOSDEVICES}"/*:; do
+        [ -e "$d" ] || [ -L "$d" ] || continue
+        letter="$(basename "$d")"; letter="${letter%:}"
+        target="$(readlink "$d" 2>/dev/null)"
+        if [ -e "$d" ]; then
+            printf '  %s -> %s\n' "$letter" "${target:-(内置)}"
+        else
+            printf '  %s -> %s  (悬空链接: 目标缺失)\n' "$letter" "${target:-(内置)}"
+        fi
+    done
+    echo "添加: glibc-runner --adddrive X:/路径   移除: glibc-runner --rmdrive X:"
+}
+
+glr_cmd_adddrive() {
+    glr_env_core 0
+    local spec="${GLR_OPT_ADDDRIVE}"
+    [ -n "$spec" ] || show_error "用法: --adddrive X:/路径 (如 --adddrive e:/sdcard/exagear)"
+    local letter="${spec%%:*}"
+    local target="${spec#*:}"
+    [[ "$letter" =~ ^[a-zA-Z]$ ]] || show_error "盘符名只能是单个字母: --adddrive X:/路径"
+    letter="${letter,,}"
+    [ -n "$target" ] || show_error "缺少路径: --adddrive ${letter}:/路径"
+    [ -e "$target" ] || show_error "路径不存在: ${target}"
+    mkdir -p "${GLR_DOSDEVICES}" 2>/dev/null
+    ln -sfn "$(realpath "$target")" "${GLR_DOSDEVICES}/${letter}:"
+    _glr_message "盘符 ${letter}: -> $(realpath "$target")"
+}
+
+glr_cmd_rmdrive() {
+    glr_env_core 0
+    local letter="${GLR_OPT_RMDRIVE%:}"; letter="${letter,,}"
+    [ -n "$letter" ] || show_error "用法: --rmdrive X:"
+    [ "$letter" = "c" ] && show_error "c: 是系统盘, 拒绝移除"
+    [ -e "${GLR_DOSDEVICES}/${letter}:" ] || [ -L "${GLR_DOSDEVICES}/${letter}:" ] \
+        || show_error "盘符不存在: ${letter}:"
+    rm -f "${GLR_DOSDEVICES}/${letter}:"
+    _glr_message "已移除盘符 ${letter}:"
+}
+
+# ---- [W11] 标准盘符补齐: z c d e (幂等; [Z1] 悬空链接自动重建) ----
+# 用法: glr_ensure_std_drives [quiet]   quiet=静默模式 (每次启动自动补齐用)
+# 盘符指向: DRIVE_D/DRIVE_E 环境变量或 conf 可覆盖默认搜索列表
+#
+# [Z1] 修复"z 盘是空的":
+#   1) 旧逻辑 `[ -e z: ] || [ -L z: ]` 把悬空链接也当作"已存在"——
+#      z: 一旦指向失效路径 (旧版本/迁移残留/包覆盖), 永不重建,
+#      wine 里 z 盘就是一片空白。现改用 `[ -e ]` (跟随链接判定),
+#      悬空即删除重建;
+#   2) z: 指向 $APP_PREFIX (fix22 [B2]; DRIVE_Z 可改, DRIVE_Z=/ 恢复
+#      wine 标准根文件系统), 目录恒非空, Z: 覆盖整个 Termux 前缀
+#      (glibc/opt/... 对 Mobox 式 Z: 路径直接可见); 旧指向 / 自动
+#      迁移(一次性提示), 用户自设的其它有效目标保留;
+#   3) fix22 [B1]: 前缀未初始化(无 system.reg)时整体跳过 ——
+#      绝不预创建 dosdevices(wine 只在自己创建 dosdevices 时才建
+#      drive_c/c:/z:; 预创建空壳 = C: 永不出现 = 前缀报废)。
+
+# fix22 [B2]: z:→/ 迁移一次性提示(quiet 模式也可见, 记账防刷屏)
+glr_z_migrate_note() {
+    local _m="${WINEPREFIX}/linboxmeta/.linbox-z-migrated"   # fix24 [M1]
+    [ -f "${_m}" ] && return 0
+    mkdir -p "$(dirname "${_m}")" 2>/dev/null
+    touch "${_m}" 2>/dev/null
+    echo " [B2] z: 盘已迁移: / → ${1} (Z: 覆盖 Termux 前缀; 恢复根: DRIVE_Z=/)"
+}
+
+glr_ensure_std_drives() {
+    local _q="${1:-}" _d="" _e="" _c _zt _cur
+    # fix22 [B1]: 前缀未初始化 → 整体跳过, 不碰 dosdevices(见上)
+    if [ ! -f "${WINEPREFIX}/system.reg" ]; then
+        [ -n "${_q}" ] || echo "  [跳过] 盘符补齐: 前缀未初始化(${WINEPREFIX}); 启动任意游戏或 --init 会自动构建"
+        return 0
+    fi
+    mkdir -p "${GLR_DOSDEVICES}" 2>/dev/null
+
+    # z: → Termux 前缀 (fix22 [B2]; [Z1] 语义升级, 见上注释)
+    _zt="${DRIVE_Z:-${APP_PREFIX}}"
+    if [ -e "${GLR_DOSDEVICES}/z:" ]; then
+        _cur="$(readlink "${GLR_DOSDEVICES}/z:" 2>/dev/null)"
+        if [ "${_cur}" = "${_zt}" ]; then
+            [ -n "${_q}" ] || echo "  [=] z: 已存在 -> ${_cur}"
+        elif [ "${_cur}" = "/" ]; then
+            # 旧指向(wine 默认/fix12 遗留) → 自动迁移
+            rm -f "${GLR_DOSDEVICES}/z:" 2>/dev/null
+            ln -sfn "${_zt}" "${GLR_DOSDEVICES}/z:" 2>/dev/null
+            glr_z_migrate_note "${_zt}"
+            [ -n "${_q}" ] || echo "  [+] z: / → ${_zt} (fix22 迁移)"
+        else
+            [ -n "${_q}" ] || echo "  [=] z: 自定义指向保留 -> ${_cur} (默认 ${_zt}; 恢复: DRIVE_Z)"
+        fi
+    else
+        rm -f "${GLR_DOSDEVICES}/z:" 2>/dev/null
+        ln -sfn "${_zt}" "${GLR_DOSDEVICES}/z:" && echo "  [+] z: -> ${_zt}"
+    fi
+
+    # c: 系统盘 (需要 drive_c; 悬空则重建, 前缀缺失时给出提示)
+    if [ -d "${WINEPREFIX}/drive_c" ]; then
+        if [ -e "${GLR_DOSDEVICES}/c:" ]; then
+            [ -n "$_q" ] || echo "  [=] c: 已存在"
+        else
+            rm -f "${GLR_DOSDEVICES}/c:" 2>/dev/null
+            ln -sfn ../drive_c "${GLR_DOSDEVICES}/c:" && echo "  [+] c: -> ../drive_c"
+        fi
+    else
+        [ -n "$_q" ] || show_warning "前缀缺 drive_c, 跳过 c: (先跑: glibc-runner --fix-prefix)"
+    fi
+    # d: 下载/存储
+    _d="${DRIVE_D:-}"
+    if [ -z "$_d" ]; then
+        for _c in /sdcard/Download /sdcard /storage/emulated/0/Download /storage/emulated/0; do
+            [ -d "$_c" ] && { _d="$_c"; break; }
+        done
+    fi
+    if [ -n "$_d" ] && [ -d "$_d" ]; then
+        if [ -e "${GLR_DOSDEVICES}/d:" ]; then
+            [ -n "$_q" ] || echo "  [=] d: 已存在"
+        else
+            rm -f "${GLR_DOSDEVICES}/d:" 2>/dev/null
+            ln -sfn "$_d" "${GLR_DOSDEVICES}/d:" && echo "  [+] d: -> $_d"
+        fi
+    else
+        [ -n "$_q" ] || echo "  [跳过] d: (无可用存储目录, 可用 DRIVE_D=/路径 或 conf 指定)"
+    fi
+    # e: 游戏/exagear 目录
+    _e="${DRIVE_E:-}"
+    if [ -z "$_e" ]; then
+        for _c in /sdcard/exagear /sdcard /storage/emulated/0; do
+            [ -d "$_c" ] && { _e="$_c"; break; }
+        done
+    fi
+    if [ -n "$_e" ] && [ -d "$_e" ]; then
+        if [ -e "${GLR_DOSDEVICES}/e:" ]; then
+            [ -n "$_q" ] || echo "  [=] e: 已存在"
+        else
+            rm -f "${GLR_DOSDEVICES}/e:" 2>/dev/null
+            ln -sfn "$_e" "${GLR_DOSDEVICES}/e:" && echo "  [+] e: -> $_e"
+        fi
+    else
+        [ -n "$_q" ] || echo "  [跳过] e: (无可用存储目录, 可用 DRIVE_E=/路径 或 conf 指定)"
+    fi
+    return 0
+}
+
+# ---- [W6] wineserver -k ----
+glr_cmd_kill() {
+    glr_env_core 1
+    "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+    _glr_message "wineserver 已终止 (wineserver -k)"
+}
+
+# ---- fix22 [B1]: 前缀自动构建(startonwine 语义) ----
+# 供 自动初始化(游戏启动时)/--init/--fix-prefix 共用。要点(与
+#  startonwine/start-tfm 逐条对齐):
+#   1) 绝不在已有 dosdevices 上 wineboot —— wine(server 端)只在
+#      "自己创建 dosdevices"时才建 drive_c/c:/z:; 预创建空壳 = C:
+#      永不出现 = 前缀报废(用户实测: "could not open working
+#      directory C:\\windows\\system32" 每次启动刷屏)。旧/半成品
+#      前缀先备份挪走, 再从头构建。
+#   2) wineboot 阶段关闭 box64 dynarec 干扰项与 esync(startonwine
+#      同款); 屏蔽 mono/gecko/winegstreamer(首装弹窗/挂死)。
+#   3) 验收 = system.reg + drive_c + c: 三件套(旧判据只查
+#      system.reg, 半成品也放行 → "假成功")。
+glr_bootstrap_prefix() {
+    local _bak
+    GLR_LOGBOOT="${GLR_LOGBOOT:-${APP_PREFIX}/tmp/mobox_wineboot.txt}"
+    if [ -e "${WINEPREFIX}" ]; then
+        _bak="${WINEPREFIX}.bak.$(glr_epoch)"
+        if mv "${WINEPREFIX}" "${_bak}" 2>/dev/null; then
+            _glr_message "旧前缀已备份到: ${_bak}"
+        else
+            rm -rf "${WINEPREFIX}" 2>/dev/null
+        fi
+    fi
+    mkdir -p "${WINEPREFIX}"
+    echo "# [glibc-runner prefix bootstrap] $(glr_now) (WINEPREFIX=${WINEPREFIX})" >> "${GLR_LOGBOOT}" 2>/dev/null
+    (
+        cd "${APP_PREFIX}" 2>/dev/null || cd /
+        unset BOX64_DYNAREC_BIGBLOCK BOX64_DYNAREC_CALLRET WINEESYNC WINEESYNC_TERMUX
+        export WINEARCH=win64
+        export WINEDLLOVERRIDES="mscoree,mshtml,winegstreamer="
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" wineboot -u
+    ) >> "${GLR_LOGBOOT}" 2>&1
+    if [ -f "${WINEPREFIX}/system.reg" ] && [ -d "${WINEPREFIX}/drive_c" ] \
+       && [ -e "${GLR_DOSDEVICES}/c:" ]; then
+        _glr_message "win64 前缀构建成功: ${WINEPREFIX} ($(glr_first_line "${WINEPREFIX}/system.reg"))"
+        return 0
+    fi
+    _glr_warn "前缀构建不完整(system.reg/drive_c/c: 有缺失); 完整日志: ${GLR_LOGBOOT}"
+    return 1
+}
+
+# ---- fix24 [F5]: repack 前缀资产(直读固定目录, startonwine v2.6 原样) ----
+# 资产目录固定为 ${GLIBC_PREFIX}/opt/prefix
+# (= /data/data/com.linbox/files/usr/glibc/opt/prefix), 与 startonwine
+# 完全一致:
+#   marlett.ttf       → drive_c/windows/Fonts
+#   user.reg / system.reg / fix-services.reg → 经 wine regedit 原样导入
+#     (顺序: user.reg → system.reg → fix-services.reg)
+#   fix-fonts.tar.xz  → tar 解压到 drive_c/windows
+#   drive_c.7z / directx.7z / start/ / mesa/ / d3d/ → 同目录直读
+#   dxvk-*.tar.gz     → 唯一来源 ${GLIBC_PREFIX}/opt/dxvk1/, 直接 tar
+#     解压到 drive_c/windows(不做任何布局映射)
+# 旧 fix23 的"前缀根 → prefix.bak.* 搜索 + 注册表头嗅探"已移除(用户要求:
+# 不找 mobox, 只认 startonwine 固定路径)。
+# 幂等标记(linboxmeta/, fix24 [M1] 由 moboxmeta 改名): fonts-fix-applied /
+# services-fix-applied (startonwine 标记名兼容) / .linbox-repk-regs-applied /
+# .linbox-dxvk-applied —— 消费方: 游戏启动自愈 / --init / --fix-prefix
+# (新构建前缀首启自动全量补齐, 已应用过的不重复)
+
+glr_asset_file() {  # $1 = 文件名 → opt/prefix/ 下存在则回显绝对路径
+    local _p="${GLIBC_PREFIX}/opt/prefix/$1"
+    [ -f "${_p}" ] || return 1
+    printf '%s\n' "${_p}"
+    return 0
+}
+
+glr_asset_dir() {  # $1 = 目录名(start / mesa / d3d)
+    local _p="${GLIBC_PREFIX}/opt/prefix/$1"
+    [ -d "${_p}" ] || return 1
+    printf '%s\n' "${_p}"
+    return 0
+}
+
+glr_reg_import() {   # $1 = .reg 文件; 经 box64+wine regedit 导入
+    [ -f "$1" ] || return 0
+    [ -n "${GLR_WINE_BIN:-}" ] || return 0
+    [ "${GLR_WINE_BIN}" = "(未找到)" ] && return 0
+    [ -n "${GLR_BOX64:-}" ] && [ -f "${GLR_BOX64}" ] || return 0
+    echo " [F5] 导入注册表: $(basename "$1")"
+    "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" regedit "$1" \
+        >> "${GLR_LOGBOOT:-/dev/null}" 2>&1
+}
+
+# dxvk tar: opt/dxvk1/(startonwine 唯一来源, dxvk-2.3.1.tar.gz 等)
+glr_dxvk_tarball() {
+    local _f
+    for _f in "${GLIBC_PREFIX}/opt/dxvk1"/dxvk-*.tar.gz; do
+        [ -f "${_f}" ] || continue
+        printf '%s\n' "${_f}"
+        return 0
+    done
+    return 1
+}
+
+glr_dxvk_install() {  # startonwine 原样: 直接 tar 解压 → drive_c/windows
+    local _f _w
+    _f="$(glr_dxvk_tarball)" || return 1
+    echo " [F5] 安装 DXVK: ${_f} → drive_c/windows"
+    _w="${WINEPREFIX}/drive_c/windows"
+    mkdir -p "${_w}" 2>/dev/null
+    glr_run_bionic tar -xf "${_f}" -C "${_w}/" 2>> "${GLR_LOGBOOT:-/dev/null}"
+    return 0
+}
+
+# 标记驱动的幂等应用(游戏启动/--init/--fix-prefix 消费; 每项资产独立)
+glr_repack_selfheal() {
+    [ -f "${WINEPREFIX}/system.reg" ] || return 0
+    local _p _u _s
+    local _mm="${WINEPREFIX}/linboxmeta"   # fix24 [M1]: moboxmeta → linboxmeta
+    mkdir -p "${_mm}" 2>/dev/null
+    # marlett 字体 + 字体修复(startonwine 标记名/门控原样: 同一标记门控,
+    # 同一次启动都应用, 应用后写标记不再重复)
+    if [ ! -f "${_mm}/fonts-fix-applied" ]; then
+        if _p="$(glr_asset_file marlett.ttf)"; then
+            mkdir -p "${WINEPREFIX}/drive_c/windows/Fonts" 2>/dev/null
+            glr_run_bionic cp -f "${_p}" \
+                "${WINEPREFIX}/drive_c/windows/Fonts/" 2>/dev/null
+        fi
+        if _p="$(glr_asset_file fix-fonts.tar.xz)"; then
+            echo " [F5] 应用字体修复: ${_p} → drive_c/windows"
+            # drive_c/windows 可能尚未存在(wineboot 只建到 drive_c)
+            mkdir -p "${WINEPREFIX}/drive_c/windows" 2>/dev/null
+            glr_run_bionic tar -xf "${_p}" \
+                -C "${WINEPREFIX}/drive_c/windows" 2>> "${GLR_LOGBOOT:-/dev/null}"
+        fi
+        : > "${_mm}/fonts-fix-applied" 2>/dev/null
+    fi
+    # 服务修复注册表(startonwine 标记名兼容; 应用后 wineserver -k 同款)
+    if [ ! -f "${_mm}/services-fix-applied" ] \
+       && _p="$(glr_asset_file fix-services.reg)"; then
+        glr_reg_import "${_p}"
+        [ -n "${GLR_WINE_BASE:-}" ] && [ -f "${GLR_WINE_BASE}/bin/wineserver" ] \
+            && "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+        : > "${_mm}/services-fix-applied" 2>/dev/null
+    fi
+    # 主注册表(startonwine 原样直导: opt/prefix/user.reg → system.reg,
+    # 不嗅探 —— 资产在固定目录, 一次记账防重复导入)
+    if [ ! -f "${_mm}/.linbox-repk-regs-applied" ]; then
+        _u=""; _s=""
+        _p="$(glr_asset_file user.reg)"   && _u="${_p}"
+        _p="$(glr_asset_file system.reg)" && _s="${_p}"
+        if [ -n "${_u}" ] || [ -n "${_s}" ]; then
+            [ -n "${_u}" ] && glr_reg_import "${_u}"
+            [ -n "${_s}" ] && glr_reg_import "${_s}"
+            [ -n "${GLR_WINE_BASE:-}" ] && [ -f "${GLR_WINE_BASE}/bin/wineserver" ] \
+                && "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+            : > "${_mm}/.linbox-repk-regs-applied" 2>/dev/null
+        fi
+    fi
+    # DXVK(virgl 模式跳过 —— wined3d 与 DXVK 二选一, startonwine 同款)
+    if [ ! -f "${_mm}/.linbox-dxvk-applied" ] \
+       && [ ! -e "${GLIBC_PREFIX}/opt/virgl/virgl-enabled" ]; then
+        glr_dxvk_install && : > "${_mm}/.linbox-dxvk-applied" 2>/dev/null
+    fi
+    return 0
+}
+
+# ---- [W6] --init: 最小 win64 前缀 (fix22 [B1]: 走 glr_bootstrap_prefix) ----
+glr_cmd_init() {
+    glr_env_full
+    glr_setup_log
+    if [ -f "${WINEPREFIX}/system.reg" ] && [ -d "${WINEPREFIX}/drive_c" ] \
+       && [ -e "${GLR_DOSDEVICES}/c:" ]; then
+        _glr_message "前缀已存在: ${WINEPREFIX} (如需用 repack 资产重建: --install-prefix --force)"
+        glr_ensure_std_drives
+        return 0
+    fi
+    _glr_message "初始化 win64 前缀: ${WINEPREFIX} (首次较慢, 请耐心等待; 详细日志: ${GLR_LOGBOOT})"
+    echo "# [glibc-runner --init] $(glr_now)" >> "${GLR_LOG}" 2>/dev/null
+    if glr_bootstrap_prefix; then
+        glr_ensure_std_drives
+        glr_repack_selfheal   # fix23 [F4]: repack 资产(字体/注册表/DXVK)
+    else
+        show_error "前缀创建失败, 完整日志: ${GLR_LOGBOOT}"
+    fi
+}
+
+# ---- [W10] --fix-prefix: 修补前缀 (缺失/损坏/win32 → 备份后重建 win64 + 补盘符) ----
+glr_cmd_fixprefix() {
+    glr_env_full
+    glr_setup_log
+    local _need=0
+    echo "==> 修补前缀: ${WINEPREFIX}"
+    if [ ! -d "${WINEPREFIX}" ]; then
+        echo "  [!] 前缀目录不存在"
+        _need=1
+    elif [ ! -d "${WINEPREFIX}/drive_c" ] || [ ! -f "${WINEPREFIX}/system.reg" ] \
+         || [ ! -e "${GLR_DOSDEVICES}/c:" ]; then
+        echo "  [!] 前缀不完整 (缺 drive_c / system.reg / c: 盘符)"
+        _need=1
+    elif [ "$(glr_first_line "${WINEPREFIX}/system.reg")" = "#arch=win32" ]; then
+        echo "  [!] win32 前缀, wow64 需要 win64"
+        _need=1
+    else
+        echo "  [=] 前缀结构正常"
+    fi
+    if [ "$_need" = "1" ]; then
+        echo "  --> 重建 win64 前缀 (wineboot, 已屏蔽 mono/gecko; 旧前缀自动备份)..."
+        echo "# [glibc-runner --fix-prefix] $(glr_now)" >> "${GLR_LOG}" 2>/dev/null
+        glr_bootstrap_prefix || show_error "wineboot 失败, 完整日志: ${GLR_LOGBOOT}"
+        _glr_message "win64 前缀重建成功 ($(glr_first_line "${WINEPREFIX}/system.reg"))"
+    fi
+    glr_ensure_std_drives
+    glr_repack_selfheal   # fix23 [F4]: repack 资产自愈(标记幂等)
+    _glr_message "前缀修补完成: ${WINEPREFIX}"
+}
+
+# ---- [W7] --install-prefix: repack 资产一键重建游戏前缀 ----
+glr_cmd_install() {
+    glr_env_full
+    glr_setup_log
+    # fix24 [F5]: 资产直读固定目录 opt/prefix(startonwine 原样,
+    # 不再做前缀根/prefix.bak.* 多位置搜索)
+    local GLR_7ZA="$(command -v 7z 2>/dev/null || command -v 7za 2>/dev/null)"
+    local _bx="${GLR_BOX64}" _wine="${GLR_WINE_BIN}" _reg _p _f _d3d _mesa
+    local _step_log="${GLR_LOGBOOT}"
+
+    if [ -f "${WINEPREFIX}/.update-timestamp" ] \
+       && [ "$(cat "${WINEPREFIX}/.update-timestamp" 2>/dev/null)" = "disable" ] \
+       && [ "${GLR_FORCE}" != "1" ]; then
+        _glr_error "前缀已构建过 (${WINEPREFIX}); 如需重建请加 --force (旧前缀会自动备份)"
+    fi
+    if [ -d "${WINEPREFIX}" ] && [ -f "${WINEPREFIX}/system.reg" ] && [ "${GLR_FORCE}" != "1" ]; then
+        _glr_warn "前缀已存在且未加 --force: 将在现有前缀上叠加 repack 资产 (加 --force 可备份后全新重建)"
+    fi
+    if [ -d "${WINEPREFIX}" ] && [ "${GLR_FORCE}" = "1" ]; then
+        local bak="${WINEPREFIX}.bak.$(glr_epoch)"
+        mv "${WINEPREFIX}" "$bak" && _glr_message "旧前缀已备份到: ${bak}"
+    fi
+    mkdir -p "${WINEPREFIX}"
+
+    echo "# [glibc-runner --install-prefix] $(glr_now)" >> "${_step_log}"
+    echo "# 初始化 win64 前缀 (wineboot -u)"
+    (
+        unset BOX64_DYNAREC_BIGBLOCK BOX64_DYNAREC_CALLRET WINEESYNC WINEESYNC_TERMUX
+        export WINEDLLOVERRIDES="mscoree=disabled"
+        "${GLR_LD}" "${_bx}" "${_wine}" wineboot -u
+    ) >> "${_step_log}" 2>&1
+    if [ ! -e "${WINEPREFIX}/.update-timestamp" ]; then
+        show_error "wineboot 失败, 详见 ${_step_log}"
+    fi
+
+    # repack shell32 还原 (存在才做)
+    for _p in "${GLR_WINE_BASE}/lib/wine/i386-windows/shell32.dll" \
+              "${GLR_WINE_BASE}/lib/wine/x86_64-windows/shell32.dll" \
+              "${GLR_WINE_BASE}/lib64/wine/x86_64-windows/shell32.dll"; do
+        [ -e "${_p}-bak" ] && mv -f "${_p}-bak" "$_p" 2>/dev/null
+    done
+
+    # drive_c / directx 资产 (fix23 [S1]: 7z 是 bionic 二进制, 包一层;
+    # fix24 [F5]: opt/prefix 直读, startonwine 原样)
+    _f="$(glr_asset_file drive_c.7z)"
+    if [ -n "${GLR_7ZA}" ] && [ -n "${_f}" ]; then
+        echo "# 安装 repack drive_c 资产 (${_f})"
+        glr_run_bionic "${GLR_7ZA}" x "${_f}" -o"${WINEPREFIX}/drive_c" -y >> "${_step_log}" 2>&1
+    else
+        echo "# 跳过 drive_c.7z (资产或 7z 缺失)"
+    fi
+    _f="$(glr_asset_file directx.7z)"
+    if [ -n "${GLR_7ZA}" ] && [ -n "${_f}" ]; then
+        echo "# 安装 DirectX (${_f})"
+        glr_run_bionic "${GLR_7ZA}" x "${_f}" -o"${WINEPREFIX}/drive_c" -y >> "${_step_log}" 2>&1
+    else
+        echo "# 跳过 directx.7z (资产或 7z 缺失)"
+    fi
+
+    # 开始菜单快捷方式 (fix23 [S1]: cp 包 bionic 层; fix24 [F5]: opt/prefix 直读)
+    _f="$(glr_asset_dir start)"
+    if [ -n "${_f}" ] && [ -d "${WINEPREFIX}/drive_c/ProgramData/Microsoft/Windows/Start Menu" ]; then
+        echo "# 安装开始菜单快捷方式"
+        glr_run_bionic cp -r "${_f}/." "${WINEPREFIX}/drive_c/ProgramData/Microsoft/Windows/Start Menu/" 2>/dev/null
+    fi
+
+    # 盘符 (fix22 [B2]: z: → DRIVE_Z, 默认 $APP_PREFIX; 其余同 startonwine)
+    echo "# 配置盘符"
+    mkdir -p "${GLR_DOSDEVICES}"
+    rm -f "${GLR_DOSDEVICES}/z:"
+    ln -sfn "${DRIVE_Z:-${APP_PREFIX}}" "${GLR_DOSDEVICES}/z:"
+    [ -d /sdcard/Download ] && ln -sfn /sdcard/Download "${GLR_DOSDEVICES}/d:"
+    [ -d /sdcard/exagear ]  && ln -sfn /sdcard/exagear  "${GLR_DOSDEVICES}/e:"
+    [ -d "${APP_PREFIX}/var/lib/proot-distro/installed-rootfs/debian" ] && \
+        ln -sfn "${APP_PREFIX}/var/lib/proot-distro/installed-rootfs/debian" "${GLR_DOSDEVICES}/g:"
+    _sto="$( ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+        df -H 2>/dev/null | grep -o '/storage/....-....' | head -1 ) 2>/dev/null)"
+    [ -n "$_sto" ] && ln -sfn "$_sto" "${GLR_DOSDEVICES}/f:" 2>/dev/null
+
+    # 注册表调整 + 字体 (fix24 [F5]: startonwine 原样直读 opt/prefix,
+    # 不嗅探; 顺序= startonwine: marlett → user.reg → system.reg →
+    # fix-services.reg → fix-fonts.tar.xz; bionic 层)
+    _f="$(glr_asset_file marlett.ttf)"
+    if [ -n "${_f}" ]; then
+        mkdir -p "${WINEPREFIX}/drive_c/windows/Fonts"
+        glr_run_bionic cp -f "${_f}" "${WINEPREFIX}/drive_c/windows/Fonts/" 2>/dev/null
+    fi
+    for _reg in user.reg system.reg fix-services.reg; do
+        _f="$(glr_asset_file "${_reg}")"
+        if [ -n "${_f}" ]; then
+            echo "# 导入注册表 ${_reg} (${_f})"
+            "${GLR_LD}" "${_bx}" "${_wine}" regedit "${_f}" >> "${_step_log}" 2>&1
+        fi
+    done
+    _f="$(glr_asset_file fix-fonts.tar.xz)"
+    [ -n "${_f}" ] && \
+        glr_run_bionic tar -xf "${_f}" -C "${WINEPREFIX}/drive_c/windows" 2>>"${_step_log}"
+
+    # 运行库 + DXVK/wined3d + turnip
+    if [ "${STARTUP_COMPATIBILITY_MODE:-0}" != "1" ]; then
+        if [ -f "${GLIBC_PREFIX}/opt/apps/install.bat" ]; then
+            echo "# 安装运行库 (Physx/7-zip/VC++ redist)"
+            "${GLR_LD}" "${_bx}" "${_wine}" explorer /desktop=shell,640x480 start /unix \
+                "${GLIBC_PREFIX}/opt/apps/install.bat" >> "${_step_log}" 2>&1
+            "${GLR_LD}" "${_bx}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+        fi
+        if [ -e "${GLIBC_PREFIX}/opt/virgl/virgl-enabled" ]; then
+            _d3d="$(glr_asset_dir d3d)"
+            _f=""
+            [ -n "${_d3d}" ] && _f="$(glr_first_match "${_d3d}/wined3d-"*.bat)"
+            if [ -n "${_f}" ]; then
+                echo "# 安装 wined3d ($(basename "$_f"))"
+                "${GLR_LD}" "${_bx}" "${_wine}" explorer /desktop=shell,640x480 start /unix \
+                    "$_f" >> "${_step_log}" 2>&1
+            fi
+        else
+            # fix24 [F5]: DXVK 走共享 helper —— 唯一来源 opt/dxvk1/,
+            # 直接 tar 解压(startonwine 原样, 无布局映射)
+            if glr_dxvk_install; then
+                "${GLR_LD}" "${_bx}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+            else
+                echo "# 跳过 DXVK (opt/dxvk1/ 无 dxvk-*.tar.gz)"
+            fi
+            _mesa="$(glr_asset_dir mesa)"
+            _f=""
+            [ -n "${_mesa}" ] && _f="$(glr_first_match "${_mesa}/"turnip-*.bat)"
+            if [ -n "${_f}" ]; then
+                echo "# 安装 turnip ($(basename "$_f"))"
+                "${GLR_LD}" "${_bx}" "${_wine}" explorer /desktop=shell,640x480 start /unix \
+                    "$_f" >> "${_step_log}" 2>&1
+            fi
+        fi
+    else
+        echo "# 兼容模式 (STARTUP_COMPATIBILITY_MODE=1), 跳过运行库/DXVK"
+    fi
+
+    "${GLR_LD}" "${_bx}" "${GLR_WINE_BASE}/bin/wineserver" -k >/dev/null 2>&1
+    echo "disable" > "${WINEPREFIX}/.update-timestamp"
+    mkdir -p "${WINEPREFIX}/linboxmeta"   # fix24 [M1]: moboxmeta → linboxmeta
+    touch "${WINEPREFIX}/linboxmeta/services-fix-applied" "${WINEPREFIX}/linboxmeta/fonts-fix-applied"
+    # fix23 [F4]: 标记同步 —— install 路径已导入过注册表/DXVK,
+    # 游戏启动时的自愈路径不再重复应用(无 dxvk 资产时不设标记,
+    # 资产后续就位时自愈仍会补装)
+    : > "${WINEPREFIX}/linboxmeta/.linbox-repk-regs-applied" 2>/dev/null
+    if [ -e "${GLIBC_PREFIX}/opt/virgl/virgl-enabled" ] \
+       || glr_dxvk_tarball >/dev/null; then
+        : > "${WINEPREFIX}/linboxmeta/.linbox-dxvk-applied" 2>/dev/null
+    fi
+    _glr_message "游戏前缀构建完成! 详细日志: ${_step_log}"
+}
+
+# ---- fix20 [A5]: 前缀 Wine Drivers 注册表自愈 ----
+# Mobox 迁移前缀常把 HKCU\Software\Wine\Drivers 的 audio 值钉死为
+# "alsa" —— 即使 winepulse 可用也不被加载。检测到不含 pulse 时改写
+# 为 "pulse,alsa"(记账只跑一次; --fix-audio 清记账强制重查)。
+glr_audio_drv_fix() {
+    [ "${GLR_NO_AUDIO_SETUP:-0}" = "1" ] && return 0
+    [ -f "${WINEPREFIX}/system.reg" ] || return 0
+    [ -n "${GLR_WINE_BIN:-}" ] || return 0
+    [ "${GLR_WINE_BIN}" = "(未找到)" ] && return 0
+    [ -n "${GLR_BOX64:-}" ] && [ -f "${GLR_BOX64}" ] || return 0
+    local _m="${WINEPREFIX}/linboxmeta/.linbox-audio-drv-fixed"   # fix24 [M1]
+    [ -f "${_m}" ] && return 0
+    local _cur=""
+    _cur="$("${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg query \
+        "HKCU\\Software\\Wine\\Drivers" /v audio 2>/dev/null)" || true
+    # fix20 [A6]: 纯 bash 去 CR(不经 tr: 此处 LD_LIBRARY_PATH 已是 glibc
+    # 环境, bionic tr 与 grep/sed 同属 verneed 家族, 存在拒载风险)
+    _cur="${_cur//$'\r'/}"
+    if [ -n "${_cur}" ] && [[ "${_cur}" != *pulse* ]]; then
+        if "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg add \
+            "HKCU\\Software\\Wine\\Drivers" /v audio /t REG_SZ /d "pulse,alsa" /f \
+            >/dev/null 2>&1; then
+            echo " [A5] 前缀 Drivers 钉死为 alsa, 已改写为 pulse,alsa (Mobox 迁移自愈)"
+        fi
+    fi
+    mkdir -p "$(dirname "${_m}")" 2>/dev/null
+    touch "${_m}" 2>/dev/null
+    return 0
+}
+
+# ---- fix20 [A4]: --fix-audio 一键修复/诊断 ----
+glr_cmd_fixaudio() {
+    echo "==== glibc-runner ${GLR_VERSION} · 声音修复 ===="
+    echo " APP_PREFIX=${APP_PREFIX}  GLIBC_PREFIX=${GLIBC_PREFIX}"
+    # 0) 清理旧实例与运行时残留(前缀内 pulse-* 运行时目录)
+    if [ -x "${APP_PREFIX}/bin/pulseaudio" ]; then
+        glr_bionic "${APP_PREFIX}/bin/pulseaudio" -k
+        pkill -x pulseaudio 2>/dev/null
+        rm -rf "${APP_PREFIX}"/tmp/pulse-* 2>/dev/null
+    fi
+    # 1) 清记账, 强制重走补装/自愈
+    rm -f "${GLIBC_PREFIX}/opt/.linbox-audio-libs-tried" 2>/dev/null
+    # 2) glibc 侧音频库(离线资产 > pkg 源)
+    glr_load_conf
+    glr_pick_wine || GLR_WINE_BIN=""
+    GLR_BOX64="${GLIBC_PREFIX}/bin/box64"
+    [ -f "${GLR_BOX64}" ] || GLR_BOX64=$(command -v box64 2>/dev/null)
+    WINEPREFIX="${WINEPREFIX:-${GLIBC_PREFIX}/opt/prefix}"
+    rm -f "${WINEPREFIX}/linboxmeta/.linbox-audio-drv-fixed" 2>/dev/null   # fix24 [M1]
+    glr_ensure_audio_libs
+    # 3) 服务端拉起 + 端口就绪 + 音量归一(fix21 [V1])
+    glr_start_pulse
+    glr_pulse_volume
+    export PULSE_SERVER="${PULSE_SERVER:-127.0.0.1}"
+    # 4) 诊断输出
+    echo
+    echo "== 诊断 =="
+    if [ -e "${GLIBC_PREFIX}/lib/libpulse.so.0" ]; then
+        echo " [OK] glibc 客户端库: libpulse.so.0 (winepulse 可加载)"
+    else
+        echo " [FAIL] glibc 客户端库缺失 → 手工: pkg install libpulse-glibc alsa-lib-glibc"
+    fi
+    if [ -e "${GLIBC_PREFIX}/lib/libasound.so.2" ]; then
+        echo " [OK] glibc 客户端库: libasound.so.2 (winealsa 可加载)"
+    else
+        echo " [--] libasound.so.2 缺失(不影响 pulse 出声)"
+    fi
+    if glr_port_up 127.0.0.1 4713; then
+        echo " [OK] pulse 服务端: 127.0.0.1:4713 就绪 (PULSE_SERVER=${PULSE_SERVER})"
+    else
+        echo " [FAIL] 127.0.0.1:4713 未监听 → 手工: ${APP_PREFIX}/bin/pulseaudio --start --load='module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1' --exit-idle-time=-1"
+    fi
+    if [ -x "${APP_PREFIX}/bin/pactl" ]; then
+        echo
+        echo "== pulse 服务器信息 =="
+        glr_pactl info 2>/dev/null | head -n 4
+        echo
+        echo "== sink 音量状态 (fix21 归一后) =="
+        glr_pactl list sinks 2>/dev/null | while IFS= read -r _ln; do
+            _key="${_ln#"${_ln%%[![:space:]]*}"}"   # 去前导空白
+            case "${_key}" in
+                Name:*|State:*|Mute:*|Volume:*) printf '%.120s\n' "${_key}" ;;
+            esac
+        done
+        echo
+        echo "== 活动音频流 (游戏运行时才显示; 流音量低=流恢复表/游戏侧问题) =="
+        glr_pactl list short sink-inputs 2>/dev/null
+        echo
+        echo "音量偏小调节: GLR_AUDIO_VOLUME=150 glibc-runner 游戏.exe (50~300)"
+        echo "             另检查 Android 媒体音量(播放中按音量+) 与游戏内音量设置"
+    fi
+    # 5) 注册表驱动自愈(需 wine; 切到 glibc 环境再跑)
+    if [ -n "${GLR_WINE_BIN}" ] && [ -n "${GLR_BOX64}" ] && [ -f "${GLR_BOX64}" ]; then
+        glr_switch_env
+        glr_audio_drv_fix
+    fi
+    echo
+    echo "完成。验证: glibc-runner --winecfg → 音频页应有驱动可选; 或直接进游戏听声音。"
+    echo "提示: 勿手工在终端/容器里跑 pulseaudio(路径自检会失败), 交由 glibc-runner 处理。"
+}
+
+# ---- fix23 [K3]: --fix-zink 一键修复/链路诊断 ----
+# 用户诉求 "zink 游戏 dlopen 不到 libGL.so.1": 逐件体检加载链并给出
+# 缺件归属包名; 清记账后重走自动补装(离线资产 > pkg 四包)。
+glr_cmd_fixzink() {
+    echo "==== glibc-runner ${GLR_VERSION} · zink 渲染修复 ===="
+    echo " APP_PREFIX=${APP_PREFIX}  GLIBC_PREFIX=${GLIBC_PREFIX}"
+    # 0) 清记账, 强制重走补装
+    rm -f "${GLIBC_PREFIX}/opt/.linbox-zink-libs-tried" 2>/dev/null
+    # 1) 补装(离线资产优先; 全链验证)
+    glr_ensure_zink_libs
+    # 2) 链路诊断(逐件 OK/缺 + 归属包)
+    echo
+    echo "== 链路诊断 (wine dlopen libGL.so.1 的完整加载链) =="
+    glr_zink_report
+    # 3) Turnip ICD(Adreno 硬件加速; 非 Adreno 设备可无)
+    local _icd
+    _icd="$(glr_zink_icd)"
+    echo
+    if [ -n "${_icd}" ]; then
+        echo " [OK] Turnip ICD: ${_icd}"
+    else
+        echo " [--] 无 Turnip(freedreno) ICD → 非Adreno设备无硬件加速; 安装: pkg install mesa-vulkan-icd-freedreno-glibc"
+    fi
+    # 4) 环境变量提示(生效需 -z/GLR_ZINK=1 启动)
+    echo
+    if glr_zink_chain >/dev/null; then
+        echo "链路完整。启用: glibc-runner -z 游戏.exe (GLR_ZINK=1 同效)"
+    else
+        echo "仍有缺件(上方 [缺] 行)。手工安装: pkg install ${GLR_ZINK_PKGS}"
+        echo "启用: glibc-runner -z 游戏.exe (GLR_ZINK=1 同效)"
+    fi
+}
+
+# ---- 管理命令分发 ----
+if [ "${GLR_CMD_DRIVES}" = "1" ]; then glr_cmd_drives "$@"; exit 0; fi
+if [ -n "${GLR_OPT_ADDDRIVE}" ]; then glr_cmd_adddrive; exit 0; fi
+if [ -n "${GLR_OPT_RMDRIVE}" ]; then glr_cmd_rmdrive; exit 0; fi
+if [ "${GLR_CMD_KILL}" = "1" ]; then glr_cmd_kill; exit 0; fi
+if [ "${GLR_CMD_INIT}" = "1" ]; then glr_cmd_init; exit 0; fi
+if [ "${GLR_CMD_FIXPREFIX}" = "1" ]; then glr_cmd_fixprefix; exit 0; fi
+if [ "${GLR_CMD_FIXDRIVES}" = "1" ]; then glr_env_core 0; glr_ensure_std_drives; exit 0; fi
+if [ "${GLR_CMD_FIXAUDIO}" = "1" ]; then glr_cmd_fixaudio; exit 0; fi
+if [ "${GLR_CMD_FIXZINK}" = "1" ]; then glr_cmd_fixzink; exit 0; fi
+if [ "${GLR_CMD_INSTALL}" = "1" ]; then glr_cmd_install; exit 0; fi
+
+# ---- --winecfg / --regedit / --taskmgr → 注入为 wine 目标 ----
+if [ "${GLR_CMD_TASKMGR}" = "1" ]; then set -- taskmgr "$@"; fi
+if [ "${GLR_CMD_REGEDIT}" = "1" ]; then set -- regedit "$@"; fi
+if [ "${GLR_CMD_WINECFG}" = "1" ]; then set -- winecfg "$@"; fi
+
+# ---- [W1] wine 模式自动路由 ----
+# 传 box64/wine 等 unix 二进制 → 原生 runner 模式; 其余尽量进 wine 模式
+if [ "${GLR_WINE}" = "0" ] && [ "$#" -ge 1 ]; then
+    _p1="$1"
+    if [ -f "$_p1" ]; then
+        [ "$(head -c 2 "$_p1" 2>/dev/null)" = "MZ" ] && GLR_WINE=1
+    else
+        case "${_p1,,}" in
+            *.exe|*.msi|*.bat|*.cmd|*.lnk) GLR_WINE=1 ;;
+            wine|wine64) GLR_WINE=1; shift ;;
+            wineserver) GLR_SERVER_DIRECT=1; GLR_WINE=1; shift ;;
+            wineboot) GLR_WINE=1 ;;
+            *) GLR_WINE=1 ;;   # taskmgr / cmd / --version 等裸词 → wine
+        esac
+    fi
+fi
+
+# wineserver 特例: 直接经 box64 跑 unix 端 wineserver (非 PE)
+if [ "${GLR_SERVER_DIRECT}" = "1" ]; then
+    glr_env_core 1
+    exec "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BASE}/bin/wineserver" "$@"
+fi
+
+# ---- [W1/W3] wine 启动组装 ----
+if [ "${GLR_WINE}" = "1" ]; then
+    glr_env_full
+    glr_setup_log
+
+    # 无目标: zenity 文件选择 (没有则帮助)
+    if [ "$#" -eq 0 ]; then
+        if [ -n "${GLR_ZENITY}" ]; then
+            _picked="$("${GLR_ZENITY}" --file-selection --filename=/sdcard/ 2>/dev/null)" || true
+            [ -n "$_picked" ] && set -- "$_picked"
+        fi
+        [ "$#" -ge 1 ] || { usage; exit 1; }
+    fi
+
+    # 第一个位置参数是文件 → start /unix (其余作为该程序的参数)
+    _gdir=""
+    if [ -f "$1" ]; then
+        _p1="$(realpath "$1")"
+        _gdir="$(dirname "${_p1}")"   # fix22 [B3]: CWD 守卫候选目录
+        shift
+        set -- start /unix "$_p1" "$@"
+    fi
+
+    # fix22 [B3]: Unix 工作目录 → 盘符映射守卫(见 glr_ensure_cwd)
+    glr_ensure_cwd "${_gdir}"
+
+    [ "${glr_wow64flag}" = "1" ] && _glr_warn "wow64 选项忽略: 本环境为纯 wow64 wine (无 box86)"
+
+    # 渲染/游戏参数
+    [ "${unity_mode}" = "1" ] && additional_args+=("-force-gfx-direct")
+    [ "${use_opengl}" = "1" ] && additional_args+=("--rendering-driver" "opengl3")
+    [ "${dx_dx11}"  = "1" ]   && additional_args+=("-dx11")
+
+    # 虚拟桌面: [v3.3 R2 变更] -dWxH 默认不开 explorer /desktop（画面直出）。
+    #   fix19 [R4]: -v/--vd 显式启用 —— 轩宇剑4 类老 DDraw 游戏离开虚拟
+    #   桌面会报错/黑屏, 必须运行在 explorer /desktop 内。VD 尺寸 =
+    #   -d/-v 指定分辨率（默认 1280x720），与握手分辨率一致 → VD 窗口
+    #   恰好铺满 X 屏幕, 无黑边（X11FitClient 看到它 rootMatch 零动作）。
+    #   （GLR_VD=1 环境变量仍有效，-v 是它的命令行等价物）
+    if [ "${GLR_VD:-0}" = "1" ]; then
+        if [ -z "${GLR_OPT_DESKTOP}" ]; then
+            GLR_OPT_DESKTOP="1280x720"   # 裸 -v / 裸 -d+GLR_VD 时 VD 默认尺寸
+            GLR_DESKTOP_GIVEN=1           # 确保 res 握手写入 → X 屏幕 == VD 尺寸
+        fi
+        resolution=(explorer "/desktop=shell,${GLR_OPT_DESKTOP}")
+    fi
+
+    # fix25 [R7] (v3.12-linbox5 修订): -f/--force-desktop 强制窗口直出
+    #   —— 与 -d [R2] 完全同款: resolution 置空, 不传任何 explorer
+    #   /desktop 参数 (linbox2 的直传参数与注册表方式是同一个蓝底
+    #   wine 桌面窗口的两种入口, 用户实测截图确认后去除); "窗口"由
+    #   握手提供: X 屏幕 = -f 尺寸, 游戏直接渲染在项目 X11 桌面窗口。
+    #   填满与 -d 完全同源 (linbox5 定稿, 推翻 linbox4): linbox4 曾
+    #   让握手值固定携带 fitwin (自动叠加 -F 撑满), 用户实测"一样的
+    #   黑边" —— DirectDraw 固定分辨率老游戏接受 resize 后仍按原分
+    #   辨率绘制 (App 侧 fix19 注释记载的假稳定: -d1024x768 只画
+    #   868x652), 右/下黑区烧在 X 画面内部, 显示层拉伸也救不回。
+    #   linbox5 回归: -f 握手写 "WxH" (与 -d 同款, 不带 fitwin) →
+    #   App 侧 fix19 默认贴合策略 (游戏窗口平移到 (0,0) + X 屏幕
+    #   缩成游戏客户区 + 显示层拉伸铺满) —— 与用户实测有效的 -d
+    #   填满效果逐位一致; 现代游戏需要原生分辨率渲染时用 -f -F
+    #   显式叠加撑满。
+    #   与 -v 同给时 -f 覆盖 -v (explorer 桌面取消)。
+    if [ "${GLR_FORCE_VD:-0}" = "1" ]; then
+        if [ -z "${GLR_OPT_DESKTOP}" ]; then
+            GLR_OPT_DESKTOP="1280x720"    # 裸 -f 默认尺寸 (与 -d 同款)
+            GLR_DESKTOP_GIVEN=1           # 确保 res 握手写入 → X 屏幕 == 指定尺寸
+        fi
+        # [R7] linbox5: 不再强制 GLR_FITWIN=1 (linbox4 实测假稳定
+        #   黑边, 已回退); 需要撑满的用户用 -f -F 显式叠加。
+        if [ "${GLR_VD:-0}" = "1" ]; then
+            _glr_warn "-f 与 -v 同给: 按 -f 强制窗口直出执行 (explorer 虚拟桌面已取消, -f 不带蓝底 wine 桌面)"
+        fi
+        resolution=()   # [R2] 同款画面直出: 不传 explorer /desktop → wine 蓝底桌面不出现
+    fi
+
+    # 调试通道 (--debug; 用户已手工设置则尊重)
+    if [ "${GLR_SHOWLOG}" = "1" ]; then
+        [ -z "${BOX64_LOG:-}" ] && export BOX64_LOG=1
+        [ -z "${GLR_HAD_WINEDEBUG:-}" ] && export WINEDEBUG="err+all"
+    fi
+
+    # 附加工具
+    if [ "${startib}" = "1" ]; then
+        if [ -f "${GLIBC_PREFIX}/bin/ib.exe" ]; then
+            glr_side_launch "${GLIBC_PREFIX}/bin/ib.exe"
+        else
+            _glr_warn "ib.exe 不存在, 跳过 -b"
+        fi
+    fi
+    # 附加工具(fix20 [A6]: pgrep 移入 bionic 子壳)
+    if [ "${f5taskmgr}" = "1" ]; then
+        if [ -f "${GLIBC_PREFIX}/opt/apps/f5taskmgr.exe" ]; then
+            ( export LD_LIBRARY_PATH="${APP_PREFIX}/lib"; unset LD_PRELOAD
+              pgrep -f f5taskmgr.exe ) >/dev/null 2>&1 \
+                || glr_side_launch "${GLIBC_PREFIX}/opt/apps/f5taskmgr.exe"
+        else
+            _glr_warn "f5taskmgr.exe 不存在, 跳过 -5"
+        fi
+    fi
+
+    # 启动信息头 (路径解析结果一目了然, 便于排障)
+    echo "==== glibc-runner ${GLR_VERSION} · wine 启动 ===="
+    echo " wine    : ${GLR_WINE_BIN}"
+    echo " box64   : ${GLR_BOX64}"
+    echo " prefix  : ${WINEPREFIX}"
+    echo " display : ${DISPLAY:-?}"
+    echo " desktop : ${GLR_OPT_DESKTOP:-全屏}$([ "${GLR_FORCE_VD:-0}" = "1" ] && echo " (强制窗口直出)")$([ "${GLR_VD:-0}" = "1" ] && echo " (wine虚拟桌面)")$([ "${GLR_FITWIN}" = "1" ] && echo " (撑满)")"
+    echo " 日志    : ${GLR_LOG:-(仅终端)}"
+    if [ "${GLR_PULSE_READY:-0}" = "1" ]; then
+        echo " audio   : pulse 就绪 (127.0.0.1:4713)${GLR_AUDIO_VOL_APPLIED:+ · sink音量 ${GLR_AUDIO_VOL_APPLIED}%}"
+    else
+        echo " audio   : pulse 未就绪 (无声; 修复: glibc-runner --fix-audio)"
+    fi
+    if [ -n "${GLR_ZINK_STATUS}" ]; then
+        echo " gl      : ${GLR_ZINK_STATUS}"
+    fi
+    echo " 命令    : box64 wine ${wine_args[*]} ${resolution[*]} $* ${additional_args[*]}"
+    if [ -n "${GLR_DESKTOP_GIVEN}" ]; then
+        echo " 提示    : 窗口化游戏自动贴合/钉满铺满 (X 屏最多调整一次, 防级联)"
+        echo "           游戏报错/闪退 (轩宇剑4类)? 加 -v 启用 wine 虚拟桌面"
+        echo "           wine 蓝色背景桌面? 加 -f (强制窗口直出+每次清注册表桌面, 铺满同 -d)"
+        echo "           现代游戏想按 ${GLR_OPT_DESKTOP:-1280x720} 原生渲染可加 -F (窗口撑满)"
+    fi
+
+    # [R1/R6] 分辨率握手: 把目标分辨率告知 LinBox X11 窗口。
+    #   -dWxH        → 写 "WxH"        (X 屏 = 指定分辨率; fix19 起窗口化
+    #                                  游戏自动贴合: X 屏随游戏客户区自适应
+    #                                  + 显示层拉伸铺满, 无黑边)
+    #   -dWxH -F     → 写 "WxH fitwin" (撑满: App 把游戏窗口 resize 到 X
+    #                                  屏幕, 现代游戏原生分辨率渲染)
+    #   -d (全屏)    → 写 "1280x720"   (全屏默认桌面分辨率)
+    #   -v (虚拟桌面)→ 写 VD 尺寸      (与 explorer /desktop 尺寸一致,
+    #                                  VD 窗口铺满 X 屏幕)
+    #   -f (强制窗口直出)→ 写 "WxH" (X 屏 = 指定尺寸; 与 -d 完全同
+    #                        源: 窗口化游戏 App 侧贴合拉伸铺满无黑边;
+    #                        linbox4 曾写 "WxH fitwin", 实测 DirectDraw
+    #                        老游戏假稳定黑边, linbox5 回退; 现代游戏
+    #                        要撑满用 -f -F 显式叠加)
+    #   不带 -d      → 写 "native"    (跟随窗口, 桌面/文件管理器场景)
+    # LinBox 端 FileObserver 实时应用; linbox-x11 启动桌面会话时也会
+    # 写 "native" 复位。旧版 App 解析带标记值时 regex 照样提取 WxH,
+    # 行为不变（向后兼容）。
+    if [ -n "${GLR_DESKTOP_GIVEN}" ] && [ "${GLR_DESKTOP_GIVEN}" = "1" ]; then
+        mkdir -p "${APP_PREFIX}/tmp" 2>/dev/null
+        _res_val="${GLR_OPT_DESKTOP:-1280x720}"
+        [ "${GLR_FITWIN}" = "1" ] && _res_val="${_res_val} fitwin"
+        printf '%s\n' "${_res_val}" > "${GLR_RES_FILE}" 2>/dev/null
+        echo " res-file: ${GLR_RES_FILE} -> $(cat "${GLR_RES_FILE}" 2>/dev/null)"
+    elif [ "${GLR_ADMIN}" != "1" ]; then
+        mkdir -p "${APP_PREFIX}/tmp" 2>/dev/null
+        printf 'native\n' > "${GLR_RES_FILE}" 2>/dev/null
+    fi
+
+    # 前缀缺失/不完整 → 自动构建 (fix22 [B1]: startonwine 语义)
+    #   旧版: glr_env_core 的盘符补齐会在 wineboot 前预创建 dosdevices
+    #   空壳 → wine 永不创建 drive_c/c: → 前缀报废 + "could not open
+    #   working directory C:\\windows\\system32" 每次启动刷屏; 且成功
+    #   判据只查 system.reg, 半成品也放行。现在三重验收(system.reg +
+    #   drive_c + c:), 损坏前缀(有 reg 无 drive_c)也自动重建。
+    if [ ! -f "${WINEPREFIX}/system.reg" ] || [ ! -d "${WINEPREFIX}/drive_c" ] \
+       || [ ! -e "${GLR_DOSDEVICES}/c:" ]; then
+        _glr_message "前缀不存在/未初始化/不完整, 自动构建 win64 前缀: ${WINEPREFIX} (首次较慢, 请耐心等待...)"
+        if glr_bootstrap_prefix; then
+            glr_ensure_std_drives
+        else
+            show_error "前缀自动构建失败, 完整日志: ${GLR_LOGBOOT}"
+        fi
+    fi
+
+    # fix23 [F4]: repack 前缀资产自愈(标记幂等) —— fix22 构建的裸前缀
+    # 首启自动补齐 fix-fonts.tar.xz/user.reg/system.reg/dxvk tar;
+    # 已应用过(标记在)则零动作。
+    glr_repack_selfheal
+
+    # [R3] 纯净游戏画面 (v3.4 fix13; linbox6 改为每次清理): 部分前缀
+    #   (Mobox 迁移/winecfg 手动勾选"模拟虚拟桌面"/linbox1 时代 -f 的
+    #   reg add 实验残留) 会在注册表持久化虚拟桌面 —— 即使 [R2] 不再
+    #   传 explorer /desktop 参数, 所有程序仍被关进 wine 桌面 (壁纸+
+    #   任务栏), 游戏窗口居中缩水、四周黑块。旧版一次性记账
+    #   (.linbox-vd-clean 标记) 盖章后永不再清 —— 而 linbox1/2 时代的
+    #   -f 实验 (reg add 开桌面) 会把键重新写回, 残留从此无门可除
+    #   (用户 rev36 实测 "-d 也黑块" 的定性根因: rev35→36 对 -d 零
+    #   代码差异, 只能是残留状态)。linbox6 起 -d 与 -f [R7] 同款,
+    #   每次启动前都清 (reg delete 对直出会话零风险; -v/-f 各有专属
+    #   块, 本块仅 -d 直出抵达)。
+    if [ -n "${GLR_DESKTOP_GIVEN}" ] && [ "${GLR_VD:-0}" != "1" ] \
+       && [ "${GLR_FORCE_VD:-0}" != "1" ] \
+       && [ -f "${WINEPREFIX}/system.reg" ]; then
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
+        echo " [R3] 已清除前缀内持久化虚拟桌面配置 (纯游戏画面, 每次清理)"
+    fi
+
+    # fix25 [R7] (v3.12-linbox3 修订): -f 去 wine 蓝色背景桌面 =
+    #   -d [R3] 同款 reg delete, 但每次 -f 都执行, 不做一次性记账
+    #   —— "强制"语义 (linbox2 曾叠加 explorer /desktop=shell,WxH
+    #   直传参数, 但直传参数与注册表方式创建的是同一个蓝底 wine
+    #   桌面窗口, 用户实测截图确认后 linbox3 去除 explorer 参数,
+    #   画面直出与 -d 完全一致):
+    #     reg delete HKCU\Software\Wine\Explorer          /v Desktop
+    #     reg delete HKCU\Software\Wine\Explorer\Desktops
+    #   清除后游戏窗口直接渲染在项目 X11 桌面窗口 (用户图二 -d 效果),
+    #   蓝底桌面/任务栏不再出现。
+    if [ "${GLR_FORCE_VD:-0}" = "1" ] && [ -f "${WINEPREFIX}/system.reg" ]; then
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
+        rm -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" 2>/dev/null   # v3.12-linbox1 遗留记账清理
+        echo " [R7] 已清除注册表 wine 蓝色背景桌面, 强制窗口直出 ${GLR_OPT_DESKTOP} (铺满同 -d 贴合拉伸, 无 wine 桌面)"
+    elif [ "${GLR_FORCE_VD:-0}" != "1" ] \
+         && [ -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" ] \
+         && [ -f "${WINEPREFIX}/system.reg" ]; then
+        # v3.12-linbox1 曾用 -f 写入注册表桌面 (与语义相反), 此处清除
+        # 旧版遗留, 一次性; 新版 -f 不再写任何注册表键。
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
+        rm -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" 2>/dev/null
+        echo " [R7] 已清除旧版 -f 遗留的注册表窗口配置 (恢复全屏)"
+    fi
+
+    # fix20 [A5]: Mobox 迁移前缀 Drivers=alsa 钉死自愈(记账只跑一次)
+    glr_audio_drv_fix
+
+    [ -n "${GLR_LOG}" ] && echo "==== $(glr_now) glibc-runner 启动: $* ====" >> "${GLR_LOG}"
+
+    # 执行: wine 输出 → 终端 + 日志
+    "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" \
+        ${wine_args[@]+"${wine_args[@]}"} \
+        ${resolution[@]+"${resolution[@]}"} \
+        "$@" \
+        ${additional_args[@]+"${additional_args[@]}"} 2>&1 | ${GLR_TEE}
+    exit "${PIPESTATUS[0]}"
+fi
+
+# ============================================================
+# 默认: glibc 原生二进制经 ld.so 运行 (v2.0 行为)
+# ============================================================
+if [ -n "$1" ]; then
+    [ -f "$1" ] || _glr_error "'$1' not found"
+    glr_switch_env
+    if [ "${GLR_NO_LINKER}" != "1" ]; then
+        if [ "${GLR_DEBUG}" != "0" ]; then
+            GLR_STRACE=${GLIBC_PREFIX}/bin/strace
+            [ -f "${GLR_STRACE}" ] || _glr_error "strace not found (pkg install strace-glibc)"
+            if [ "${GLR_DEBUG}" = "1" ]; then
+                exec "${GLR_LD}" "${GLR_STRACE}" "${GLR_LD}" "$@"
+            else
+                exec "${GLR_LD}" "${GLR_STRACE}" -f "${GLR_LD}" "$@"
+            fi
+        fi
+        # [F4] 显式 ld.so: ld.so <binary> <args...>
+        exec "${GLR_LD}" "$@"
+    fi
+    exec "$@"
+fi
+exit 0

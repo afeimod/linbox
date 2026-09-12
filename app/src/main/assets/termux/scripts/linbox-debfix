@@ -1,0 +1,454 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-debfix v6 — 把官方仓库 deb 重打包为 LinBox 前缀
+# ============================================================
+# v6.4（fix9.11）gpkg conffiles 尾逗号缺陷修复 + -b 错误可见化：
+#   用户实测：linbox-glibc 第 2 步（glibc-runner 事务）必然失败，
+#   终端只回显 E: Sub-process linbox-debfix returned an error code
+#   (1)，同批其余包全部重写成功（bash-completion-glibc count=6）。
+#   根因（真实 glibc_2.44 包实测复现）：gpkg（termux-pacman）构建
+#   的 DEBIAN/conffiles 存在尾逗号条目（如
+#   /data/data/com.termux/.../etc/gai.conf,）—— pacman 转换残渣。
+#   dpkg-deb -b 会硬校验「conffile 必须存在于包内」，尾逗号条目
+#   在树中不存在 → 重建直接拒绝 → process_one rc=1 → apt
+#   Pre-Install-Pkgs 钩子整体失败 → 事务中止，glibc 永远装不上。
+#   对策：
+#   1) dpkg-deb -b 前规范化 conffiles：去行尾逗号/空白、去空行、
+#      剔除树中不存在的条目（修正数落盘日志 + 终端提示）；
+#   2) dpkg-deb -b stderr 不再丢弃：失败时把 dpkg-deb 的真实报错
+#      首行回显到终端（此前被 /dev/null 吞掉，设备上永远看不到
+#      失败原因，只能靠猜测）。
+#
+# 官方 deb 按 /data/data/com.termux 前缀构建（tar 成员路径即绝对
+# 路径），不重写 dpkg 会把文件解到别的应用的数据目录。
+#
+# 原理: dpkg-deb -R 解包 → linbox-reprefix --tree 等长改写
+#       （目录名/文件内容/链接目标，com.termux→com.linbox 同为
+#       10 字节）→ dpkg-deb -b 原子回写。等长替换不改变任何文件
+#       大小，md5sums 中的哈希仍与改前内容一致。
+#
+# v6.3（fix9.2）termux-x11-nightly 特判：
+#   用户实测：pkg install termux-x11-nightly 后 linbox-x11 报
+#   "X11 服务启动失败"。根因：官方包的 bin/termux-x11 客户端脚本经
+#   com.termux→com.linbox 等长重写后，其引用的 CmdEntryPoint 类名
+#   一并被改写为 com.linbox.x11.*——而宿主 APK 内类实际保持
+#   com.termux.x11.*（Java 包名不随应用包名重前缀），客户端启动即崩；
+#   且 dpkg 装包会用官方客户端覆盖 bin/termux-x11 内置脚本。对策
+#  （对齐 jiaxinchen-max/termux-app "自建包顶掉官方包"的思路）：
+#   1) 识别 Package: termux-x11-nightly 的 deb，无论记账是否命中，
+#      强制走完整处理（缓存里的旧 deb 也要换客户端）；
+#   2) 重写树内把 usr/bin/termux-x11 替换为内置客户端
+#     （etc/linbox/x11/termux-x11 主副本，安装器 rev13 部署）；
+#   3) linbox-x11 启动前按标记自检，被覆盖即从主副本恢复（双保险）。
+#
+# v6.2（fix8.6）dpkg 真身晋升安全门：
+#   2026-09-06 事故：Pre-Install 钩子把重写树中的新 dpkg 1.22.6-5
+#   直接换入 dpkg.real，新版官方包改用 DT_RUNPATH（bionic 对主执行
+#   文件不认）且当时环境缺 LD_LIBRARY_PATH，首次链接即
+#   CANNOT LINK EXECUTABLE ... libmd.so not found——事务内所有后续
+#   dpkg 调用全部 rc=1，安装整体失败。对策：sync_dpkg_real 换入前
+#   先跑 "$new --version" 自检（带 LD_LIBRARY_PATH），失败则暂存
+#   dpkg.real.pending 并保留旧真身继续干活，待依赖就绪由包装器
+#   自动晋升；App 侧 TermuxEnvironment 同步补齐 LD_LIBRARY_PATH。
+#
+# v6.1（fix8.5）可观测层 + 独立第二路径：
+#   rev 9 上机复测：v6 摘要行照常打印（libcrypt/pcre），但 13 包依旧
+#   零输出失败——其中 command-not-found_3.5.0-10 为全新版本（不可能
+#   有记账），而 v6 对全新官方 deb 数学上必然打印摘要行。结论：要么
+#   终端显示丢行，要么调用链存在未知环节。对策：
+#   1) 文件日志 pkgfix.log：debfix 每个决策（含“记账命中→跳过”）
+#      全部落盘——终端无关的地面真相，cat 即可定位；
+#   2) apt 级 Pre-Install-Pkgs 钩子（由包装器/安装器写入 apt.conf）：
+#      apt 在调 dpkg 前把全部 deb 路径喂给 linbox-debfix（stdin 模式）
+#      ——绕过包装器的独立重写路径；
+#   3) 包装器自检 + 缓存预扫描（见 linbox-dpkg v3.1）。
+#
+# v6（fix8.4）检测层根治——消灭唯一静默失败分支：
+#   设备实测（fix8.3/rev 8 上机日志）：pcre 走完整重写路径成功
+#   (count=7)，同批 13 包全部静默失败且零警告。逐分支排除后唯一
+#   自洽解释 = 记账命中后的 dpkg-deb -c 快检：-c 的成员列表由
+#   【外部 tar -tv】生成（解压在 dpkg-deb 内建，列表是 exec "tar"），
+#   设备端该列表一旦为空/失败，grep 匹配不到即被误判"干净"→ 脏 deb
+#   永久静默跳过 → dpkg 报 unable to stat com.termux。v6 检测重构：
+#   1) scan_deb 字节级检测：dpkg-deb --fsys-tarfile（内建解压，
+#      实测不 exec 任何外部程序）导出数据 tar → grep -aqm1
+#      'com\.termux'（成员名+文件内容一次覆盖）；dpkg-deb 失败或
+#      输出为空 → 返回"无法验证"，绝不当作干净；
+#   2) 记账命中三分支：干净→幂等跳过；脏→撕章强制重跑；无法
+#      验证→提示后走完整重写（安全侧）；
+#   3) 成品验收重构：树路径残余硬门（find *com.termux* 必须为空，
+#      否则不替换不盖章）+ 成品字节扫描（扫描器不可用时以树验收
+#      为准并大声告警，不再依赖 -c）；
+#   4) stdout 输出 LINBOX_REPAIRED=N 供 dpkg 包装器兜底重试判定。
+#
+# v5（fix8.3）：验收/记账 grep 收紧为任意 com.termux；重写后
+#   --verify 独立复检；linbox-debfix version 部署指纹。
+# v4（fix8.2）记账免疫：命中记账也快检成员，残留即撕章强制重跑。
+# v3（fix8.1）：dpkg-deb -b 失败不盖章；目录改名降级保底；成品验收。
+# v2（fix7）：reprefix 缺失/失败不盖章；sync_dpkg_real。
+#
+# 用法:
+#   linbox-debfix <deb...>   手工转换（dpkg -i 前手动调用）
+#   (无参数)                 从 stdin 读 deb 路径（供钩子使用）
+#   version                  部署指纹
+# 幂等：按 文件名+大小+mtime 记账，重复调用直接跳过。
+# ============================================================
+set -u
+
+# 版本指纹（v6.4，设备端一键核验部署状态）：linbox-debfix version
+if [ "${1:-}" = "version" ]; then
+    echo "linbox-debfix v6.4 (fix9.11, EXTRAS_REVISION 21)"
+    exit 0
+fi
+
+PREFIX=/data/data/com.linbox/files/usr
+REPREFIX=$PREFIX/bin/linbox-reprefix
+STAMP_DIR=$PREFIX/var/lib/linbox/debfix
+REAL_DPKG=$PREFIX/libexec/linbox/dpkg.real
+LOGFILE=$PREFIX/var/lib/linbox/pkgfix.log
+mkdir -p "$STAMP_DIR" 2>/dev/null
+
+# ---- 文件日志（fix8.5）：终端无关的地面真相 ----
+# 所有决策（含静默跳过）都落盘；超 256KB 自动截尾。日志失败绝不影响主流程。
+log() {
+    printf '%s debfix: %s\n' "$(date '+%m-%d %H:%M:%S' 2>/dev/null || echo '?')" "$*" >> "$LOGFILE" 2>/dev/null || :
+}
+log_trunc() {
+    [ -f "$LOGFILE" ] || return 0
+    _sz=$(stat -c %s "$LOGFILE" 2>/dev/null || echo 0)
+    [ "$_sz" -gt 262144 ] || return 0
+    tail -n 300 "$LOGFILE" > "$LOGFILE.t" 2>/dev/null \
+        && mv -f "$LOGFILE.t" "$LOGFILE" 2>/dev/null || :
+    return 0
+}
+log_trunc
+
+is_elf() { # $1=文件 — 输出 0/1
+    [ -f "$1" ] || return 1
+    [ "$(head -c 4 "$1" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')" = "7f454c46" ]
+}
+
+# ------------------------------------------------------------------
+# scan_deb <deb> — v6 字节级检测（不依赖外部 tar）
+#   0 = 干净（数据 tar 中无任何 com.termux 字节：成员名+内容全净）
+#   1 = 脏（存在 com.termux 字节）
+#   2 = 无法验证（dpkg-deb 失败/输出为空——调用方必须按脏处理）
+# ------------------------------------------------------------------
+scan_deb() {
+    _sd_tmp=$(mktemp "$STAMP_DIR/scan.XXXXXX") 2>/dev/null || return 2
+    if ! dpkg-deb --fsys-tarfile "$1" > "$_sd_tmp" 2>/dev/null || [ ! -s "$_sd_tmp" ]; then
+        rm -f "$_sd_tmp" 2>/dev/null
+        return 2
+    fi
+    if grep -aqm1 'com\.termux' "$_sd_tmp" 2>/dev/null; then
+        rm -f "$_sd_tmp" 2>/dev/null
+        return 1
+    fi
+    rm -f "$_sd_tmp" 2>/dev/null
+    return 0
+}
+
+# dpkg 包自升级：把重写树中的新 dpkg 真身同步为 dpkg.real
+# fix8.6：换入前先验证新真身在本机可链接运行（依赖库如 libmd.so
+# 已就绪）。事故实锤（2026-09-06 pkgfix.log）：debfix 在 Pre-Install
+# 钩子里直接把新 dpkg 1.22.6-5 换入 dpkg.real，而新版官方包改用
+# DT_RUNPATH（bionic 不认）且当时环境无 LD_LIBRARY_PATH，首次链接
+# 即 CANNOT LINK EXECUTABLE，事务内所有后续 dpkg 调用全部 rc=1。
+# 现在验证失败时暂存 $REAL_DPKG.pending（保留旧真身继续干活），
+# 待依赖就绪后由包装器自动晋升。
+sync_dpkg_real() {
+    new="$1"
+    is_elf "$new" || return 0
+    d=$(dirname "$REAL_DPKG")
+    mkdir -p "$d" 2>/dev/null
+    if env LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:-}" "$new" --version >/dev/null 2>&1; then
+        cp -f "$new" "$REAL_DPKG.tmp.$$" 2>/dev/null || return 0
+        chmod 700 "$REAL_DPKG.tmp.$$" 2>/dev/null
+        if [ -f "$REAL_DPKG" ]; then
+            cp -f "$REAL_DPKG" "$REAL_DPKG.old" 2>/dev/null
+        fi
+        mv -f "$REAL_DPKG.tmp.$$" "$REAL_DPKG" 2>/dev/null
+        rm -f "$REAL_DPKG.pending" 2>/dev/null
+        log "dpkg: 新真身自检通过 → 已同步 dpkg.real"
+    else
+        # 候选不可运行。若当前 dpkg.real 本身也已不可运行（如上次
+        # 事务遗留的坏真身），回退到最近一次已知可运行的 .old 备份。
+        if [ -f "$REAL_DPKG" ] && \
+           ! env LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:-}" "$REAL_DPKG" --version >/dev/null 2>&1 && \
+           [ -f "$REAL_DPKG.old" ] && \
+           env LD_LIBRARY_PATH="$PREFIX/lib${LD_LIBRARY_PATH:-}" "$REAL_DPKG.old" --version >/dev/null 2>&1; then
+            cp -f "$REAL_DPKG.old" "$REAL_DPKG.tmp.$$" 2>/dev/null \
+                && chmod 700 "$REAL_DPKG.tmp.$$" 2>/dev/null \
+                && mv -f "$REAL_DPKG.tmp.$$" "$REAL_DPKG" 2>/dev/null
+            echo "linbox-debfix: 警告: 现有 dpkg.real 不可运行，已回退 dpkg.real.old" >&2
+            log "dpkg: 现有 dpkg.real 不可运行 → 回退 dpkg.real.old"
+        fi
+        cp -f "$new" "$REAL_DPKG.pending.tmp.$$" 2>/dev/null \
+            && chmod 700 "$REAL_DPKG.pending.tmp.$$" 2>/dev/null \
+            && mv -f "$REAL_DPKG.pending.tmp.$$" "$REAL_DPKG.pending" 2>/dev/null
+        echo "linbox-debfix: 警告: 新 dpkg 真身暂不可运行（依赖库未就绪），已暂存待依赖就绪后自动晋升" >&2
+        log "dpkg: 新真身自检失败 → 暂存 dpkg.real.pending，保留现有 dpkg.real"
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# normalize_conffiles <树根> — v6.4：gpkg conffiles 尾逗号缺陷修复
+#   gpkg（termux-pacman）构建的 DEBIAN/conffiles 存在尾逗号条目
+#   （pacman 包转换残渣，如实测 glibc_2.44 首行
+#   /data/data/com.termux/.../etc/gai.conf,）。dpkg-deb -b 硬校验
+#   「conffile 必须存在于包内」，尾逗号条目不存在 → 重建直接拒绝
+#   → 钩子 rc=1 → glibc 安装事务整体失败。
+#   规范化：去行尾逗号与两端空白、去空行、剔除树中不存在的条目。
+#   仅在写入成功时替换原文件；任何失败都不影响主流程（保持原文）。
+# ------------------------------------------------------------------
+normalize_conffiles() {
+    _nc_root="$1"
+    _nc_f="$_nc_root/DEBIAN/conffiles"
+    [ -f "$_nc_f" ] || return 0
+    _nc_tmp="$_nc_f.norm.$$"
+    if ! : > "$_nc_tmp" 2>/dev/null; then
+        rm -f "$_nc_tmp" 2>/dev/null
+        return 0
+    fi
+    _nc_fixed=0
+    while IFS= read -r _nc_line || [ -n "$_nc_line" ]; do
+        # 去两端空白 + 行尾逗号（pacman 转换残渣，可重复叠加）
+        _nc_path=$(printf '%s' "$_nc_line" \
+            | sed -e 's/[[:space:]]*$//' -e 's/,$//' -e 's/^[[:space:]]*//')
+        [ -n "$_nc_path" ] || continue
+        # 条目必须在树中存在（conffiles 为绝对路径成员；找不到即
+        # 打包缺陷条目，直接剔除 —— 否则 dpkg-deb -b 拒绝重建）
+        if [ ! -e "$_nc_root/$_nc_path" ]; then
+            _nc_fixed=$((_nc_fixed + 1))
+            continue
+        fi
+        # 行本身被清理过（尾逗号/空白/回车）也计入修正数
+        [ "$_nc_path" = "$_nc_line" ] || _nc_fixed=$((_nc_fixed + 1))
+        printf '%s\n' "$_nc_path" >> "$_nc_tmp"
+    done < "$_nc_f"
+    # 内容有变化才替换（含：原有尾逗号被清理、无效条目被剔除）
+    if ! cmp -s "$_nc_f" "$_nc_tmp"; then
+        if mv -f "$_nc_tmp" "$_nc_f" 2>/dev/null; then
+            echo "linbox-debfix: 提示: conffiles 已规范化（剔除/修正 $_nc_fixed 条无效条目）" >&2
+            log "$base: conffiles 规范化，修正 $_nc_fixed 条"
+        else
+            rm -f "$_nc_tmp" 2>/dev/null
+        fi
+    else
+        rm -f "$_nc_tmp" 2>/dev/null
+    fi
+    return 0
+}
+
+process_one() {
+    deb="$1"
+    [ -f "$deb" ] || return 0
+    case "$deb" in
+        *.deb) ;;
+        *) return 0 ;;
+    esac
+    base=$(basename "$deb")
+    size=$(stat -c %s "$deb" 2>/dev/null || echo 0)
+    mtime=$(stat -c %Y "$deb" 2>/dev/null || echo 0)
+    stamp="$STAMP_DIR/$base.$size.$mtime"
+    # v6.3：termux-x11-nightly 特判——即使记账命中/字节扫描为净
+    # （路径已重写），也必须强制完整处理：重写后的官方客户端引用的
+    # 类名不存在，必须替换为内置客户端（见头部 v6.3 说明）。
+    is_nightly=0
+    if [ "$(dpkg-deb -f "$deb" Package 2>/dev/null)" = "termux-x11-nightly" ]; then
+        is_nightly=1
+    fi
+    if [ -f "$stamp" ]; then
+        # v6 记账三分支：命中也必须字节级验证。"无法验证"绝不当作
+        # 干净——这正是 v5 时代 13 个包静默失败且零警告的唯一分支。
+        if [ "$is_nightly" -eq 1 ]; then
+            log "$base: 记账命中但为 termux-x11-nightly → 强制重处理（换内置客户端）"
+        else
+            scan_deb "$deb"
+            scan_rc=$?
+            if [ "$scan_rc" -eq 0 ]; then
+                log "$base: 记账命中，字节扫描=净 → 跳过（终端不打印，日志必记）"
+                return 0
+            fi
+            if [ "$scan_rc" -eq 1 ]; then
+                echo "linbox-debfix: 警告: $base 已有记账但仍含 com.termux 字节（历史污染章），强制重跑" >&2
+                log "$base: 记账命中但扫描=脏（历史污染章）→ 撕章强制重写"
+            else
+                echo "linbox-debfix: 提示: $base 无法字节级核验（dpkg-deb 异常），按未处理处理，走完整重写" >&2
+                log "$base: 记账命中但扫描器异常 → 按未处理完整重写"
+            fi
+            rm -f "$STAMP_DIR/$base."* 2>/dev/null
+        fi
+    else
+        log "$base: 无记账 → 完整重写"
+    fi
+
+    # 前置校验：重写引擎缺失时走降级（目录改名保底），绝不静默盖章
+    if [ ! -x "$REPREFIX" ]; then
+        echo "linbox-debfix: 警告: linbox-reprefix 不可用，$base 降级为目录改名（内容不改写）" >&2
+    fi
+
+    work=$(mktemp -d "$STAMP_DIR/work.XXXXXX") || {
+        echo "linbox-debfix: 错误: mktemp 失败（磁盘满/权限），$base 未处理（不盖章）" >&2
+        return 1
+    }
+    if ! dpkg-deb -R "$deb" "$work/root" 2>/dev/null; then
+        echo "linbox-debfix: 警告: dpkg-deb -R 解包失败，$base 未重写（不盖章，下次重试）" >&2
+        rm -rf "$work"
+        return 1
+    fi
+    count=0
+    if [ -x "$REPREFIX" ]; then
+        if ! count=$("$REPREFIX" --tree "$work/root" 2>/dev/null); then
+            count=0
+            echo "linbox-debfix: 警告: linbox-reprefix 执行失败，$base 降级为目录改名" >&2
+        fi
+    fi
+    # 目录改名降级保底（v4）：reprefix 正常时上面已把 com.termux 改名，
+    # 本条件不成立；reprefix 缺失/失败/静默失效时这里把官方前缀目录
+    # 改名——dpkg 报 unable to stat 的正是这个目录成员，改名后 unpack
+    # 即可通过。文件内容里的 com.termux 由 reprefix 安全网后续处理。
+    if [ -d "$work/root/data/data/com.termux" ] && [ ! -d "$work/root/data/data/com.linbox" ]; then
+        if mv "$work/root/data/data/com.termux" "$work/root/data/data/com.linbox" 2>/dev/null; then
+            count=$((count + 1))
+            echo "linbox-debfix: $base 已降级改写前缀目录" >&2
+        else
+            echo "linbox-debfix: 错误: $base 目录改名失败，未重写（不盖章）" >&2
+            rm -rf "$work"
+            return 1
+        fi
+    fi
+    # 全树残余改名（v4）：任何名字含 com.termux 的目录/文件（含前缀目录
+    # 改名前 walk 漏掉的深层条目）一并改名，-depth 先子后父防路径失效
+    find "$work/root" -depth -name "*com.termux*" 2>/dev/null | while IFS= read -r p; do
+        np=$(printf '%s' "$p" | sed 's/com\.termux/com.linbox/g')
+        mv "$p" "$np" 2>/dev/null || true
+    done
+    # 树路径残余硬门（v6）：上面三道改名之后树中必须不存在任何名字
+    # 含 com.termux 的条目——这是"成品必净"的根保证（dpkg-deb -b 逐字
+    # 打包这棵树，树净则成品必净）。命中即大声报错，不替换不盖章。
+    if [ -n "$(find "$work/root" -name '*com.termux*' -print -quit 2>/dev/null)" ]; then
+        echo "linbox-debfix: 错误: $base 树中仍有 com.termux 路径残留（不替换不盖章）" >&2
+        rm -rf "$work"
+        return 1
+    fi
+    # 重写引擎复检（v5）：--verify 独立统计树中残留的 com.termux
+    # （目录/文件名+链接目标+文件内容）。路径残留已被上方硬门拦截，
+    # 这里显形的是内容残留（不影响 unpack，大声告警供回传定位）。
+    if [ -x "$REPREFIX" ]; then
+        left=$("$REPREFIX" --verify "$work/root" 2>/dev/null)
+        case "$left" in ''|*[!0-9]*) left=1 ;; esac
+        if [ "$left" -gt 0 ]; then
+            echo "linbox-debfix: 警告: $base 复检发现 $left 处 com.termux 残留（重写引擎部分失效，请回传本行日志）" >&2
+        fi
+    fi
+    # 维护者脚本权限归一（dpkg-deb -b 要求 preinst/postinst/prerm/postrm
+    # 权限在 0555-0775 之间；社区 deb 常有 644 的脚本会直接被打包拒绝）
+    if [ -d "$work/root/DEBIAN" ]; then
+        for s in "$work/root/DEBIAN"/*; do
+            [ -f "$s" ] || continue
+            case "$(basename "$s")" in
+                preinst|postinst|prerm|postrm) chmod 0755 "$s" 2>/dev/null ;;
+                *)                             chmod 0644 "$s" 2>/dev/null ;;
+            esac
+        done
+    fi
+    # v6.4：conffiles 规范化（gpkg 尾逗号缺陷）——必须在 dpkg-deb -b
+    # 之前执行，否则 glibc 等带尾逗条目的包重建必败（详见函数头注释）
+    normalize_conffiles "$work/root"
+    # dpkg 包自升级：同步新真身到 dpkg.real（在 dpkg.real 运行前，安全）
+    sync_dpkg_real "$work/root/data/data/com.linbox/files/usr/bin/dpkg"
+    # v6.3：termux-x11-nightly → 把树内 bin/termux-x11 换成内置客户端。
+    # 主副本由安装器 rev13 部署到 etc/linbox/x11/；缺失时跳过替换
+    # （linbox-x11 运行时自愈 + 存量迁移仍会恢复）。
+    if [ "$is_nightly" -eq 1 ] \
+       && [ -r "$work/root/DEBIAN/control" ] \
+       && grep -q '^Package: termux-x11-nightly' "$work/root/DEBIAN/control" 2>/dev/null; then
+        _x11_master="$PREFIX/etc/linbox/x11/termux-x11"
+        _x11_target="$work/root/data/data/com.linbox/files/usr/bin/termux-x11"
+        if [ -f "$_x11_target" ] && [ -r "$_x11_master" ]; then
+            if cp -f "$_x11_master" "$_x11_target" 2>/dev/null; then
+                chmod 0755 "$_x11_target" 2>/dev/null
+                count=$((count + 1))
+                echo "linbox-debfix: $base 已换用 LinBox 内置 X11 客户端（termux-x11-nightly 特判）" >&2
+                log "$base: bin/termux-x11 已替换为内置客户端（nightly 特判）"
+            else
+                log "$base: 内置客户端替换失败（cp），保持重写版"
+            fi
+        else
+            log "$base: nightly 特判跳过（树内无 bin/termux-x11 或主副本缺失）"
+        fi
+    fi
+    repaired=0
+    if [ "$count" -gt 0 ]; then
+        # v6.4：stderr 落盘不丢弃 —— 失败时回显 dpkg-deb 真实报错首行，
+        # 消灭“只能看到 rc=1 却永远不知道为什么”的可观测黑洞
+        if ! dpkg-deb -b "$work/root" "$work/out.deb" >"$work/build.log" 2>&1; then
+            echo "linbox-debfix: 错误: dpkg-deb -b 重建失败，$base 未重写（不盖章，下次重试）" >&2
+            sed -n '1,5p' "$work/build.log" 2>/dev/null \
+                | sed 's/^/linbox-debfix:   dpkg-deb: /' >&2
+            log "$base: dpkg-deb -b 重建失败: $(head -n 2 "$work/build.log" 2>/dev/null | tr '\n' ' ')"
+            rm -rf "$work"
+            return 1
+        fi
+        rm -f "$work/build.log" 2>/dev/null
+        # 成品回验（v6 路径硬门）：把重建成品再解包一遍，跑与树侧完全
+        # 相同的路径检查——dpkg 报 unable to stat 的是成员路径，这里对
+        # 【成品成员路径】直接负责，不信任 -b 的任何行为。-R 全程只用
+        # 已验证的 dpkg-deb（不依赖外部 tar）。
+        rm -rf "$work/verify"
+        if ! dpkg-deb -R "$work/out.deb" "$work/verify" 2>/dev/null; then
+            echo "linbox-debfix: 错误: $base 重建成品无法解包（不替换不盖章）" >&2
+            rm -rf "$work"
+            return 1
+        fi
+        if [ -n "$(find "$work/verify" -name '*com.termux*' -print -quit 2>/dev/null)" ]; then
+            echo "linbox-debfix: 错误: $base 重建成品仍含 com.termux 成员路径（不替换不盖章）" >&2
+            rm -rf "$work"
+            return 1
+        fi
+        rm -rf "$work/verify"
+        # 成品字节扫描（内容级，不依赖外部 tar）：成员路径已净的前提
+        # 下，内容残留不影响 unpack（由安装后 reprefix 安全网继续处理），
+        # 大声告警供回传定位；扫描器异常时以回验结果为准。
+        scan_deb "$work/out.deb"
+        scan_rc=$?
+        if [ "$scan_rc" -eq 1 ]; then
+            echo "linbox-debfix: 警告: $base 成员路径已净但内容仍含 com.termux 字节（不影响安装，请回传本行日志）" >&2
+        elif [ "$scan_rc" -eq 2 ]; then
+            echo "linbox-debfix: 警告: $base 成品无法字节级核验（扫描器异常），以回验结果为准" >&2
+        fi
+        if ! mv -f "$work/out.deb" "$deb" 2>/dev/null; then
+            echo "linbox-debfix: 错误: $base 回写失败（磁盘/权限），不盖章" >&2
+            rm -rf "$work"
+            return 1
+        fi
+        repaired=1
+    fi
+    : > "$stamp"
+    # 成品章（v4）：处理后 size+mtime 变化，同文件重复调用（如手动
+    # dpkg -i 同一 deb）时官方章不命中会导致反复重建——补盖成品章，
+    # 双章并存：官方章供 apt 缓存复用官方原件场景，成品章供重复调用。
+    size2=$(stat -c %s "$deb" 2>/dev/null || echo 0)
+    mtime2=$(stat -c %Y "$deb" 2>/dev/null || echo 0)
+    if [ "$size2.$mtime2" != "$size.$mtime" ]; then
+        : > "$STAMP_DIR/$base.$size2.$mtime2"
+    fi
+    echo "linbox-debfix v6.4: $base 已重写为 com.linbox 前缀 (count=$count)" >&2
+    log "$base: 重写完成 count=$count repaired=$repaired"
+    echo "LINBOX_REPAIRED=$repaired"
+    rm -rf "$work"
+    return 0
+}
+
+rc=0
+if [ $# -gt 0 ]; then
+    for d in "$@"; do process_one "$d" || rc=1; done
+else
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        process_one "$d" || rc=1
+    done
+fi
+exit $rc
