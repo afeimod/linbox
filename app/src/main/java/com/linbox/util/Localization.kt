@@ -108,10 +108,8 @@ object L10n {
         "衬线" to "Serif",
         "等宽" to "Monospace",
         "预览：LinBox Windows 桌面体验 AaBbCc 123" to "Preview: LinBox desktop AaBbCc 123",
-        "任务栏" to "Taskbar",
         "居中" to "Centered",
         "左对齐" to "Left-aligned",
-        "任务栏图标对齐方式" to "Taskbar icon alignment",
         "Win11 居中风格" to "Win11 centered style",
         "经典靠左风格" to "Classic left-aligned",
 

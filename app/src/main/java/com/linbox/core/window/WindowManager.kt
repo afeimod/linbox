@@ -176,7 +176,7 @@ class WindowManager {
     /**
      * 切换真正的全屏（F11 风格）：
      * - 隐藏窗口标题栏与调整大小手柄
-     * - 让 DesktopEnvironment 隐藏任务栏并把浮动窗口层占满整屏
+     * - 让壳层把浮动窗口层占满整屏
      * 不影响 isMaximized —— 退出全屏后回到原状态
      */
     fun toggleTrueFullscreen(windowId: String) {
@@ -186,7 +186,7 @@ class WindowManager {
         }
     }
 
-    /** 是否有窗口正处于真全屏状态（用于 DesktopEnvironment 隐藏任务栏） */
+    /** 是否有窗口正处于真全屏状态 */
     fun anyTrueFullscreen(): Boolean =
         _windows.any { it.isVisible && it.isTrueFullscreen }
 
@@ -247,22 +247,6 @@ class WindowManager {
             w.prevWidth = nw
             w.prevHeight = nh
             notifyChanged()
-        }
-    }
-
-    /** 任务栏点击某窗口的行为：可见则最小化，最小化则还原+聚焦 */
-    fun taskbarClick(windowId: String) {
-        val w = _windows.firstOrNull { it.id == windowId } ?: return
-        if (w.isMinimized) {
-            focus(windowId)
-        } else {
-            // 如果是顶部窗口，最小化；否则聚焦
-            val topZ = _windows.maxOfOrNull { it.zIndex } ?: 0
-            if (w.zIndex == topZ) {
-                minimize(windowId)
-            } else {
-                focus(windowId)
-            }
         }
     }
 

@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import com.linbox.apps.browser.ZoomPinchLayout
+import com.linbox.core.input.ZoomPinchLayout
 import kotlin.math.abs
 
 /**
@@ -19,7 +19,7 @@ import kotlin.math.abs
  *
  * ⚠️ 判别注入流与真实手指的两个维度：
  * - 原生 View 层（[com.linbox.MainActivity.dispatchTouchEvent]、
- *   [com.linbox.apps.browser.ZoomPinchLayout] 等）：拿到的是未经映射的
+ *   [com.linbox.core.input.ZoomPinchLayout] 等）：拿到的是未经映射的
  *   原始 MotionEvent，直接用 `pointerId >= INJECTED_POINTER_ID` 判定。
  * - Compose 层：Compose 1.6.8 的 MotionEventAdapter 维护
  *   `motionEventToComposePointerIdMap`，把原始 pointerId 映射为内部自增 id
@@ -58,7 +58,7 @@ fun TrackpadGate(
     onTwoFingerTap: ((Offset) -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit
 ) {
-    // onTwoFingerTap 仅为签名兼容保留；回调接线已由 DesktopEnvironment
+    // onTwoFingerTap 仅为签名兼容保留；回调接线原由桌面环境（已移除）
     // 直连 TrackpadRouter.onContextMenu（View 层仲裁输出）。
     Box(modifier = modifier) {
         content()

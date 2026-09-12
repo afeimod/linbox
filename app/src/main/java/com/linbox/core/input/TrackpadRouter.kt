@@ -70,7 +70,7 @@ internal fun LayoutCoordinates.boundsInWindowCompat(): Rect {
  */
 object TrackpadRouter {
 
-    // ===== 配置（DesktopEnvironment 的 SideEffect 同步） =====
+    // ===== 配置（由壳层 LinBoxShell 的 SideEffect 同步） =====
 
     /** 触控板模式总开关（settingsStore.mouseControlMode == "trackpad"） */
     @Volatile
@@ -84,10 +84,10 @@ object TrackpadRouter {
     @Volatile
     var density: Float = 3f
 
-    /** 双指轻点 / 长按右键 → 呼出右键菜单（DesktopEnvironment 直连 openContextMenu） */
+    /** 双指轻点 / 长按右键 → 呼出右键菜单（原桌面直连；现壳层不使用，保留钩子） */
     var onContextMenu: ((Offset) -> Unit)? = null
 
-    /** 被拦截的真实手指事件的通知（DesktopEnvironment 接 AutoLockController） */
+    /** 被拦截的真实手指事件的通知（原桌面接自动锁屏；现壳层不使用） */
     var onUserInteraction: (() -> Unit)? = null
 
     // ===== 直通区注册表（窗口坐标 px；虚拟键盘面板 / 手柄工具条等登记） =====
@@ -107,7 +107,7 @@ object TrackpadRouter {
     }
 
     /**
-     * 模式切换退出触控板时调用（DesktopEnvironment 同步 enabled 前调用）：
+     * 模式切换退出触控板时调用（壳层 LinBoxShell 同步 enabled 前调用）：
      * 撤销进行中的手势会话，释放未完成的注入拖拽流（防"幽灵长按"）。
      */
     fun onDisabled() {

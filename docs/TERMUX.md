@@ -386,14 +386,14 @@ Launcher / 前台服务均不依赖 targetSdk ≥ 29。唯一可见代价：Andr
 
 ---
 
-## 5. LinBox 桌面 ↔ Termux shell 命令桥
+## 5. LinBox 应用 ↔ Termux shell 命令桥
 
 官方 bootstrap 安装完成后，安装器向真实 bash 注入
-`$PREFIX/etc/profile.d/linbox.sh`，提供桌面联动命令：
+`$PREFIX/etc/profile.d/linbox.sh`，提供联动命令：
 
 | shell 命令 | 效果 |
 |-----------|------|
-| `theme win95\|xp\|win7\|win10\|win11` | 切换 LinBox 桌面主题 |
+| `theme win95\|xp\|win7\|win10\|win11` | 切换窗口主题 |
 | `start browser`（或 files/notepad/calc/settings/music…） | 打开对应 LinBox 应用 |
 | `apps` | 列出可打开的应用 |
 | `open <url>` | 用 LinBox 浏览器打开网址 |
@@ -455,7 +455,7 @@ grun-install <deb>         # 安装 glibc 版 .deb
 # - 官方源 deb 由 dpkg 包装器自动重打包为 com.linbox 前缀（见 §2.4）；
 #   path-exclude 双保险跳过漏网的 com.termux 成员（fix8）
 
-# LinBox 桌面联动
+# LinBox 联动命令
 theme win11
 start music
 open https://github.com
@@ -518,7 +518,7 @@ app/src/main/
 │       ├── TermuxEnvironment.kt           # 路径/环境变量/架构
 │       ├── TermuxBootstrapInstaller.kt    # 安装器+路径重写引擎
 │       ├── TermuxSessionController.kt     # 会话+双 Client 接口实现
-│       ├── LinBoxShellBridge.kt           # shell→桌面命令桥
+│       ├── LinBoxShellBridge.kt           # shell→应用命令桥
 │       └── (TermuxBridge.kt 位于 termux/terminal/)
 ├── assets/termux/
 │   ├── bootstrap-aarch64.zip      # 官方 bootstrap（SHA-256 校验）

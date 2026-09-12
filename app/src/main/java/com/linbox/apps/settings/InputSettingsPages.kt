@@ -146,10 +146,9 @@ internal fun MouseSettingsPage(onBack: () -> Unit) {
     val cursorEnabled by app.settingsStore.mouseCursorEnabled.collectAsState(initial = true)
     val cursorTheme by app.settingsStore.mouseCursorTheme.collectAsState(initial = "white")
     val cursorSize by app.settingsStore.mouseCursorSize.collectAsState(initial = 26f)
-    val clickMode by app.settingsStore.mouseClickMode.collectAsState(initial = "single")
     val rightClick by app.settingsStore.mouseRightClick.collectAsState(initial = "twofinger")
     val speed by app.settingsStore.mousePointerSpeed.collectAsState(initial = 1.0f)
-    // v2.18 指针移动方式：touch 跟随手指 / trackpad 触控板
+    // 指针移动方式：touch 跟随手指 / trackpad 触控板
     val controlMode by app.settingsStore.mouseControlMode.collectAsState(initial = "touch")
 
     SubPageHeader("鼠标设置", onBack)
@@ -246,21 +245,6 @@ internal fun MouseSettingsPage(onBack: () -> Unit) {
             }
         }
 
-        // ===== 打开方式 =====
-        SettingsBlock("图标打开方式") {
-            SegmentedControl(
-                options = listOf("single" to "单击打开", "double" to "双击打开"),
-                selected = clickMode
-            ) { mode -> scope.launch { app.settingsStore.setMouseClickMode(mode) } }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (clickMode == "single") "单击桌面图标立即打开（触屏推荐，Windows 平板默认）"
-                else "双击桌面图标打开（经典桌面鼠标习惯；触控板模式默认此项）",
-                color = theme.secondaryTextColor,
-                fontSize = 11.sp
-            )
-        }
-
         // ===== 右键手势 =====
         SettingsBlock("右键手势") {
             SegmentedControl(
@@ -269,8 +253,8 @@ internal fun MouseSettingsPage(onBack: () -> Unit) {
             ) { mode -> scope.launch { app.settingsStore.setMouseRightClick(mode) } }
             Spacer(Modifier.height(6.dp))
             Text(
-                if (rightClick == "twofinger") "双指轻点桌面/图标弹出右键菜单（默认）"
-                else "单指按住约 0.5 秒弹出右键菜单",
+                if (rightClick == "twofinger") "双指轻点触发右键（触控板模式，默认）"
+                else "单指按住约 0.5 秒触发右键（触控板模式）",
                 color = theme.secondaryTextColor,
                 fontSize = 11.sp
             )

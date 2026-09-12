@@ -2,56 +2,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- v2.22.2 内置 X11 桌面：termux-x11 模块 minSdk=26 高于宿主 24，
+    <!-- 内置 X11 图形：termux-x11 模块 minSdk=26 高于宿主 24，
          与参考实现一致地放行库最低版本（X11 显示端建议 Android 8.0+） -->
     <uses-sdk tools:overrideLibrary="com.termux.x11" />
 
+    <!-- 终端网络（apt/pkg 下载）与 X11 转发 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 终端访问共享存储（/sdcard） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- 虚拟键盘 / 虚拟手柄按键触觉反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.SET_WALLPAPER" />
-    <!-- 用于直接访问 /storage/emulated/0 真实文件系统（文件资源管理器） -->
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
-    <!-- 蓝牙开关（v2.10 快速设置面板）：旧版本静态权限 + Android 12+ 运行时权限 -->
-    <uses-permission android:name="android.permission.BLUETOOTH"
-        android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
-        android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- v2.12 设置中心真实化：蓝牙扫描发现设备（Android 12+） -->
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="s" />
-    <!-- v2.12：网络状态/ Wi-Fi 扫描与开关 -->
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <!-- v2.12：写系统亮度（需用户在“修改系统设置”页授权） -->
-    <uses-permission android:name="android.permission.WRITE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
 
-    <!-- v2.21 桌面歌词：系统悬浮窗（需用户在设置页授予「显示在应用上层」）+ 前台服务 -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- X11 会话前台常驻服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- v2.17 开始菜单读取手机应用：声明查询带启动入口的应用（Android 11+ 包可见性）。
-         作为 Launcher 使用 MAIN/LAUNCHER intent-filter 查询，无需 QUERY_ALL_PACKAGES 宽限权限 -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent>
-    </queries>
 
     <application
         android:name=".LinBoxApp"
@@ -79,24 +47,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
-        <!-- v2.21 桌面歌词悬浮窗前台服务（specialUse：桌面歌词常驻显示）
-             v2.21.2：stopWithTask —— 播放器关闭/任务划掉时服务随之停止，桌面歌词不再常驻 -->
-        <service
-            android:name="com.linbox.apps.music.LyricOverlayService"
-            android:exported="false"
-            android:stopWithTask="true"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Desktop lyric overlay" />
-        </service>
-
-        <!-- v2.22.4 fix11c：X11 会话前台常驻（防止 X server/App 后台被冻结杀死）。
+        <!-- X11 会话前台常驻（防止 X server/App 后台被冻结杀死）。
              会话结束（linbox-x11-stop / X server 进程死亡）时服务自动退出。 -->
         <service
             android:name="com.linbox.apps.x11.X11KeepAliveService"
@@ -106,17 +60,6 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="X11 session keep alive" />
         </service>
-
-        <!-- FileProvider：用于安全地共享真实文件（图片、APK、视频等）给系统 Intent -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
     </application>
 
 </manifest>

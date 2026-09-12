@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.preference.PreferenceManager
-import androidx.room.Room
-import com.linbox.data.db.AppDatabase
 import com.linbox.data.prefs.SettingsStore
 import com.linbox.core.theme.ThemeManager
 import com.linbox.apps.x11.X11WindowController
@@ -20,13 +18,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * 应用入口：初始化 Room DB、ThemeManager、SettingsStore 等单例。
+ * 应用入口：初始化 ThemeManager、SettingsStore 等单例。
  *
  * 内置应用在 [registerApps] 中注册到 AppRegistry，由各 App 文件实现。
  */
 class LinBoxApp : Application() {
 
-    lateinit var database: AppDatabase
     lateinit var themeManager: ThemeManager
     lateinit var settingsStore: SettingsStore
 
@@ -78,14 +75,10 @@ class LinBoxApp : Application() {
         super.onCreate()
         instance = this
 
-        database = Room.databaseBuilder(this, AppDatabase::class.java, AppDatabase.NAME)
-            .fallbackToDestructiveMigration()
-            .build()
-
         themeManager = ThemeManager(this)
         settingsStore = SettingsStore(this)
 
-        // v2.22.2 fix9.6：X11 偏好提前就位 —— 桌面窗口内的 LorieView
+        // v2.22.2 fix9.6：X11 偏好提前就位 —— X11 窗口内的 LorieView
         // （onMeasure/getDimensionsFromSettings/onCreateInputConnection）
         // 读取静态 prefs，不等 X11 Activity 创建，避免 NPE 与测量错误。
         LoriePreferences.prefs = Prefs(this)

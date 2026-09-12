@@ -32,7 +32,6 @@ val SimpleTerminalApp = AppDef(
     launchMode = LaunchMode.FLOATING,
     defaultWidth = 640.dp,
     defaultHeight = 400.dp,
-    pinnedToDesktop = false
 ) { scope ->
     SimpleTerminalContent(scope)
 }

@@ -1,4 +1,4 @@
-package com.linbox.apps.browser
+package com.linbox.core.input
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -8,7 +8,6 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
-import com.linbox.core.input.INJECTED_POINTER_ID
 import com.linbox.core.input.gamepad.GamepadController
 import kotlin.math.abs
 import kotlin.math.sqrt

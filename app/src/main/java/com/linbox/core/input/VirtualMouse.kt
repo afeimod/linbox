@@ -35,7 +35,7 @@ import kotlin.math.roundToInt
  * - 点击动画：快速轻点时在指针热点处播放一次扩散涟漪。
  * - 主题/大小：白(经典) / 黑 / 蓝 / 绿 四种主题，16..48dp 缩放。
  * - 单击/双击打开、双指/长按右键等行为设置见 SettingsStore：
- *   mouseClickMode / mouseRightClick（由 DesktopIconGrid / DesktopEnvironment 消费）。
+ *   mouseRightClick（由触控板路由器消费）。
  */
 object MouseController {
 
@@ -151,7 +151,7 @@ internal fun DrawScope.drawCursor(path: Path, theme: MouseCursorTheme, strokePx:
 }
 
 // ============================================================
-// 指针覆盖层（DesktopEnvironment 顶层挂载，最上层）
+// 指针覆盖层（壳层顶层挂载，最上层）
 // ============================================================
 
 /**

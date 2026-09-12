@@ -41,13 +41,6 @@ object ThemeOverlay {
         if (theme.isDark == wantDark) return theme
         return theme.copy(
             isDark = wantDark,
-            // 桌面图标文字：深浅模式下始终用高对比色（浅底黑字 / 深底白字）
-            desktopIconTextColor = if (wantDark) Color.White else Color.Black,
-            taskbarColor = theme.taskbarColor.invertLuminance(),
-            taskbarStartButtonColor = theme.taskbarStartButtonColor,
-            taskbarIconColor = if (wantDark) Color.White else Color.Black,
-            taskbarClockColor = if (wantDark) Color.White else Color.Black,
-            startMenuColor = theme.startMenuColor.invertLuminance(),
             windowTitleBarColor = theme.windowTitleBarColor.invertLuminance(),
             windowTitleBarTextColor = if (wantDark) Color.White else Color.Black,
             windowBackgroundColor = theme.windowBackgroundColor.invertLuminance(),
@@ -81,9 +74,6 @@ object ThemeOverlay {
             else -> return theme
         }
         return theme.copy(
-            desktopIconTextColor = c,
-            taskbarIconColor = c,
-            taskbarClockColor = c,
             windowTitleBarTextColor = c,
             buttonTextColor = c,
             secondaryTextColor = c.copy(alpha = 0.7f)

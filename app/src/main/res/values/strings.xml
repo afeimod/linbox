@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LinBox</string>
-    <string name="app_desc">Windows-style Android Desktop Launcher</string>
+    <string name="app_desc">Termux terminal + X11 graphics for Android</string>
 
     <!-- ========== Termux 终端移植（terminal-view, Apache-2.0） ========== -->
     <string name="paste_text">粘贴</string>

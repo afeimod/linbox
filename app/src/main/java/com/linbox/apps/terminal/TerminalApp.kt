@@ -54,7 +54,6 @@ val TerminalApp = AppDef(
     launchMode = LaunchMode.FLOATING,
     defaultWidth = 720.dp,
     defaultHeight = 560.dp,
-    pinnedToDesktop = true
 ) { scope ->
     TerminalContent(scope)
 }
@@ -65,7 +64,7 @@ private fun TerminalContent(scope: WindowContentScope) {
     val installState by TermuxBootstrapInstaller.state.collectAsState()
 
     // v2.22.3（fix9.11）：窗口关闭 → 结束会话（最后一个终端窗口时）。
-    // 与 BrowserApp 的窗口资源清理同模式：WindowState.onClose 由
+    // 与 X11App 的窗口资源清理同模式：WindowState.onClose 由
     // WindowManager.close 触发；赋值幂等，重组重复执行无副作用。
     scope.windowState.onClose = { TermuxTerminalHolder.closeSessionIfLastWindow() }
 
