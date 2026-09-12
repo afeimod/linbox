@@ -92,6 +92,34 @@ _linbox_ensure_dpkg_fix() {
 _linbox_ensure_dpkg_fix
 unset -f _linbox_ensure_dpkg_fix
 
+# --------------------------------------------------------------
+# fix12: pkg 镜像自动兜底 —— 源下载 403/失败时，调 linbox-mirror
+# --force 双验证体检换源（Release 头 + 真实 .deb 分段下载），
+# 换源成功后自动重试原命令一次。
+# 正常路径零改动：输出经 tee 实时透传（交互确认提示不被吞），
+# 仅在输出命中失败特征时介入；重试走 command pkg 原身，不再嵌套。
+# --------------------------------------------------------------
+_linbox_ensure_pkg_mirror_guard() {
+    [ -x "$PREFIX/bin/pkg" ] || return 0
+    pkg() {
+        _lg_tmp="${TMPDIR:-$PREFIX/tmp}/linbox-pkg.$$.log"
+        command pkg "$@" 2>&1 | tee "$_lg_tmp"
+        if grep -qiE '403|Failed to fetch' "$_lg_tmp" 2>/dev/null \
+           && [ -x "$PREFIX/bin/linbox-mirror" ]; then
+            echo "linbox: 软件源下载失败（403/网络），自动体检换源后重试…"
+            if linbox-mirror --force; then
+                echo "linbox: 重试: pkg $*"
+                command pkg "$@"
+            else
+                echo "linbox: 自动换源未通过验证，请检查网络后手动运行 linbox-mirror" >&2
+            fi
+        fi
+        rm -f "$_lg_tmp"
+    }
+}
+_linbox_ensure_pkg_mirror_guard
+unset -f _linbox_ensure_pkg_mirror_guard
+
 LINBOX_CMD_FIFO="$PREFIX/var/linbox.cmd"
 
 _linbox_send() {

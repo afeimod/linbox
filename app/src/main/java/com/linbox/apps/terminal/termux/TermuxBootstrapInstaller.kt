@@ -285,7 +285,7 @@ object TermuxBootstrapInstaller {
     //   个 root，root 不动）+ 对抗上限（钉满 4 轮仍被改回 → 放手）+
     //   缩屏下限（≥握手面积 50%）。脚本侧同步：--x11-diag logcat 采样
     //   加深至 -t 20000（旧 -t 240 抓不到完整决策链）。
-    private const val EXTRAS_REVISION = 38
+    private const val EXTRAS_REVISION = 39
 
     /** 安装状态（Compose 界面订阅渲染）。 */
     sealed class InstallState {
