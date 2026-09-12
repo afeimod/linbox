@@ -34,6 +34,7 @@ import com.linbox.core.shell.ShellController
 import com.linbox.LinBoxApp
 import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
+import com.termux.x11.Prefs
 import com.termux.x11.X11InputHub
 import com.termux.x11.input.InputStub
 import kotlinx.coroutines.Dispatchers
@@ -59,8 +60,9 @@ private const val TAG_X11 = "X11Surface"
  * - v2.25：底边控制条已移除 —— 原功能（键盘/游戏全屏/虚拟手柄/全屏/
  *   X11 设置/回终端）全部收编进玻璃悬浮球（X11Overlay.X11GlassFab），
  *   X11 设置面板对齐 termux-x11 LoriePreferences 完善为全量条目；
- * - 智能鼠标桥（SmartTouchBridge）：触摸→真实鼠标事件，wine 游戏
- *   兼容（双击吸附/按住拖拽/双指右键/滚轮）；
+ * - 触摸方式（termux-x11 touchMode，X11 设置面板切换即时生效）:
+ *   触控板（虚拟光标）/ 模拟触摸屏（双击吸附/按住拖拽/双指右键/滚轮）/
+ *   直接触摸（XI2 多点触摸直注）—— SmartTouchBridge 输入策略切换；
  * - 虚拟手柄：悬浮 GamepadOverlay 按键经 X11InputHub 桥直注 X；
  * - 附加键盘栏（showAdditionalKbd）：画面底部 ESC/方向键玻璃键行，
  *   点按直注 X。
@@ -121,6 +123,8 @@ fun X11Screen() {
             X11FitClient.stop()
             lorieViewRef = null
             X11ResolutionLink.attachView(null)
+            // 触摸桥注册一并注销（防泄漏 + 防设置面板下发到已分离视图）
+            SmartTouchBridge.activeBridge = null
             // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
             X11WindowController.detachView(userClosed = true)
@@ -211,6 +215,8 @@ fun X11Screen() {
     LaunchedEffect(settingsShowing) {
         if (!settingsShowing) {
             prefs?.let { touchBridge?.setPreferScancodes(it.preferScancodes.get()) }
+            // 触摸方式等偏好兜底下发（面板内每次改动已即时下发）
+            SmartTouchBridge.applyTouchPrefs()
         }
     }
 
@@ -244,7 +250,13 @@ fun X11Screen() {
 
                     val bridge = SmartTouchBridge(ctx, lv)
                     // v2.25：同步"首选扫描码"偏好（设置面板切换后面板关闭时机再同步）
-                    LoriePreferences.prefs?.let { bridge.setPreferScancodes(it.preferScancodes.get()) }
+                    // v2.26：触摸方式/触控板参数一并初始化，并注册活跃桥 ——
+                    // 设置面板改触摸偏好后经 SmartTouchBridge.applyTouchPrefs 即时下发
+                    LoriePreferences.prefs?.let { p ->
+                        bridge.setPreferScancodes(p.preferScancodes.get())
+                        bridge.reloadTouchPrefs(p)
+                    }
+                    SmartTouchBridge.activeBridge = bridge
                     touchBridge = bridge
 
                     lv.setCallback { surfaceW, surfaceH, screenW, screenH ->
@@ -400,10 +412,61 @@ private fun WaitingPanel(state: X11WindowController.State) {
  *
  * 坐标变换：视图像素 ×(X屏幕/视图) = X 坐标；固定分辨率模式下
  * LorieView 信箱缩放，比例恒等映射，无偏移。
+ *
+ * v2.26：触摸方式真实落地（termux-x11 touchMode）—— 上述手势映射属于
+ * "模拟触摸屏"方式；触控板/直接触摸见 onTouchTrackpad / onTouchDirect。
+ * LinBox 的 X11 触摸事件全部经本桥进入 X（上游 TouchInputHandler 未接线），
+ * 偏好变更经 X11 设置面板 → applyTouchPrefs 即时切换输入策略。
  */
-private class SmartTouchBridge(private val context: Context, private val view: LorieView) {
+internal class SmartTouchBridge(private val context: Context, private val view: LorieView) {
     private val renderData = com.termux.x11.input.RenderData()
     private val keySender = com.termux.x11.input.InputEventSender(view)
+
+    companion object {
+        // 触摸方式取值（对齐 termux-x11 touchscreenInputModesValues）
+        const val TOUCH_TRACKPAD = 1
+        const val TOUCH_SIMULATED = 2
+        const val TOUCH_DIRECT = 3
+
+        /** 活跃桥：设置面板修改触摸偏好后经 [applyTouchPrefs] 即时下发。 */
+        @Volatile var activeBridge: SmartTouchBridge? = null
+
+        /** 把 LoriePreferences 的触摸偏好（方式/触控板缩放/轻点拖拽）下发到活跃桥。 */
+        fun applyTouchPrefs() {
+            val p = LoriePreferences.prefs ?: return
+            activeBridge?.reloadTouchPrefs(p)
+        }
+    }
+
+    // ---- 触摸偏好（termux-x11：touchMode / scaleTouchpad / tapToMove） ----
+    private var touchMode = TOUCH_SIMULATED
+    private var scaleTouchpad = true
+    private var tapToMove = false
+
+    // 触控板虚拟光标（X 屏幕坐标；-1 = 未初始化，首次触摸置于屏幕中心）
+    private var padX = -1
+    private var padY = -1
+
+    /** 轻点拖拽（tapToMove）：左键已按下、等待"再轻点"释放。 */
+    private var padPressed = false
+
+    /**
+     * 从偏好同步触摸方式与触控板参数（真实生效：本桥是 LinBox X11 的
+     * 触摸事件入口，等效上游 TouchInputHandler.reloadPreferences）。
+     * 方式切换时释放悬挂的按压/手势状态，防止旧模式的左键"按住不放"。
+     */
+    fun reloadTouchPrefs(p: Prefs) {
+        val newMode = p.touchMode.get().toIntOrNull() ?: TOUCH_SIMULATED
+        if (newMode != touchMode) {
+            if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
+            if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
+            mode = Mode.IDLE
+            padX = -1; padY = -1
+        }
+        touchMode = newMode
+        scaleTouchpad = p.scaleTouchpad.get()
+        tapToMove = p.tapToMove.get()
+    }
 
     // 视图→X 坐标变换参数
     private var surfaceW = 0
@@ -486,6 +549,19 @@ private class SmartTouchBridge(private val context: Context, private val view: L
 
     fun onTouch(event: MotionEvent): Boolean {
         if (!LorieView.connected() || screenW <= 0 || screenH <= 0) return true
+        // 触摸方式分发（termux-x11 touchMode；X11 设置面板切换后即时生效）
+        return when (touchMode) {
+            TOUCH_TRACKPAD -> onTouchTrackpad(event)
+            TOUCH_DIRECT -> onTouchDirect(event)
+            else -> onTouchSimulated(event)
+        }
+    }
+
+    /**
+     * 模式 2 —— 模拟触摸屏（termux-x11 "Simulated touchscreen"）：
+     * 手指位置即鼠标位置（按下即左键、拖拽跟随、双击吸附、双指右键/滚轮）。
+     */
+    private fun onTouchSimulated(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 mode = Mode.ONE
@@ -579,6 +655,126 @@ private class SmartTouchBridge(private val context: Context, private val view: L
                     sendButton(InputStub.BUTTON_LEFT, false)
                     pressedLeft = false
                 }
+                mode = Mode.IDLE
+            }
+        }
+        return true
+    }
+
+    /**
+     * 模式 3 —— 直接触摸（termux-x11 "Direct touch"）：
+     * 原始多点触摸不经手势转换，按 XI2 Touch 事件直注 X（坐标经
+     * renderData 视图→X 屏幕变换）—— 触摸类游戏/应用获得真实多点触摸，
+     * X server 同时向老程序模拟鼠标（xinput 保真，等效上游 NullInputStrategy）。
+     */
+    private fun onTouchDirect(event: MotionEvent): Boolean {
+        keySender.sendTouchEvent(event, renderData)
+        return true
+    }
+
+    /**
+     * 模式 1 —— 触控板（termux-x11 "Trackpad"）：
+     * 手指滑动 = 虚拟光标相对移动（scaleTouchpad 开启时位移按视图→X
+     * 屏幕拉伸比例放大，与上游 TouchInputHandler 一致）；
+     * 轻点 = 左键单击；tapToMove（轻点拖拽）= 轻点按下左键、移动拖拽、
+     * 再轻点释放；双指轻点 = 右键单击；双指滑动 = 滚轮。
+     */
+    private fun onTouchTrackpad(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                mode = Mode.ONE
+                downX = event.x; downY = event.y
+                curX = downX; curY = downY
+                downAt = android.os.SystemClock.uptimeMillis()
+                moved = false
+                if (padX < 0 || padY < 0) { padX = screenW / 2; padY = screenH / 2 }
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (mode == Mode.ONE && event.pointerCount >= 2) {
+                    mode = Mode.TWO
+                    twoStartAt = android.os.SystemClock.uptimeMillis()
+                    twoMoved = false
+                    scrollAccum = 0f
+                    lastTwoY = (event.getY(0) + event.getY(1)) / 2f
+                    // 拖拽中落下第二根手指 → 结束拖拽（真实触控板习惯）
+                    if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
+                }
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                when (mode) {
+                    Mode.ONE -> {
+                        val dx = event.x - curX
+                        val dy = event.y - curY
+                        curX = event.x; curY = event.y
+                        if (!moved) {
+                            val ddx = curX - downX
+                            val ddy = curY - downY
+                            moved = ddx * ddx + ddy * ddy > slopPx * slopPx
+                        }
+                        // 相对位移 → X 屏幕（scaleTouchpad：按拉伸比例放大，对齐上游）
+                        val mulX = if (scaleTouchpad) scaleX else 1f
+                        val mulY = if (scaleTouchpad) scaleY else 1f
+                        padX = (padX + dx * mulX).toInt().coerceIn(0, (screenW - 1).coerceAtLeast(0))
+                        padY = (padY + dy * mulY).toInt().coerceIn(0, (screenH - 1).coerceAtLeast(0))
+                        sendMoveX(padX, padY)
+                    }
+                    Mode.TWO -> {
+                        if (event.pointerCount >= 2) {
+                            val avgY = (event.getY(0) + event.getY(1)) / 2f
+                            val dy = (lastTwoY - avgY) * scaleY // 双指上滑 → 滚轮下滚
+                            lastTwoY = avgY
+                            if (kotlin.math.abs(dy) > 0.5f) twoMoved = true
+                            scrollAccum += dy
+                            if (kotlin.math.abs(scrollAccum) >= wheelStep) {
+                                val steps = (scrollAccum / wheelStep).toInt()
+                                view.sendMouseWheelEvent(0f, steps * wheelStep)
+                                scrollAccum -= steps * wheelStep
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (mode == Mode.TWO) {
+                    // 双指轻点（未滑动、时间短）→ 右键单击（落在虚拟光标处）
+                    if (!twoMoved && android.os.SystemClock.uptimeMillis() - twoStartAt < 320L) {
+                        sendMoveX(padX, padY)
+                        sendButton(InputStub.BUTTON_RIGHT, true)
+                        sendButton(InputStub.BUTTON_RIGHT, false)
+                    }
+                    mode = Mode.TWO_DONE
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                if (mode == Mode.ONE) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (!moved && now - downAt <= tapMaxMs) {
+                        if (tapToMove) {
+                            // 轻点拖拽：轻点=按下（随后移动即拖拽），再轻点=释放
+                            if (padPressed) {
+                                sendButton(InputStub.BUTTON_LEFT, false)
+                                padPressed = false
+                            } else {
+                                sendButton(InputStub.BUTTON_LEFT, true)
+                                padPressed = true
+                            }
+                        } else {
+                            // 轻点 = 左键单击
+                            sendButton(InputStub.BUTTON_LEFT, true)
+                            sendButton(InputStub.BUTTON_LEFT, false)
+                        }
+                    }
+                }
+                mode = Mode.IDLE
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
                 mode = Mode.IDLE
             }
         }

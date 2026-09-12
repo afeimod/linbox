@@ -579,6 +579,12 @@ private fun GlassFab(
             FabItem("虚拟手柄", "柄", active = gamepadEnabled,
                 onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },
                 onLongClick = { GamepadController.settingsOpen = true }),
+            // v2.26：原虚拟手柄右上角迷你工具条 ⚙ 设置收编进悬浮球 ——
+            // GamepadSettingsWindow 在 LinBoxShell 顶层组合，任意界面单击即弹
+            FabItem("手柄设置", "🎮") {
+                GamepadController.releaseAllKeys()
+                GamepadController.settingsOpen = true
+            },
             FabItem("X11 桌面", "X") { onOpenX11() },
             FabItem("设置", "⚙") { onOpenSettings() }
         )

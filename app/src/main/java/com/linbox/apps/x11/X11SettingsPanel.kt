@@ -65,6 +65,9 @@ import kotlinx.coroutines.flow.StateFlow
  * - 【键盘】附加键盘栏（showAdditionalKbd → X11 界面底部 ESC/方向键行，
  *   经 X11InputHub 直注 X）、首选扫描码（preferScancodes）、
  *   强制字符输入（enforceCharBasedInput，LorieView 原生消费）；
+ * - 【触摸】触摸方式（touchMode：触控板/模拟触摸屏/直接触摸，
+ *   SmartTouchBridge 输入策略实时切换，真实生效）、触控板缩放
+ *   （scaleTouchpad）、轻点拖拽（tapToMove）；
  * - 【剪贴板】双向同步（clipboardEnable）；
  * - 【操作】重新应用游戏分辨率握手、游戏全屏（Alt+Enter）。
  *
@@ -158,6 +161,10 @@ fun X11SettingsDialog() {
     var clipboard by remember { mutableStateOf(prefs.clipboardEnable.get()) }
     var scancodes by remember { mutableStateOf(prefs.preferScancodes.get()) }
     var charInput by remember { mutableStateOf(prefs.enforceCharBasedInput.get()) }
+    // 触摸方式与触控板参数（termux-x11 touchMode/scaleTouchpad/tapToMove）
+    var touchMode by remember { mutableStateOf(prefs.touchMode.get().toIntOrNull() ?: 2) }
+    var padScale by remember { mutableStateOf(prefs.scaleTouchpad.get()) }
+    var tapMove by remember { mutableStateOf(prefs.tapToMove.get()) }
     var resError by remember { mutableStateOf(false) }
 
     val labelColor = theme.windowTitleBarTextColor
@@ -422,6 +429,72 @@ fun X11SettingsDialog() {
                     labelColor = labelColor, accent = accent,
                     hintColor = hintColor
                 )
+
+                HorizontalDivider(color = dividerColor)
+
+                // ================= 触摸（termux-x11 touchMode） =================
+                SectionTitle("触摸", labelColor)
+
+                // ---- 触摸方式（1=触控板 2=模拟触摸屏 3=直接触摸） ----
+                Text("触摸方式", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = labelColor)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(
+                        2 to "模拟触摸",  // Simulated touchscreen（原默认行为）
+                        1 to "触控板",    // Trackpad
+                        3 to "直接触摸"   // Direct touch
+                    ).forEach { (v, label) ->
+                        TextButton(
+                            onClick = {
+                                touchMode = v
+                                prefs.touchMode.put(v.toString())
+                                // 即时下发到活跃 SmartTouchBridge —— 输入策略真实切换
+                                SmartTouchBridge.applyTouchPrefs()
+                            },
+                            colors = modeColors(touchMode == v, accent, labelColor),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) { Text(label, fontSize = 11.sp) }
+                    }
+                }
+                Text(
+                    text = when (touchMode) {
+                        1 -> "触控板：手指相对移动虚拟光标；轻点=左键单击，双指轻点=右键，双指滑动=滚轮"
+                        3 -> "直接触摸：触摸按 X 触摸事件直注（多点触摸），触摸类游戏/应用真实可用"
+                        else -> "模拟触摸屏：手指位置即鼠标位置，按下/拖拽/双击吸附/双指右键/滚轮"
+                    },
+                    fontSize = 9.sp,
+                    color = hintColor,
+                    lineHeight = 12.sp
+                )
+
+                // ---- 触控板专属参数（仅触控板方式显示，切换后即时生效） ----
+                if (touchMode == 1) {
+                    SettingSwitch(
+                        title = "触控板缩放",
+                        desc = "光标位移按画面拉伸比例放大（关闭 = 手指 1:1 位移，对齐上游 scaleTouchpad）",
+                        checked = padScale,
+                        enabled = true,
+                        onChecked = {
+                            padScale = it
+                            prefs.scaleTouchpad.put(it)
+                            SmartTouchBridge.applyTouchPrefs()
+                        },
+                        labelColor = labelColor, accent = accent,
+                        hintColor = hintColor
+                    )
+                    SettingSwitch(
+                        title = "轻点拖拽",
+                        desc = "轻点=按下左键，移动=拖拽，再轻点=释放（对齐上游 tapToMove）",
+                        checked = tapMove,
+                        enabled = true,
+                        onChecked = {
+                            tapMove = it
+                            prefs.tapToMove.put(it)
+                            SmartTouchBridge.applyTouchPrefs()
+                        },
+                        labelColor = labelColor, accent = accent,
+                        hintColor = hintColor
+                    )
+                }
 
                 HorizontalDivider(color = dividerColor)
 

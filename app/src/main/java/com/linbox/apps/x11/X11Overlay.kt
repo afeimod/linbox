@@ -140,6 +140,11 @@ fun X11GlassFab(
             X11FabItem("虚拟手柄", "柄", active = gamepadEnabled,
                 onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },
                 onLongClick = { GamepadController.settingsOpen = true }),
+            // v2.26：原虚拟手柄右上角迷你工具条 ⚙ 设置收编进悬浮球
+            X11FabItem("手柄设置", "🎮") {
+                GamepadController.releaseAllKeys()
+                GamepadController.settingsOpen = true
+            },
             X11FabItem(if (fullscreen) "退出全屏" else "全屏", "□") { onToggleFullscreen() },
             X11FabItem("X11 设置", "⚙") { onOpenSettings() },
             X11FabItem("回终端", "⌂") { onBackToTerminal() }

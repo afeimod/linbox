@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -152,6 +154,28 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
                 onDismiss = { GamepadController.settingsOpen = false },
                 onDrag = { delta -> applyWindowDrag(delta) }
             )
+
+            // ===== 编辑模式（v2.26：原右上角迷你工具条 ✎ 收编进设置窗，
+            //      悬浮球「手柄设置」进来也能直接切换编辑） =====
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("编辑模式", color = Color(0xFFE2F5FF), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("开启后直接拖动手柄元素，元素右上角角标删除", color = Color(0xFF6E8FA5), fontSize = 10.sp)
+                }
+                Spacer(Modifier.width(8.dp))
+                Switch(
+                    checked = GamepadController.editMode,
+                    onCheckedChange = { on ->
+                        GamepadController.releaseAllKeys()
+                        GamepadController.editMode = on
+                        if (!on) GamepadController.selectElement(null)
+                    },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF2DD4BF))
+                )
+            }
 
             Column(
                 modifier = Modifier
