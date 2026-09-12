@@ -1,24 +1,22 @@
 package com.linbox.apps.x11
 
 import android.content.Context
+import android.content.pm.ActivityInfo
+import android.os.Build
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.Display
-import android.view.inputmethod.InputMethodManager
+import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.core.shell.ShellController
@@ -36,7 +35,10 @@ import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
 import com.termux.x11.X11InputHub
 import com.termux.x11.input.InputStub
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG_X11 = "X11Surface"
 
@@ -50,26 +52,45 @@ private const val TAG_X11 = "X11Surface"
  *
  * 渲染与交互：
  * - 画面渲染在 LorieView（native 跟随窗口 / exact+stretch 拉伸铺满，
- *   均无黑边）；返回键先退控制条全屏，再退回终端主页；
- * - 分辨率"跟随窗口"（native）或"固定分辨率"（exact）随时切换；
- * - 控制条提供：键盘 / 游戏全屏（Alt+Enter）/ 虚拟手柄开关 / 设置面板；
+ *   均无黑边）；返回键先退真全屏，再退回终端主页；
+ * - 分辨率"跟随窗口"（native）/"缩放"（scaled）/"固定分辨率"（exact）
+ *   随时切换；
+ * - v2.25：底边控制条已移除 —— 原功能（键盘/游戏全屏/虚拟手柄/全屏/
+ *   X11 设置/回终端）全部收编进玻璃悬浮球（X11Overlay.X11GlassFab），
+ *   X11 设置面板对齐 termux-x11 LoriePreferences 完善为全量条目；
  * - 智能鼠标桥（SmartTouchBridge）：触摸→真实鼠标事件，wine 游戏
  *   兼容（双击吸附/按住拖拽/双指右键/滚轮）；
- * - 虚拟手柄：悬浮 GamepadOverlay 按键经 X11InputHub 桥直注 X。
+ * - 虚拟手柄：悬浮 GamepadOverlay 按键经 X11InputHub 桥直注 X；
+ * - 附加键盘栏（showAdditionalKbd）：画面底部 ESC/方向键玻璃键行，
+ *   点按直注 X。
  */
 @Composable
 fun X11Screen() {
     val context = LocalContext.current
     val connState by X11WindowController.state.collectAsState()
     var lorieViewRef by remember { mutableStateOf<LorieView?>(null) }
-    // 控制条全屏开关（真全屏：隐藏控制条，画面独占；返回键先退全屏）
-    var trueFs by remember { mutableStateOf(false) }
-
     val prefs = remember { LoriePreferences.prefs }
+
+    // v2.25：LoriePreferences（不可观察）→ X11UiPrefs（可观察镜像），
+    // 供全屏/方向/亮屏/刘海/附加键盘栏驱动副作用
+    LaunchedEffect(prefs) { prefs?.let { X11UiPrefs.initIfNeed(it) } }
+
+    // 真全屏：画面独占（悬浮球/键行隐藏，返回键退出）；悬浮球与设置面板驱动
+    val trueFs = X11UiPrefs.fullscreen
+    fun setFullscreen(v: Boolean) {
+        X11UiPrefs.fullscreen = v
+        prefs?.fullscreen?.put(v)
+    }
+
+    // 悬浮球区域尺寸 + 手柄开关状态（球体菜单显示点亮态）
+    var areaSize by remember { mutableStateOf(IntSize.Zero) }
+    val app = LinBoxApp.get()
+    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
+    // 面板关闭时机：把不可观察偏好同步进触摸桥（首选扫描码）
+    val settingsShowing by X11SettingsBridge.show.collectAsState()
 
     // 智能鼠标桥与手柄层（随 LorieView 实例创建，见 factory）
     var touchBridge by remember { mutableStateOf<SmartTouchBridge?>(null) }
-    val resState by X11ResolutionLink.state.collectAsState()
 
     // 连接建立即应用分辨率协议文件（兜底时序：glibc-runner 写文件可能
     // 早于/晚于窗口打开；FileObserver 只覆盖窗口已打开的情况）。
@@ -106,19 +127,103 @@ fun X11Screen() {
     }
 
     // 返回键：真全屏时先退全屏；否则回终端主页
-    BackHandler(enabled = trueFs) { trueFs = false }
+    BackHandler(enabled = trueFs) { setFullscreen(false) }
     BackHandler(enabled = !trueFs) { ShellController.showTerminal() }
+
+    // ------------------------------------------------------------------
+    // v2.25 窗口效果（termux-x11 keepScreenOn / forceOrientation / hideCutout）
+    // 均应用在宿主 Activity 窗口上，离开 X11 界面时统一还原全局设置。
+    // ------------------------------------------------------------------
+    val activity = context as? android.app.Activity
+
+    // 保持亮屏
+    DisposableEffect(X11UiPrefs.keepScreenOn) {
+        val win = activity?.window
+        if (X11UiPrefs.keepScreenOn) {
+            win?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose { win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+
+    // 屏幕方向（面板切换即时生效）
+    LaunchedEffect(X11UiPrefs.orientation) {
+        activity?.requestedOrientation = when (X11UiPrefs.orientation) {
+            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        }
+    }
+
+    // 刘海区：进入时应用；开关切换时重新应用（Keyed 重启，无竞态）
+    DisposableEffect(Unit) {
+        fun applyCutout(occupy: Boolean) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val win = activity?.window ?: return
+                win.attributes = win.attributes.apply {
+                    layoutInDisplayCutoutMode = if (occupy)
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    else
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+            }
+        }
+        applyCutout(X11UiPrefs.hideCutout)
+        onDispose {
+            // 离开 X11：按应用全局设置还原（DataStore 异步读，主线程落窗）
+            app.applicationScope.launch {
+                val restoreCutout = app.settingsStore.useCutout.first()
+                val restoreOri = app.settingsStore.displayOrientation.first()
+                withContext(Dispatchers.Main) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        val win = activity?.window
+                        win?.attributes = win?.attributes?.apply {
+                            layoutInDisplayCutoutMode = if (restoreCutout)
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                            else
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                        }
+                    }
+                    activity?.requestedOrientation = when (restoreOri) {
+                        "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                        else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                    }
+                }
+            }
+        }
+    }
+    // 刘海开关变化（设置面板切换后）重新应用
+    LaunchedEffect(X11UiPrefs.hideCutout) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val win = activity?.window ?: return@LaunchedEffect
+            win.attributes = win.attributes.apply {
+                layoutInDisplayCutoutMode = if (X11UiPrefs.hideCutout)
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                else
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+            }
+        }
+    }
+
+    // 面板关闭后把"首选扫描码"同步进触摸桥（SharedPreferences 不可观察，
+    // 以面板关闭为应用时机）
+    LaunchedEffect(settingsShowing) {
+        if (!settingsShowing) {
+            prefs?.let { touchBridge?.setPreferScancodes(it.preferScancodes.get()) }
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // ===== 画面区 =====
+        // ===== 画面区（悬浮球 / 附加键盘栏 / 等待页全部悬浮其上） =====
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .onGloballyPositioned { areaSize = it.size }
         ) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
@@ -137,6 +242,8 @@ fun X11Screen() {
                     ))
 
                     val bridge = SmartTouchBridge(ctx, lv)
+                    // v2.25：同步"首选扫描码"偏好（设置面板切换后面板关闭时机再同步）
+                    LoriePreferences.prefs?.let { bridge.setPreferScancodes(it.preferScancodes.get()) }
                     touchBridge = bridge
 
                     lv.setCallback { surfaceW, surfaceH, screenW, screenH ->
@@ -177,23 +284,38 @@ fun X11Screen() {
             if (connState != X11WindowController.State.Connected) {
                 WaitingPanel(connState)
             }
-        }
 
-        // ===== 控制条（连接后显示） =====
-        // 真全屏（trueFs）时隐藏控制条：画面独占整屏；返回键先退全屏
-        // （BackHandler 在本 Composable 顶部处理），控制条重新出现。
-        if (connState == X11WindowController.State.Connected && prefs != null && !trueFs) {
-            ControlBar(
-                prefs = prefs,
-                lorieView = lorieViewRef,
-                trueFs = trueFs,
-                onToggleFullscreen = { trueFs = !trueFs },
-                resState = resState
-            )
+            // ===== v2.25 附加键盘栏（showAdditionalKbd；连接后显示，真全屏时隐藏，
+            //      imePadding 使其贴在输入法上沿） =====
+            if (connState == X11WindowController.State.Connected &&
+                X11UiPrefs.showAdditionalKbd && !trueFs
+            ) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .imePadding(),
+                    contentAlignment = Alignment.BottomStart
+                ) {
+                    X11ExtraKeysBar()
+                }
+            }
+
+            // ===== v2.25 玻璃悬浮球（原底边控制条全部功能收编于此；
+            //      真全屏时隐藏 —— 画面独占，返回键退出） =====
+            if (!trueFs) {
+                X11GlassFab(
+                    areaPx = areaSize,
+                    gamepadEnabled = gamepadEnabled,
+                    fullscreen = trueFs,
+                    onToggleFullscreen = { setFullscreen(!trueFs) },
+                    onOpenSettings = { X11SettingsBridge.requestShow() },
+                    onBackToTerminal = { ShellController.showTerminal() }
+                )
+            }
         }
     }
 
-    // v2.22.4 fix11c：X11 设置面板（长按标题栏 / 常驻通知 "X11 设置" 动作）
+    // v2.22.4 fix11c：X11 设置面板（悬浮球菜单 / 常驻通知 "X11 设置" 动作）
     X11SettingsDialog()
 }
 
@@ -255,153 +377,6 @@ private fun WaitingPanel(state: X11WindowController.State) {
     }
 }
 
-@Composable
-private fun ControlBar(
-    prefs: com.termux.x11.Prefs,
-    lorieView: LorieView?,
-    trueFs: Boolean,
-    onToggleFullscreen: () -> Unit,
-    resState: X11ResolutionLink.ResolutionState
-) {
-    val theme = LocalWinTheme.current
-    val context = LocalContext.current
-    val app = LinBoxApp.get()
-    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
-
-    var modeNative by remember(resState.mode) { mutableStateOf(resState.mode != "exact") }
-    var resText by remember(resState.mode) {
-        mutableStateOf(
-            if (resState.mode == "exact" && resState.exact.isNotEmpty()) resState.exact
-            else prefs.displayResolutionExact.get()
-        )
-    }
-    var resError by remember { mutableStateOf(false) }
-    val barBg = if (theme.isDark) Color(0xFF1B222B) else Color(0xFFF2F4F7)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(barBg)
-            .border(0.dp, Color.Transparent)
-    ) {
-        HorizontalDivider(color = if (theme.isDark) Color(0xFF3A4450) else Color(0xFFDDDDDD))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // 分辨率模式切换
-            TextButton(
-                onClick = {
-                    modeNative = true
-                    prefs.displayResolutionMode.put("native")
-                    X11ResolutionLink.setNative()
-                    lorieView?.let { it.regenerate(); it.requestLayout() }
-                },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = if (modeNative) theme.accentColor else theme.windowTitleBarTextColor
-                ),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text("跟随窗口", fontSize = 11.sp) }
-
-            TextButton(
-                onClick = { modeNative = false },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = if (!modeNative) theme.accentColor else theme.windowTitleBarTextColor
-                ),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text("固定分辨率", fontSize = 11.sp) }
-
-            if (!modeNative) {
-                OutlinedTextField(
-                    value = resText,
-                    onValueChange = { resText = it; resError = false },
-                    enabled = !modeNative,
-                    isError = resError,
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (theme.isDark) Color.White else Color.Black
-                    ),
-                    modifier = Modifier
-                        .width(110.dp)
-                        .height(48.dp),
-                    placeholder = { Text("1280x720", fontSize = 10.sp) }
-                )
-                TextButton(
-                    onClick = {
-                        val m = Regex("(\\d{2,5})x(\\d{2,5})").find(resText.trim())
-                        val (w, h) = m?.destructured ?: run { resError = true; return@TextButton }
-                        if (w.toInt() < 160 || h.toInt() < 120) { resError = true; return@TextButton }
-                        modeNative = false
-                        X11ResolutionLink.setExact(w.toInt(), h.toInt())
-                        resError = false
-                        lorieView?.let { it.regenerate(); it.requestLayout() }
-                    },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                ) { Text("应用", fontSize = 11.sp) }
-            }
-
-            // 分辨率来源指示（glibc-runner 握手状态一目了然）
-            Text(
-                text = if (resState.mode == "exact") "X:${resState.exact}"
-                       else "X:跟随窗口",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = if (resState.fromGame) theme.accentColor else theme.windowTitleBarTextColor
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            // 软键盘开关
-            TextButton(
-                onClick = {
-                    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    @Suppress("DEPRECATION")
-                    imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
-                },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text("键盘", fontSize = 11.sp) }
-
-            // v2.22.5 fix14：游戏全屏（Alt+Enter）—— 窗口化游戏（居中小窗+
-            // 四周黑边）一键切换 wine/DXVK 全屏：X 屏幕经 RandR 自动切成游戏
-            // 分辨率，画面铺满无黑边。
-            TextButton(
-                onClick = { X11InputHub.sendAltEnter() },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text("游戏全屏", fontSize = 11.sp) }
-
-            // 虚拟手柄开关（X11 游戏用：开启后屏幕出现悬浮手柄，
-            // 按键/摇杆经 X11InputHub 直注 X）
-            TextButton(
-                onClick = {
-                    app.applicationScope.launch {
-                        app.settingsStore.setGamepadEnabled(!gamepadEnabled)
-                    }
-                },
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = if (gamepadEnabled) theme.accentColor else theme.windowTitleBarTextColor
-                ),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text(if (gamepadEnabled) "隐藏手柄" else "虚拟手柄", fontSize = 11.sp) }
-
-            // X11 设置面板（分辨率/拉伸/剪贴板/握手重放）
-            TextButton(
-                onClick = { X11SettingsBridge.requestShow() },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text("X11设置", fontSize = 11.sp) }
-
-            // 全屏切换（真全屏：隐藏控制条，返回键退出）
-            TextButton(
-                onClick = onToggleFullscreen,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text(if (trueFs) "退出全屏" else "全屏", fontSize = 11.sp) }
-        }
-    }
-}
 
 /**
  * 智能鼠标桥（fix10）：Android 触摸 → X 真实鼠标事件。
@@ -610,4 +585,9 @@ private class SmartTouchBridge(private val context: Context, private val view: L
     }
 
     fun sendKey(event: KeyEvent): Boolean = keySender.sendKeyEvent(event)
+
+    /** v2.25：同步 termux-x11 "首选扫描码"偏好到按键发送器（即时生效）。 */
+    fun setPreferScancodes(v: Boolean) {
+        keySender.preferScancodes = v
+    }
 }

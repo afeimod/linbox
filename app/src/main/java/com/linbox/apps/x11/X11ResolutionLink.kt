@@ -239,6 +239,25 @@ object X11ResolutionLink {
     fun setExact(w: Int, h: Int) = apply("${w}x${h}")
 
     /**
+     * v2.25：手动切换"缩放"模式（LoriePreferences 原生 scaled 档）——
+     * X 屏幕 = Android 窗口 × 100/scale：scale >100 时 X 分辨率低于窗口
+     * （界面元素放大，适合手机小屏触控），<100 时高于窗口（元素缩小，
+     * 桌面内容更多）。与 native/exact 一样经由 pokeActiveView 即时生效；
+     * 下次 glibc-runner 握手（-d/native）仍会按协议接管。
+     */
+    fun setScale(percent: Int) {
+        val prefs = LoriePreferences.prefs ?: return
+        val p = percent.coerceIn(50, 200)
+        prefs.displayResolutionMode.put("scaled")
+        prefs.displayScale.put(p)
+        exactFromRunner = false
+        windowStretch = false
+        _state.value = ResolutionState("scaled", "", false)
+        Log.i(TAG, "X 屏幕分辨率 → 缩放模式 ${p}%")
+        pokeActiveView()
+    }
+
+    /**
      * v2.22.5 fix15：X11FitClient 自适应专用 —— 把 X 屏幕静默调整为游戏
      * 客户区尺寸（不发 Toast、不写握手文件，避免游戏窗口/启动器切换时
      * 提示刷屏）。stretch 保持开启，显示层把"游戏客户区=X 屏幕"拉伸铺满

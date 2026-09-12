@@ -364,38 +364,47 @@ private fun RealTerminalArea() {
     val bg = rememberTerminalBackground()
     var areaSize by remember { mutableStateOf(IntSize.Zero) }
 
-    Column(
+    // v2.25 键盘区透明根改：背景图从“仅终端区”提升为整屏底层 ——
+    // 终端视图（图片模式透明）与快捷键栏（半透明玻璃键体）都能透出
+    // 同一张背景图，上下融为一体；透明度仍由设置里的滑杆统一控制
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            // v2.23 IME 遮挡修复：沉浸式（setDecorFitsSystemWindows(false)）下
-            // API 30+ 系统忽略 adjustResize，键盘弹出时必须靠 ime() inset 主动
-            // 让位——整列（终端/快捷键栏）抬到输入法上方；快捷键栏无
-            // 输入法时贴屏幕底边、有输入法时贴输入法上沿（对齐官方 Termux）。
-            // API 30 以下 adjustResize 生效且 ime() inset 报 0，两者不叠加。
-            .imePadding()
             // v2.24：底层统一黑底 —— 背景透明度调节时颜色/图片向黑底淡化，
             // 文字保持不透明，呈现“背景透出去”的效果
             .background(Color.Black)
     ) {
-        // ---------- 终端视图（图片背景时透明 + 底层图片与暗化叠加） ----------
+        // ---------- 整屏背景图 + 暗化叠加（终端/键盘共同透出） ----------
+        if (bg.bitmap != null) {
+            // 图片自身按透明度淡化（1=完全透明 → 只剩黑底）
+            Image(
+                bitmap = bg.bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                alpha = (1f - bg.transparency).coerceIn(0f, 1f)
+            )
+            // 暗化叠加：保证终端文字与键帽文字在任意图片上可读
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f * (1f - bg.transparency))))
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                // v2.23 IME 遮挡修复：沉浸式（setDecorFitsSystemWindows(false)）下
+                // API 30+ 系统忽略 adjustResize，键盘弹出时必须靠 ime() inset 主动
+                // 让位——整列（终端/快捷键栏）抬到输入法上方；快捷键栏无
+                // 输入法时贴屏幕底边、有输入法时贴输入法上沿（对齐官方 Termux）。
+                // API 30 以下 adjustResize 生效且 ime() inset 报 0，两者不叠加。
+                .imePadding()
+        ) {
+        // ---------- 终端视图（图片背景时透明，透出整屏底层图片） ----------
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .onGloballyPositioned { areaSize = it.size }
         ) {
-            if (bg.bitmap != null) {
-                // 图片自身按透明度淡化（1=完全透明 → 只剩黑底）
-                Image(
-                    bitmap = bg.bitmap.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    alpha = (1f - bg.transparency).coerceIn(0f, 1f)
-                )
-                // 暗化叠加：保证终端文字在任意图片上可读（随透明度同步淡化）
-                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f * (1f - bg.transparency))))
-            }
             AndroidView(
                 factory = { ctx ->
                     TermuxTerminalFactory.create(ctx, controller, bg.viewBackgroundArgb).also { view ->
@@ -437,11 +446,12 @@ private fun RealTerminalArea() {
             )
         }
 
-        // ---------- 快捷键栏（两排，透明底） ----------
+        // ---------- 快捷键栏（两排，透明底：背景图整屏铺放后从此透出） ----------
         TermuxExtraKeysBar(
             controller = controller,
             symbolLayer = symbolLayer
         )
+        }
     }
 }
 
@@ -899,7 +909,14 @@ private fun RowScope.RepeatableKey(
             .weight(1f)
             .height(40.dp)
             .background(Color(0x2EFFFFFF), RoundedCornerShape(5.dp))
-            .pointerInput(key) {
+            // v2.25 方向键二次根修：pointerInput 的手势协程只在 key 变化时
+            // 重启。旧版 key 只有键名 —— 首次组合时 view 还是 null
+            // （AndroidView 工厂尚未执行），闭包永久捕获 null，此后
+            // terminalView 变为非 null 也不会重启，方向键按下永远静默丢弃
+            // （这也是 v2.24 修复后“普通键正常、唯独方向键仍无效”的原因：
+            // 普通键走 clickable，闭包随重组重建；方向键走 pointerInput）。
+            // 把 view 并入 key：视图挂载瞬间手势协程随最新视图重启。
+            .pointerInput(key, view) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     down.consume()

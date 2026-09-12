@@ -1,5 +1,6 @@
 package com.linbox.apps.x11
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -21,6 +21,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -41,28 +43,34 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import com.linbox.core.theme.LocalWinTheme
 import com.termux.x11.LoriePreferences
+import com.termux.x11.Prefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
  * v2.22.4 fix11c：X11 设置面板。
  *
- * 用户需求："x11 长按状态栏的设置等" —— 两个入口：
- * 1. X11 界面控制条"X11设置"按钮（X11Screen.ControlBar）；
- * 2. 常驻通知（X11KeepAliveService）的 "X11 设置" 动作 —— 顺带把 App
- *    拉回前台并跳转 X11 界面。
+ * v2.25 重做 —— 用户需求："悬浮球也要显示在 x11 界面，x11 的设置也放进
+ * 悬浮球，不要在 x11 底边了，并完善 x11 应该有的所有设置（参考
+ * termux-x11 源码实现）"。面板入口从底边控制条改为 X11 悬浮球菜单
+ * （X11Overlay.X11GlassFab），条目对齐 termux-x11 的 LoriePreferences /
+ * Prefs.java 全量偏好中"嵌入桌面路径真正生效"的子集：
  *
- * 面板集中了 X11 显示端真正生效的关键偏好：
- * - 分辨率模式（跟随窗口 / 固定分辨率）与常用预设/自定义分辨率；
- * - 拉伸铺满（exact 模式下 LorieView 铺满窗口，杜绝信箱黑边）；
- * - 剪贴板双向同步；
- * - "重新应用游戏分辨率" —— glibc-runner -d 写入的握手文件重放
- *   （错过后不必重跑游戏启动命令）。
+ * - 【显示】分辨率模式（跟随窗口 native / 缩放 scaled / 固定 exact）、
+ *   缩放比例（displayScale，LorieView.getDimensionsFromSettings 消费）、
+ *   固定分辨率预设/自定义、拉伸铺满（displayStretch）；
+ * - 【窗口】全屏（fullscreen）、保持亮屏（keepScreenOn → FLAG_KEEP_SCREEN_ON）、
+ *   屏幕方向（forceOrientation → requestedOrientation）、隐藏刘海
+ *   （hideCutout → layoutInDisplayCutoutMode）；
+ * - 【键盘】附加键盘栏（showAdditionalKbd → X11 界面底部 ESC/方向键行，
+ *   经 X11InputHub 直注 X）、首选扫描码（preferScancodes）、
+ *   强制字符输入（enforceCharBasedInput，LorieView 原生消费）；
+ * - 【剪贴板】双向同步（clipboardEnable）；
+ * - 【操作】重新应用游戏分辨率握手、游戏全屏（Alt+Enter）。
  *
- * v2.22.5 fix12：横屏适配重做 —— 用户反馈"菜单要小点然后加滑动，
- * 不然横屏显示不全"。整卡收窄（最大 330dp）+ 内容可滚动 +
- * 预设分辨率 FlowRow 自动换行（旧版 Row 会把 1920x1080 裁出屏幕外），
- * 字号/间距全面收紧，横屏下不再溢出。
+ * 窗口类偏好（全屏/方向/亮屏/刘海/附加键盘栏）经由 [X11UiPrefs] 可观察
+ * 镜像驱动 X11Screen 的副作用；分辨率/拉伸/剪贴板等渲染偏好写入
+ * LoriePreferences 后经 X11ResolutionLink.pokeActiveView() 即时生效。
  */
 object X11SettingsBridge {
     private val _show = MutableStateFlow(false)
@@ -72,6 +80,52 @@ object X11SettingsBridge {
 
     fun requestShow() { _show.value = true }
     fun dismiss() { _show.value = false }
+}
+
+/**
+ * v2.25：LoriePreferences 的 Compose 可观察镜像。
+ *
+ * SharedPreferences 不是可观察存储，而全屏/方向/亮屏/刘海/附加键盘栏
+ * 需要驱动 Compose 副作用（窗口标志、requestedOrientation、键行显隐），
+ * 故设置面板写入 LoriePreferences 的同时同步本对象；X11Screen 进入时
+ * [initIfNeed] 一次性从真实偏好回填（保留用户在 termux-x11 兼容模式
+ * 里的既有选择）。
+ */
+object X11UiPrefs {
+    private var initialized = false
+
+    /** 真全屏（隐藏一切覆盖层，画面独占；返回键退出）。 */
+    var fullscreen by mutableStateOf(false)
+
+    /** 屏幕方向：auto / portrait / landscape（reverse 归并为对应主方向）。 */
+    var orientation by mutableStateOf("auto")
+
+    /** 保持亮屏。 */
+    var keepScreenOn by mutableStateOf(true)
+
+    /** 占用刘海区（false = 刘海区留黑）。 */
+    var hideCutout by mutableStateOf(true)
+
+    /** 附加键盘栏（X11 画面底部 ESC/TAB/方向键行）。 */
+    var showAdditionalKbd by mutableStateOf(false)
+
+    /** 从 LoriePreferences 一次性同步（仅首次）。 */
+    fun initIfNeed(prefs: Prefs) {
+        if (initialized) return
+        initialized = true
+        fullscreen = prefs.fullscreen.get()
+        orientation = normalizeOrientation(prefs.forceOrientation.get())
+        keepScreenOn = prefs.keepScreenOn.get()
+        hideCutout = prefs.hideCutout.get()
+        showAdditionalKbd = prefs.showAdditionalKbd.get()
+    }
+
+    /** forceOrientation 的五档（含 reverse）归并为三档。 */
+    fun normalizeOrientation(v: String): String = when (v) {
+        "portrait", "reverse portrait" -> "portrait"
+        "landscape", "reverse landscape" -> "landscape"
+        else -> "auto"
+    }
 }
 
 private val RES_PRESETS = listOf("640x480", "800x600", "1280x720", "1600x900", "1920x1080")
@@ -89,15 +143,21 @@ fun X11SettingsDialog() {
     }
     val resState by X11ResolutionLink.state.collectAsState()
 
-    var modeNative by remember(resState.mode) { mutableStateOf(resState.mode != "exact") }
+    var modeNative by remember(resState.mode) { mutableStateOf(resState.mode != "exact" && resState.mode != "scaled") }
+    var modeScaled by remember(resState.mode) { mutableStateOf(resState.mode == "scaled") }
     var resText by remember(resState.mode) {
         mutableStateOf(
             if (resState.mode == "exact" && resState.exact.isNotEmpty()) resState.exact
             else prefs.displayResolutionExact.get()
         )
     }
+    var scalePercent by remember(resState.mode) {
+        mutableStateOf(prefs.displayScale.get().coerceIn(50, 200).toFloat())
+    }
     var stretch by remember(resState.mode) { mutableStateOf(prefs.displayStretch.get()) }
     var clipboard by remember { mutableStateOf(prefs.clipboardEnable.get()) }
+    var scancodes by remember { mutableStateOf(prefs.preferScancodes.get()) }
+    var charInput by remember { mutableStateOf(prefs.enforceCharBasedInput.get()) }
     var resError by remember { mutableStateOf(false) }
 
     val labelColor = theme.windowTitleBarTextColor
@@ -107,8 +167,7 @@ fun X11SettingsDialog() {
 
     AlertDialog(
         onDismissRequest = { X11SettingsBridge.dismiss() },
-        // fix12：收窄对话框（旧版按平台默认宽度在横屏上铺得太大，
-        // 右侧预设按钮被屏幕边缘裁掉）。
+        // 收窄对话框 + 内容可滚动：横屏不再溢出（v2.22.5 fix12 语义保留）
         modifier = Modifier.widthIn(max = 330.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         confirmButton = {
@@ -121,7 +180,6 @@ fun X11SettingsDialog() {
                 color = if (theme.isDark) Color.White else Color.Black)
         },
         text = {
-            // fix12：内容可滚动 —— 横屏高度不足时上下滑动，不再被截断。
             Column(
                 modifier = Modifier
                     .widthIn(max = 306.dp)
@@ -131,9 +189,12 @@ fun X11SettingsDialog() {
 
                 // ---- 状态行 ----
                 Text(
-                    text = if (resState.mode == "exact")
-                        "当前 X 屏幕：${resState.exact}（" + if (resState.fromGame) "游戏握手）" else "手动）"
-                    else "当前 X 屏幕：跟随窗口（随 X11 窗口尺寸变化）",
+                    text = when {
+                        resState.mode == "exact" ->
+                            "当前 X 屏幕：${resState.exact}（" + if (resState.fromGame) "游戏握手）" else "手动）"
+                        resState.mode == "scaled" -> "当前 X 屏幕：缩放 ${prefs.displayScale.get()}%"
+                        else -> "当前 X 屏幕：跟随窗口（随 X11 窗口尺寸变化）"
+                    },
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     color = if (resState.fromGame) accent else labelColor
@@ -141,31 +202,59 @@ fun X11SettingsDialog() {
 
                 HorizontalDivider(color = dividerColor)
 
-                // ---- 分辨率模式 ----
+                // ================= 显示 =================
+                SectionTitle("显示", labelColor)
                 Text("分辨率模式", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = labelColor)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     TextButton(
                         onClick = {
-                            modeNative = true
+                            modeNative = true; modeScaled = false
                             X11ResolutionLink.setNative()
                         },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = if (modeNative) accent else labelColor
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        colors = modeColors(modeNative, accent, labelColor),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
                     ) { Text("跟随窗口", fontSize = 11.sp) }
 
                     TextButton(
-                        onClick = { modeNative = false },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = if (!modeNative) accent else labelColor
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        onClick = {
+                            modeNative = false; modeScaled = true
+                            X11ResolutionLink.setScale(scalePercent.toInt())
+                        },
+                        colors = modeColors(modeScaled, accent, labelColor),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                    ) { Text("缩放", fontSize = 11.sp) }
+
+                    TextButton(
+                        onClick = { modeNative = false; modeScaled = false },
+                        colors = modeColors(!modeNative && !modeScaled, accent, labelColor),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
                     ) { Text("固定分辨率", fontSize = 11.sp) }
                 }
 
-                if (!modeNative) {
-                    // ---- 预设分辨率（fix12：FlowRow 自动换行，不再横向裁切） ----
+                if (modeScaled) {
+                    // ---- 缩放比例（termux-x11 displayScale：X 屏幕 = 窗口×100/scale） ----
+                    Text(
+                        "缩放比例 ${scalePercent.toInt()}%（>100% 界面元素放大，<100% 桌面内容更多）",
+                        fontSize = 10.sp, color = hintColor
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Slider(
+                            value = scalePercent,
+                            onValueChange = { scalePercent = it },
+                            valueRange = 50f..200f,
+                            steps = 29,
+                            colors = SliderDefaults.colors(thumbColor = accent, activeTrackColor = accent),
+                            modifier = Modifier.weight(1f).height(26.dp)
+                        )
+                        TextButton(
+                            onClick = { X11ResolutionLink.setScale(scalePercent.toInt()) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) { Text("应用", fontSize = 11.sp, color = accent) }
+                    }
+                }
+
+                if (!modeNative && !modeScaled) {
+                    // ---- 预设分辨率（FlowRow 自动换行，不再横向裁切） ----
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         verticalArrangement = Arrangement.spacedBy(0.dp)
@@ -208,12 +297,10 @@ fun X11SettingsDialog() {
                     }
                 }
 
-                HorizontalDivider(color = dividerColor)
-
                 // ---- 拉伸铺满 ----
                 SettingSwitch(
                     title = "拉伸铺满（无黑边）",
-                    desc = "固定分辨率时画面拉伸至整个 X11 窗口（宽高比不同时允许轻微变形）",
+                    desc = "画面拉伸至整个 X11 窗口（宽高比不同时允许轻微变形）",
                     checked = stretch,
                     enabled = !modeNative,
                     onChecked = {
@@ -221,11 +308,125 @@ fun X11SettingsDialog() {
                         prefs.displayStretch.put(it)
                         X11ResolutionLink.pokeActiveView()
                     },
-                    labelColor = labelColor, accent = accent, dark = theme.isDark,
+                    labelColor = labelColor, accent = accent,
                     hintColor = hintColor
                 )
 
-                // ---- 剪贴板同步 ----
+                HorizontalDivider(color = dividerColor)
+
+                // ================= 窗口 =================
+                SectionTitle("窗口", labelColor)
+
+                // ---- 全屏（真全屏：画面独占，返回键退出） ----
+                SettingSwitch(
+                    title = "全屏显示",
+                    desc = "隐藏悬浮球等一切覆盖层，画面独占整屏；返回键退出全屏",
+                    checked = X11UiPrefs.fullscreen,
+                    enabled = true,
+                    onChecked = {
+                        X11UiPrefs.fullscreen = it
+                        prefs.fullscreen.put(it)
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                // ---- 保持亮屏（termux-x11 keepScreenOn） ----
+                SettingSwitch(
+                    title = "保持亮屏",
+                    desc = "X11 桌面运行时屏幕不自动熄灭（离开 X11 自动恢复）",
+                    checked = X11UiPrefs.keepScreenOn,
+                    enabled = true,
+                    onChecked = {
+                        X11UiPrefs.keepScreenOn = it
+                        prefs.keepScreenOn.put(it)
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                // ---- 屏幕方向（termux-x11 forceOrientation） ----
+                Text("屏幕方向", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = labelColor)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("auto" to "跟随系统", "portrait" to "竖屏", "landscape" to "横屏").forEach { (v, label) ->
+                        TextButton(
+                            onClick = {
+                                X11UiPrefs.orientation = v
+                                prefs.forceOrientation.put(v)
+                            },
+                            colors = modeColors(X11UiPrefs.orientation == v, accent, labelColor),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) { Text(label, fontSize = 11.sp) }
+                    }
+                }
+
+                // ---- 刘海区（termux-x11 hideCutout：true = 内容延伸进刘海区遮住刘海） ----
+                SettingSwitch(
+                    title = "占用刘海屏",
+                    desc = "画面延伸到刘海/挖孔区域（关闭后刘海区留黑）",
+                    checked = X11UiPrefs.hideCutout,
+                    enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P,
+                    onChecked = {
+                        X11UiPrefs.hideCutout = it
+                        prefs.hideCutout.put(it)
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                HorizontalDivider(color = dividerColor)
+
+                // ================= 键盘 =================
+                SectionTitle("键盘", labelColor)
+
+                // ---- 附加键盘栏（termux-x11 showAdditionalKbd） ----
+                SettingSwitch(
+                    title = "附加键盘栏",
+                    desc = "画面底部显示 ESC / TAB / CTRL / 方向键等实体快捷键行（点按直注 X）",
+                    checked = X11UiPrefs.showAdditionalKbd,
+                    enabled = true,
+                    onChecked = {
+                        X11UiPrefs.showAdditionalKbd = it
+                        prefs.showAdditionalKbd.put(it)
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                // ---- 首选扫描码（termux-x11 preferScancodes） ----
+                SettingSwitch(
+                    title = "首选扫描码（外接键盘）",
+                    desc = "物理键盘按键按扫描码上报，游戏/远程桌面兼容性更好",
+                    checked = scancodes,
+                    enabled = true,
+                    onChecked = {
+                        scancodes = it
+                        prefs.preferScancodes.put(it)
+                        X11ResolutionLink.pokeActiveView()
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                // ---- 强制字符输入（termux-x11 enforceCharBasedInput，LorieView 消费） ----
+                SettingSwitch(
+                    title = "强制字符输入",
+                    desc = "输入法按字符而非按键上报，修复部分中文输入法丢键",
+                    checked = charInput,
+                    enabled = true,
+                    onChecked = {
+                        charInput = it
+                        prefs.enforceCharBasedInput.put(it)
+                        X11ResolutionLink.pokeActiveView()
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                HorizontalDivider(color = dividerColor)
+
+                // ================= 剪贴板 =================
+                SectionTitle("剪贴板", labelColor)
                 SettingSwitch(
                     title = "剪贴板双向同步",
                     desc = "Android 与 X11 应用共享剪贴板（复制粘贴互通）",
@@ -236,11 +437,14 @@ fun X11SettingsDialog() {
                         prefs.clipboardEnable.put(it)
                         X11ResolutionLink.pokeActiveView()
                     },
-                    labelColor = labelColor, accent = accent, dark = theme.isDark,
+                    labelColor = labelColor, accent = accent,
                     hintColor = hintColor
                 )
 
                 HorizontalDivider(color = dividerColor)
+
+                // ================= 操作 =================
+                SectionTitle("操作", labelColor)
 
                 // ---- 重放游戏分辨率握手 ----
                 TextButton(
@@ -249,7 +453,7 @@ fun X11SettingsDialog() {
                 ) {
                     Text("重新应用游戏分辨率（glibc-runner -d）", fontSize = 11.sp, color = accent)
                 }
-                // ---- v2.22.5 fix14：游戏全屏（Alt+Enter）----
+                // ---- 游戏全屏（Alt+Enter）----
                 TextButton(
                     onClick = { com.termux.x11.X11InputHub.sendAltEnter() },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
@@ -269,6 +473,24 @@ fun X11SettingsDialog() {
 }
 
 @Composable
+private fun modeColors(selected: Boolean, accent: Color, normal: Color) =
+    ButtonDefaults.textButtonColors(contentColor = if (selected) accent else normal)
+
+@Composable
+private fun SectionTitle(text: String, color: Color) {
+    Text(
+        text,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = color,
+        modifier = Modifier.background(
+            color.copy(alpha = 0.08f),
+            RoundedCornerShape(4.dp)
+        ).padding(horizontal = 6.dp, vertical = 2.dp)
+    )
+}
+
+@Composable
 private fun SettingSwitch(
     title: String,
     desc: String,
@@ -277,7 +499,6 @@ private fun SettingSwitch(
     onChecked: (Boolean) -> Unit,
     labelColor: Color,
     accent: Color,
-    dark: Boolean,
     hintColor: Color
 ) {
     Row(
