@@ -9,7 +9,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.pointerInput
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -648,6 +648,10 @@ private fun RowScope.RepeatableKey(
     modifiers: ExtraKeysModifierState
 ) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    // 连发循环必须运行在指针事件作用域之外：awaitEachGesture 的接收者
+    // AwaitPointerEventScope 不是 CoroutineScope，其内部只允许挂起等待指针
+    // 事件（delay/launch 会破坏指针采样线程），因此用组合级协程域承载。
+    val scope = rememberCoroutineScope()
     Box(
         modifier = Modifier
             .weight(1f)
@@ -663,7 +667,7 @@ private fun RowScope.RepeatableKey(
                     // 短按：按下立即生效
                     sendKeyToTerminal(view, key, modifiers)
                     // 长按：超过系统长按阈值后进入连续重复，松手即停
-                    val repeatJob = launch {
+                    val repeatJob = scope.launch {
                         delay(viewConfiguration.longPressTimeoutMillis)
                         haptic.performHapticFeedback(
                             androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
