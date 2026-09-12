@@ -37,18 +37,16 @@ import androidx.compose.ui.unit.sp
 import com.linbox.BuildConfig
 import com.linbox.LinBoxApp
 import com.linbox.core.input.gamepad.GamepadController
+import com.linbox.core.shell.ShellController
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.core.theme.ThemeManager
 import com.linbox.core.theme.WinTheme
-import com.linbox.core.window.AppDef
-import com.linbox.core.window.LaunchMode
-import com.linbox.core.window.WindowContentScope
 import com.linbox.util.L
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * LinBox 设置（精简版）。
+ * LinBox 设置（全屏页，终端主页工具栏"设置"进入）。
  *
  * 只保留对本应用（终端 + X11 + 虚拟手柄）真实有意义的设置：
  * - 显示：分辨率信息 / UI 缩放 / 显示方向 / 刘海屏
@@ -57,18 +55,14 @@ import kotlin.math.roundToInt
  * - 游戏手柄：开关 + 悬浮设置窗入口（X11 游戏用）
  * - 关于：应用与设备信息
  *
- * 原模拟 Windows 的假设置面板（蓝牙/Wi-Fi/打印机/VPN/热点/隐私/
- * Windows 更新等）已随桌面环境一并移除。
+ * 返回键回终端主页。
  */
-val SettingsApp = AppDef(
-    id = "settings",
-    displayName = "设置",
-    iconAsset = "app:settings",
-    launchMode = LaunchMode.FLOATING,
-    defaultWidth = 880.dp,
-    defaultHeight = 600.dp,
-) { scope ->
-    SettingsContent(scope)
+@Composable
+fun SettingsScreen() {
+    androidx.activity.compose.BackHandler(enabled = true) {
+        ShellController.showTerminal()
+    }
+    SettingsContent()
 }
 
 // ============================================================
@@ -91,7 +85,7 @@ private enum class NavSection(val id: String, val label: String, val desc: Strin
 }
 
 @Composable
-private fun SettingsContent(scope: WindowContentScope) {
+private fun SettingsContent() {
     val theme = LocalWinTheme.current
     var section by remember { mutableStateOf(NavSection.DISPLAY) }
     var route by remember { mutableStateOf<SettingsRoute>(SettingsRoute.Home) }

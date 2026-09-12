@@ -20,8 +20,8 @@ import com.termux.x11.MainActivity
  * - 本类在 LinBoxApp 的动态接收器里收到广播后拉起全屏 X11 桌面，
  *   桌面 Activity 自己的动态接收器会在 1 秒内的重播里拿到 binder，
  *   取出 X 连接 fd 交给 LorieView 渲染（X 屏幕尺寸随视图自动调节）；
- * - 桌面入口：开始菜单/桌面图标 "X11 桌面"（X11App）直接拉起本
- *   Activity，服务未启动时显示等待连接页。
+ * - 兼容入口：X11 等待页"打开兼容全屏模式"按钮直接拉起本 Activity，
+ *   服务未启动时显示等待连接页。
  *
  * 与官方 Termux:X11 应用互不冲突：广播 setPackage 只指向 com.linbox，
  * X11 socket 落在 com.linbox 自身的 tmp 目录，客户端进程 nice-name

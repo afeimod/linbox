@@ -30,43 +30,31 @@ import com.linbox.apps.terminal.termux.ExtraKeysModifierState
 import com.linbox.apps.terminal.termux.TermuxBootstrapInstaller
 import com.linbox.apps.terminal.termux.TermuxSessionController
 import com.linbox.termux.view.TerminalView
-import com.linbox.core.window.AppDef
-import com.linbox.core.window.LaunchMode
-import com.linbox.core.window.WindowContentScope
-import com.linbox.core.window.WindowManager
+import com.linbox.core.shell.ShellController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 终端（真实 Termux 移植版）：
+ * 终端主页（真实 Termux 移植版）—— LinBox 的主屏：
  *
- * - 首次打开自动安装官方 bootstrap（内置离线 aarch64 归档，
- *   安装时同长度重写 com.termux → com.linbox 路径前缀）；
+ * - App 打开即全屏终端，首次自动安装官方 bootstrap（内置离线 aarch64
+ *   归档，安装时同长度重写 com.termux → com.linbox 路径前缀）；
  * - 会话为真实 login shell（bash），pkg/apt 可用；
  * - 视图为 termux 官方 TerminalView（Apache-2.0 移植）；
  * - 两排快捷键栏 + 可切换符号层（ESC/CTRL/ALT/TAB/方向/Home/PgUp…）；
- * - 最后一个终端窗口关闭时结束会话（fix9.11）；重开终端即全新 shell。
+ * - 工具栏一键跳转 X11 图形界面 / 设置页；终端里执行 `linbox-x11`
+ *   也会自动跳转（见 X11WindowController 广播）；
+ * - 会话随 App 进程存活，退出 App 或系统杀死进程后重建为全新 shell。
  */
-val TerminalApp = AppDef(
-    id = "terminal",
-    displayName = "终端",
-    iconAsset = "app:terminal",
-    launchMode = LaunchMode.FLOATING,
-    defaultWidth = 720.dp,
-    defaultHeight = 560.dp,
-) { scope ->
-    TerminalContent(scope)
+@Composable
+fun TerminalScreen() {
+    TerminalContent()
 }
 
 @Composable
-private fun TerminalContent(scope: WindowContentScope) {
+private fun TerminalContent() {
     val context = LocalContext.current
     val installState by TermuxBootstrapInstaller.state.collectAsState()
-
-    // v2.22.3（fix9.11）：窗口关闭 → 结束会话（最后一个终端窗口时）。
-    // 与 X11App 的窗口资源清理同模式：WindowState.onClose 由
-    // WindowManager.close 触发；赋值幂等，重组重复执行无副作用。
-    scope.windowState.onClose = { TermuxTerminalHolder.closeSessionIfLastWindow() }
 
     // 打开终端即触发按需安装（已安装则秒过），成功后启动桌面命令桥
     LaunchedEffect(Unit) {
@@ -100,7 +88,7 @@ private fun TerminalContent(scope: WindowContentScope) {
                 if ((TermuxBootstrapInstaller.isInstalled(context) ||
                     installState is TermuxBootstrapInstaller.InstallState.Installed) && extrasReady
                 ) {
-                    RealTerminalArea(scope)
+                    RealTerminalArea()
                 } else {
                     BootstrapPendingUI()
                 }
@@ -252,37 +240,11 @@ object TermuxTerminalHolder {
         revision++
         return controller!!
     }
-
-    /**
-     * v2.22.3（fix9.11）：终端窗口关闭 → 结束会话。
-     *
-     * 修复反馈：“点关闭窗口按钮终端没有被关，点击终端还是关闭前的
-     * 状态” —— 旧设计会话不随窗口关闭销毁（后台保留），窗口重开后
-     * 直接拿回旧 shell，用户感知为“终端关不掉”。现改为：最后一个
-     * 终端窗口关闭时 SIGKILL 会话并清空持有者，下次打开即全新会话；
-     * 仍有其他终端窗口（多窗口共享同一会话）时保留。
-     *
-     * 时序说明：WindowManager.close 先回调 onClose 再从列表摘除
-     * 窗口 —— 此刻 windowsForApp("terminal") 仍含正在关闭的窗口，
-     * size>1 表示还有其他终端窗口存活。先摘除 onSessionFinished
-     * 再 kill，防止退出回调异步污染后续新会话的 sessionFinished 状态。
-     */
-    fun closeSessionIfLastWindow() {
-        val remaining = WindowManager.get().windowsForApp("terminal")
-        if (remaining.size > 1) return
-        controller?.let { old ->
-            old.onSessionFinished = null
-            old.session?.finishIfRunning()
-            old.cleanup()
-        }
-        controller = null
-        sessionFinished = false
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RealTerminalArea(scope: WindowContentScope) {
+private fun RealTerminalArea() {
     val context = LocalContext.current
     // revision 变化（新建会话）→ 重新取控制器并重挂视图
     val controller = remember(TermuxTerminalHolder.revision) {
@@ -291,27 +253,18 @@ private fun RealTerminalArea(scope: WindowContentScope) {
     var symbolLayer by remember { mutableStateOf(false) }
     val viewRef = remember { mutableStateOf<TerminalView?>(null) }
 
-    // 标题跟随会话（bash 可用 OSC 序列改标题）
-    DisposableEffect(controller) {
-        val previous = controller.onTitleChanged
-        controller.onTitleChanged = { title -> scope.onTitleChange("终端 — $title") }
-        onDispose { controller.onTitleChanged = previous }
-    }
-
     // 控制器/视图就绪后重新挂载（视图在 factory 中创建）
     LaunchedEffect(controller) {
         viewRef.value?.let { controller.attach(it) }
     }
 
     // v2.22.1 IME 修复：移除 imePadding ——
-    // 终端窗口是自绘桌面（WindowHost/WindowChrome）里的浮窗，键盘弹出时
-    // MainActivity 的 windowSoftInputMode=adjustResize 已把整个工作区压缩到
-    // 键盘上方，WindowChrome 的钳制逻辑会把窗口适配到压缩后的工作区。
+    // MainActivity 的 windowSoftInputMode=adjustResize 在键盘弹出时已把
+    // 整个工作区（终端全屏页）压缩到键盘上方。
     // 此处若再叠加 imePadding（键盘全高 inset），Column 内容被二次压缩：
     // toolbar/extrakeys 与输入行被挤出可视区，只剩 Column 的黑色背景铺满
-    // 窗口下半部（用户反馈的"调用输入法时下方黑块太大、命令行被截断"）。
-    // 桌面内其他带输入框的应用（记事本/浏览器/模拟终端）均无 imePadding，
-    // 行为一致且正常。TerminalView.updateSize() 在窗口重排后自动跟随最新
+    // 页面下半部（用户反馈的"调用输入法时下方黑块太大、命令行被截断"）。
+    // TerminalView.updateSize() 在窗口重排后自动跟随最新
     // 输出行（mTopRow=0），无需额外滚动处理。
     Column(
         modifier = Modifier
@@ -331,7 +284,9 @@ private fun RealTerminalArea(scope: WindowContentScope) {
             onFontDecrease = { controller.changeFontSize(-2) },
             onFontIncrease = { controller.changeFontSize(+2) },
             onLayerToggle = { symbolLayer = !symbolLayer },
-            symbolLayerActive = symbolLayer
+            symbolLayerActive = symbolLayer,
+            onOpenX11 = { ShellController.showX11() },
+            onOpenSettings = { ShellController.showSettings() }
         )
 
         // ---------- 终端视图 ----------
@@ -419,7 +374,9 @@ private fun TerminalToolbar(
     onFontDecrease: () -> Unit,
     onFontIncrease: () -> Unit,
     onLayerToggle: () -> Unit,
-    symbolLayerActive: Boolean
+    symbolLayerActive: Boolean,
+    onOpenX11: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -448,6 +405,8 @@ private fun TerminalToolbar(
             onClick = onLayerToggle,
             highlighted = symbolLayerActive
         )
+        ToolbarButton("X11", onClick = onOpenX11, highlighted = true)
+        ToolbarButton("设置", onClick = onOpenSettings)
     }
 }
 

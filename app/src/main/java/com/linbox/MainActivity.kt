@@ -166,7 +166,5 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 清理所有打开的窗口
-        com.linbox.core.window.WindowManager.get().closeAll()
     }
 }

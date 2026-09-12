@@ -8,8 +8,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
-import com.linbox.core.window.LaunchMode
-import com.linbox.core.window.WindowManager
+import com.linbox.core.shell.ShellController
 import com.termux.x11.ICmdEntryInterface
 import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
@@ -17,20 +16,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * v2.22.2 fix9.6：X11 显示端"桌面窗口模式"连接中枢。
+ * v2.22.2 fix9.6：X11 显示端连接中枢。
  *
  * 终端侧 `linbox-x11` 启动的 X server 进程（CmdEntryPoint，app_process）
  * 每秒广播一次 ACTION_START，附带自己 binder（ICmdEntryInterface）。本对象：
  *
  * 1. 接收广播（LinBoxApp 注册的动态接收器回调），取出 binder 暂存；
- * 2. 在 LinBox 桌面内打开/聚焦 "X11 桌面" 浮动窗口（不再拉起独立全屏
- *    Activity，画面随窗口自由拖拽/缩放/全屏）；
- * 3. 窗口内容（X11Surface）组合出 LorieView 后调 [connectLorieView]：
- *    反复尝试 service.xConnection 取连接 fd → LorieView.connect(fd)
- *    → native 渲染器接管，把 X server 帧画进窗口 Surface；
- * 4. 会话抑制：用户手动关闭窗口后，同一 X server 进程的后续重播不再
- *    自动弹窗（以 binder 身份区分会话）；新的 X server 进程 = 新 binder
- *    = 新会话，重新自动弹窗。
+ * 2. 自动跳转到全屏 X11 界面（ShellController.Screen.X11，不再弹
+ *    浮动窗口/独立 Activity）；
+ * 3. 页面内 LorieView 就绪后调 [connectLorieView]：反复尝试
+ *    service.xConnection 取连接 fd → LorieView.connect(fd)
+ *    → native 渲染器接管，把 X server 帧画进 Surface；
+ * 4. 会话抑制：用户主动退出 X11 界面后，同一 X server 进程的后续
+ *    重播不再自动跳转（以 binder 身份区分会话）；新的 X server
+ *    进程 = 新 binder = 新会话，重新自动跳转。
  *
  * 与 com.termux.x11.MainActivity（兼容用全屏 Activity）互不抢占：广播
  * 只在本对象与该 Activity 的动态接收器之间并行分发，谁先取用 fd 谁渲染。
@@ -38,7 +37,6 @@ import kotlinx.coroutines.flow.StateFlow
 object X11WindowController {
 
     private const val TAG = "X11WindowController"
-    private const val APP_ID = "x11"
     private const val OPEN_DEBOUNCE_MS = 1500L
 
     /** 连接状态（窗口内容据此显示等待页/画面）。 */
@@ -66,14 +64,14 @@ object X11WindowController {
     @Volatile private var connectGeneration = 0
 
     /**
-     * LinBoxApp 动态接收器入口：暂存 binder 并打开桌面窗口。
+     * LinBoxApp 动态接收器入口：暂存 binder 并跳转 X11 全屏界面。
      * [intent] 为 CmdEntryPoint.ACTION_START 广播（bundle 里带 binder）。
      */
     fun onBroadcastReceived(context: Context, intent: Intent) {
         val bundle = intent.getBundleExtra(null) ?: return
         val binder = bundle.getBinder(null) ?: return
 
-        // 同一 X server 会话且用户已手动关窗 → 尊重用户选择，不反复弹窗。
+        // 同一 X server 会话且用户已主动退出界面 → 尊重用户选择，不反复拉入。
         if (binder === suppressedBinder && binder === sessionBinder) return
 
         val isNewSession = binder !== sessionBinder
@@ -93,39 +91,22 @@ object X11WindowController {
         if (_state.value != State.Connected) _state.value = State.Waiting
 
         if (isNewSession || _state.value == State.Waiting)
-            openOrFocusWindow(context.applicationContext)
+            showX11Screen(context.applicationContext)
     }
 
-    /** 桌面图标/开始菜单入口：打开 X11 窗口（不依赖广播是否已到）。 */
+    /** 主动入口（常驻服务通知按钮等）：跳转 X11 全屏界面。 */
     fun openWindow(context: Context) {
-        // 桌面图标主动打开时不设会话抑制 —— 用户明确想要窗口。
+        // 主动打开时不设会话抑制 —— 用户明确想要进入界面。
         suppressedBinder = null
-        openOrFocusWindow(context.applicationContext)
+        showX11Screen(context.applicationContext)
     }
 
-    private fun openOrFocusWindow(context: Context) {
+    private fun showX11Screen(context: Context) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastOpenAt < OPEN_DEBOUNCE_MS) return
         lastOpenAt = now
-
-        val wm = WindowManager.get()
-        val existing = wm.windowsForApp(APP_ID)
-        if (existing.isNotEmpty()) {
-            // 已有 X11 窗口：置顶/还原即可（渲染连接由窗口自身负责）。
-            // focus() 同时解除最小化并提升 z-index。
-            wm.focus(existing.first().id)
-            return
-        }
-
-        val appDef = com.linbox.core.window.AppRegistry.get(APP_ID)
-        wm.open(
-            appId = APP_ID,
-            title = appDef?.displayName ?: "X11 桌面",
-            launchMode = LaunchMode.FLOATING,
-            initialWidth = appDef?.defaultWidth?.value?.toInt() ?: 640,
-            initialHeight = appDef?.defaultHeight?.value?.toInt() ?: 480
-        )
-        Log.i(TAG, "已在 LinBox 桌面打开 X11 窗口")
+        ShellController.showX11()
+        Log.i(TAG, "已跳转 LinBox X11 界面")
     }
 
     /**
@@ -189,9 +170,9 @@ object X11WindowController {
     }
 
     /**
-     * 窗口关闭/视图分离：断开渲染连接（X server 端 renderer client 释放，
-     * 恢复每秒广播以便下次快速重连）并使重试循环失效。
-     * [userClosed]=true 时抑制当前会话的自动弹窗。
+     * 视图分离/退出 X11 界面：断开渲染连接（X server 端 renderer client
+     * 释放，恢复每秒广播以便下次快速重连）并使重试循环失效。
+     * [userClosed]=true 时抑制当前会话的自动跳转。
      */
     fun detachView(userClosed: Boolean) {
         connectGeneration++

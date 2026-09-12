@@ -48,12 +48,11 @@ import kotlinx.coroutines.flow.StateFlow
  * v2.22.4 fix11c：X11 设置面板。
  *
  * 用户需求："x11 长按状态栏的设置等" —— 两个入口：
- * 1. 长按 "X11 桌面" 浮动窗口标题栏（AppDef.onTitleBarLongPress，见 X11App；
- *    v2.22.5 fix12 起长按阈值 3 秒，避免与拖动窗口冲突）；
+ * 1. X11 界面控制条"X11设置"按钮（X11Screen.ControlBar）；
  * 2. 常驻通知（X11KeepAliveService）的 "X11 设置" 动作 —— 顺带把 App
- *    拉回前台并打开/聚焦 X11 窗口。
+ *    拉回前台并跳转 X11 界面。
  *
- * 面板集中了浮动窗口模式下真正生效的关键偏好：
+ * 面板集中了 X11 显示端真正生效的关键偏好：
  * - 分辨率模式（跟随窗口 / 固定分辨率）与常用预设/自定义分辨率；
  * - 拉伸铺满（exact 模式下 LorieView 铺满窗口，杜绝信箱黑边）；
  * - 剪贴板双向同步；

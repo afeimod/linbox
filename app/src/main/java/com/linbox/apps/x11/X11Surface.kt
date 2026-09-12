@@ -30,42 +30,40 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linbox.core.theme.LocalWinTheme
-import com.linbox.core.window.WindowContentScope
-import com.linbox.core.window.WindowManager
+import com.linbox.core.shell.ShellController
+import com.linbox.LinBoxApp
 import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
 import com.termux.x11.X11InputHub
 import com.termux.x11.input.InputStub
+import kotlinx.coroutines.launch
 
 private const val TAG_X11 = "X11Surface"
 
 /**
- * v2.22.2 fix9.6：X11 桌面的桌面窗口渲染面（开始菜单/桌面图标"X11 桌面"
- * 窗口内容，也可由终端 `linbox-x11` 广播自动弹出，见 X11WindowController）。
+ * v2.22.2 fix9.6：X11 图形界面（全屏页，ShellController.Screen.X11）。
  *
- * v2.22.3 fix10/fix11b 更新：
- * - 分辨率握手：glibc-runner -d 分辨率经 X11ResolutionLink（文件协议）
- *   到达本窗口。无 -d = native：X 屏幕随桌面窗口尺寸变化拉伸全屏；
- *   有 -d = exact + stretch：X 屏幕保持指定分辨率（游戏真实全屏渲染），
- *   显示层同比例拉伸铺满窗口，无黑边；
- * - 智能鼠标桥（SmartTouchBridge）：触摸→真实鼠标事件（替代旧的原生
- *   X 触摸直注）。wine 窗口（explorer/游戏）需要的是鼠标按下/抬起，
- *   且双击需要两次点击落在同一个小矩形内 —— 本桥带双击位置吸附、
- *   按下即按住（拖拽窗口/滚动条）、双指轻点右键、双指滑动滚轮；
- * - 虚拟手柄：直接使用桌面的悬浮虚拟手柄（GamepadOverlay/
- *   GamepadController），按键/鼠标经 X11InputHub 桥直注 X ——
- *   不再叠加 Winlator 移植的 InputControlsView 手柄层（已移除）。
+ * 进入方式：
+ * - 终端主页工具栏点"X11"按钮（ShellController.showX11()）；
+ * - 终端执行 `linbox-x11` → X server 广播 → X11WindowController
+ *   自动跳转本页（同一会话用户主动退出后不反复拉入）。
+ *
+ * 渲染与交互：
+ * - 画面渲染在 LorieView（native 跟随窗口 / exact+stretch 拉伸铺满，
+ *   均无黑边）；返回键先退控制条全屏，再退回终端主页；
+ * - 分辨率"跟随窗口"（native）或"固定分辨率"（exact）随时切换；
+ * - 控制条提供：键盘 / 游戏全屏（Alt+Enter）/ 虚拟手柄开关 / 设置面板；
+ * - 智能鼠标桥（SmartTouchBridge）：触摸→真实鼠标事件，wine 游戏
+ *   兼容（双击吸附/按住拖拽/双指右键/滚轮）；
+ * - 虚拟手柄：悬浮 GamepadOverlay 按键经 X11InputHub 桥直注 X。
  */
 @Composable
-fun X11Surface(scope: WindowContentScope) {
-    val theme = LocalWinTheme.current
+fun X11Screen() {
     val context = LocalContext.current
-    val wm = remember { WindowManager.get() }
     val connState by X11WindowController.state.collectAsState()
     var lorieViewRef by remember { mutableStateOf<LorieView?>(null) }
-    var wmRevision by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) { wm.observe { wmRevision++ } }
-    val isTrueFs = remember(wmRevision) { scope.windowState.isTrueFullscreen }
+    // 控制条全屏开关（真全屏：隐藏控制条，画面独占；返回键先退全屏）
+    var trueFs by remember { mutableStateOf(false) }
 
     val prefs = remember { LoriePreferences.prefs }
 
@@ -91,24 +89,25 @@ fun X11Surface(scope: WindowContentScope) {
         if (active) X11FitClient.start() else X11FitClient.stop()
     }
 
-    // 窗口关闭/最小化（内容离开组合）时断开渲染连接并抑制本会话自动弹窗；
-    // 重新打开/还原窗口时 factory 重建 LorieView 并自动重连。
-    // v2.22.5 fix15：窗口真正关闭（标题栏 X 按钮，最小化不触发 onClose）
-    // 时终止 wine 会话 —— 用户反馈"关闭 x11 窗口没有关闭 wine"。
-    DisposableEffect(scope.windowState.id) {
-        scope.windowState.onClose = { X11Session.killWine() }
+    // 离开本页（返回终端）时断开渲染连接、结束 wine 并抑制本会话自动
+    // 跳转；重新进入时 factory 重建 LorieView 并自动重连。
+    // v2.22.5 fix15：会话结束语义保持与旧版"关闭 X11 窗口"一致 ——
+    // 退出时终止 wine 会话（用户反馈"关闭 x11 窗口没有关闭 wine"）。
+    DisposableEffect(Unit) {
         onDispose {
+            X11Session.killWine()
             X11FitClient.stop()
             lorieViewRef = null
             X11ResolutionLink.attachView(null)
-            // 桌面手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
+            // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
             X11WindowController.detachView(userClosed = true)
         }
     }
 
-    // 真全屏时返回键退出全屏（对齐浏览器/播放器行为）
-    BackHandler(enabled = isTrueFs) { wm.toggleTrueFullscreen(scope.windowState.id) }
+    // 返回键：真全屏时先退全屏；否则回终端主页
+    BackHandler(enabled = trueFs) { trueFs = false }
+    BackHandler(enabled = !trueFs) { ShellController.showTerminal() }
 
     Column(
         modifier = Modifier
@@ -181,15 +180,14 @@ fun X11Surface(scope: WindowContentScope) {
         }
 
         // ===== 控制条（连接后显示） =====
-        // v2.22.5 fix13：真全屏时隐藏控制条（用户需求：点"全屏"后底部菜单
-        // 消失，画面独占整个窗口；按返回键退出全屏后控制条重新出现 ——
-        // BackHandler 已在本 Composable 顶部处理）。
-        if (connState == X11WindowController.State.Connected && prefs != null && !isTrueFs) {
+        // 真全屏（trueFs）时隐藏控制条：画面独占整屏；返回键先退全屏
+        // （BackHandler 在本 Composable 顶部处理），控制条重新出现。
+        if (connState == X11WindowController.State.Connected && prefs != null && !trueFs) {
             ControlBar(
-                scope = scope,
                 prefs = prefs,
                 lorieView = lorieViewRef,
-                isTrueFs = isTrueFs,
+                trueFs = trueFs,
+                onToggleFullscreen = { trueFs = !trueFs },
                 resState = resState
             )
         }
@@ -221,14 +219,14 @@ private fun WaitingPanel(state: X11WindowController.State) {
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "在终端执行以下命令启动桌面（本窗口将自动亮起）：",
+            text = "在终端执行以下命令启动 X 服务（本界面将自动亮起）：",
             color = Color(0xFFB8C4CE),
             fontSize = 12.sp,
             lineHeight = 17.sp
         )
         Spacer(Modifier.height(6.dp))
         val steps = listOf(
-            "linbox-x11 :13                  # 启动 X 服务并自动打开本窗口",
+            "linbox-x11 :13                  # 启动 X 服务并自动跳转本界面",
             "env DISPLAY=:13 xfce4-session   # 未自动起会话时手动执行",
             "glibc-runner -d1280x720 game.exe  # 游戏按指定分辨率全屏渲染",
             "linbox-x11 doctor              # 连不上时一键体检"
@@ -250,7 +248,7 @@ private fun WaitingPanel(state: X11WindowController.State) {
             Text("打开兼容全屏模式", fontSize = 12.sp)
         }
         Text(
-            text = "兼容模式 = 独立全屏 Activity（排查窗口模式问题时使用）",
+            text = "兼容模式 = 独立全屏 Activity（排查渲染异常时使用）",
             color = Color(0xFF8A97A3),
             fontSize = 10.sp
         )
@@ -259,15 +257,16 @@ private fun WaitingPanel(state: X11WindowController.State) {
 
 @Composable
 private fun ControlBar(
-    scope: WindowContentScope,
     prefs: com.termux.x11.Prefs,
     lorieView: LorieView?,
-    isTrueFs: Boolean,
+    trueFs: Boolean,
+    onToggleFullscreen: () -> Unit,
     resState: X11ResolutionLink.ResolutionState
 ) {
     val theme = LocalWinTheme.current
-    val wm = remember { WindowManager.get() }
     val context = LocalContext.current
+    val app = LinBoxApp.get()
+    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
 
     var modeNative by remember(resState.mode) { mutableStateOf(resState.mode != "exact") }
     var resText by remember(resState.mode) {
@@ -375,11 +374,31 @@ private fun ControlBar(
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
             ) { Text("游戏全屏", fontSize = 11.sp) }
 
-            // 全屏切换（真全屏：隐藏标题栏与任务栏，返回键退出）
+            // 虚拟手柄开关（X11 游戏用：开启后屏幕出现悬浮手柄，
+            // 按键/摇杆经 X11InputHub 直注 X）
             TextButton(
-                onClick = { wm.toggleTrueFullscreen(scope.windowState.id) },
+                onClick = {
+                    app.applicationScope.launch {
+                        app.settingsStore.setGamepadEnabled(!gamepadEnabled)
+                    }
+                },
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = if (gamepadEnabled) theme.accentColor else theme.windowTitleBarTextColor
+                ),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text(if (isTrueFs) "退出全屏" else "全屏", fontSize = 11.sp) }
+            ) { Text(if (gamepadEnabled) "隐藏手柄" else "虚拟手柄", fontSize = 11.sp) }
+
+            // X11 设置面板（分辨率/拉伸/剪贴板/握手重放）
+            TextButton(
+                onClick = { X11SettingsBridge.requestShow() },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text("X11设置", fontSize = 11.sp) }
+
+            // 全屏切换（真全屏：隐藏控制条，返回键退出）
+            TextButton(
+                onClick = onToggleFullscreen,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) { Text(if (trueFs) "退出全屏" else "全屏", fontSize = 11.sp) }
         }
     }
 }

@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 /**
  * 应用入口：初始化 ThemeManager、SettingsStore 等单例。
  *
- * 内置应用在 [registerApps] 中注册到 AppRegistry，由各 App 文件实现。
+ * 壳层为全屏页面（终端主页 / X11 / 设置），无浮动窗口系统。
  */
 class LinBoxApp : Application() {
 
@@ -84,10 +84,7 @@ class LinBoxApp : Application() {
         LoriePreferences.prefs = Prefs(this)
         migrateX11Defaults()
 
-        // 注册所有内置应用
-        com.linbox.apps.AppBootstrap.registerAll()
-
-        // 内置 X11 桌面：监听终端侧 X server 的连接广播
+        // 内置 X11 界面：监听终端侧 X server 的连接广播
         registerReceiver(
             x11LaunchReceiver,
             IntentFilter(CmdEntryPoint.ACTION_START)

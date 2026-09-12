@@ -4,8 +4,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.launch
 import com.linbox.LinBoxApp
-import com.linbox.core.window.AppRegistry
-import com.linbox.core.window.WindowManager
+import com.linbox.core.shell.ShellController
 import com.linbox.core.theme.WindowsVariant
 import android.content.Intent
 import android.net.Uri
@@ -86,14 +85,6 @@ object LinBoxShellBridge {
     // 命令分发（主线程）
     // ------------------------------------------------------------------
 
-    // LinBox 仅保留 Termux/X11 相关应用：终端、简易终端、设置、X11
-    private val appAliases: Map<String, String> = mapOf(
-        "settings" to "settings", "设置" to "settings",
-        "terminal" to "terminal", "终端" to "terminal",
-        "x11" to "x11", "桌面" to "x11",
-        "简易终端" to "terminal_sim"
-    )
-
     private fun dispatch(raw: String) {
         try {
             val parts = raw.split(" ", limit = 2)
@@ -132,30 +123,17 @@ object LinBoxShellBridge {
     }
 
     private fun handleStart(args: String) {
-        val target = appAliases[args.lowercase()] ?: args.lowercase()
-        val appDef = AppRegistry.get(target) ?: run {
-            Log.w(TAG, "应用未注册: $args")
-            return
+        when (args.lowercase()) {
+            "x11", "桌面", "gui" -> ShellController.showX11()
+            "settings", "设置" -> ShellController.showSettings()
+            "terminal", "终端" -> ShellController.showTerminal()
+            else -> Log.w(TAG, "未知应用: $args（可用: terminal / x11 / settings）")
         }
-        WindowManager.get().open(
-            appId = appDef.id,
-            title = appDef.displayName,
-            launchMode = appDef.launchMode,
-            initialWidth = appDef.defaultWidth.value.toInt(),
-            initialHeight = appDef.defaultHeight.value.toInt()
-        )
     }
 
     private fun handleApps() {
-        // shell 端无法直接展示 App 弹窗，改为列出可用应用（通过窗口标题栏提示）
-        val names = AppRegistry.all().joinToString(" / ") { it.displayName }
-        WindowManager.get().let { wm ->
-            wm.windowsForApp("terminal").firstOrNull()?.let {
-                // 轻量提示：把列表写到终端窗口标题（不侵入终端内容流）
-                wm.commitChanges()
-            }
-        }
-        Log.i(TAG, "可用应用: $names")
+        // 终端侧无 UI 弹窗，应用清单直接写日志（logcat 可见）
+        Log.i(TAG, "可用页面: 终端(terminal) / X11(x11) / 设置(settings)")
     }
 
     private fun handleOpen(args: String) {
