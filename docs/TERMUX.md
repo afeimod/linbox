@@ -420,10 +420,14 @@ FIFO 由 `linbox_bridge.c` 的 `TermuxBridge.createFifo()` 创建（Java 标准�
   pinch 双指缩放改字号、长按进入文本选择（选择手柄资源已合入 app res）。
 - **会话模型**：会话不随窗口关闭销毁（与 Termux 后台会话一致）；
   `exit` 结束会话后显示"新建会话"覆盖层；窗口标题跟随 bash 的 OSC 标题。
-- **快捷键栏（两排 + 符号层）**：
-  - 第一排：`ESC` `CTRL` `ALT` `TAB` `←` `↑` `↓` `→`
-  - 第二排：`HOME` `PGUP` `PGDN` `END` `~` `-` `⇧` `FN`
-  - `SYM` 切换第二排为符号层（`| \ " ' : ; $ @ # % …` 可横滑）
+- **快捷键栏（Termux 原版双排 + 符号层）**：
+  - 第一排：`ESC` `/` `—` `HOME` `↑` `END` `PGUP`
+  - 第二排：`⇤`(TAB) `CTRL` `ALT` `←` `↓` `→` `PGDN`
+  - 方向键短按单击一次，**按住约 400ms 后连续重复移动**（松手即停）
+  - `SYM` 在两排下方追加符号层（`| \ " ' : ; $ @ # % …` 可横滑）
+- **IME 遮挡修复（v2.23）**：沉浸式 edge-to-edge 下 API 30+ 忽略
+  adjustResize，终端根列改用 `imePadding()` 主动让位——快捷键栏无输入法
+  时贴屏幕底边、有输入法时贴输入法上沿（与官方 Termux 行为一致）。
 - **修饰键语义与官方 ExtraKeys 一致**：点击=粘滞一次性（作用于下一个按键
   后自动释放）；**长按=锁定**；状态由 `TerminalViewClient.readControlKey()`
   等轮询消费（读后自动释放，与上游 `readSpecialButton(autoSetInActive=true)`

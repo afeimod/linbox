@@ -2,6 +2,9 @@ package com.linbox.apps.settings
 
 import android.content.Context
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,7 +18,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Monitor
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SportsEsports
@@ -30,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -39,10 +43,10 @@ import com.linbox.LinBoxApp
 import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.shell.ShellController
 import com.linbox.core.theme.LocalWinTheme
-import com.linbox.core.theme.ThemeManager
-import com.linbox.core.theme.WinTheme
 import com.linbox.util.L
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -50,7 +54,7 @@ import kotlin.math.roundToInt
  *
  * 只保留对本应用（终端 + X11 + 虚拟手柄）真实有意义的设置：
  * - 显示：分辨率信息 / UI 缩放 / 显示方向 / 刘海屏
- * - 个性化：主题（95/XP/7/10/11 配色）/ 深浅模式 / 强调色 / 字体 / 语言
+ * - 终端背景：背景色 / 自定义图片背景 / 显示语言
  * - 输入：鼠标指针 / 触控板（MouseSettingsPage）、虚拟键盘（KeyboardSettingsPage）
  * - 游戏手柄：开关 + 悬浮设置窗入口（X11 游戏用）
  * - 关于：应用与设备信息
@@ -78,7 +82,7 @@ private sealed interface SettingsRoute {
 
 private enum class NavSection(val id: String, val label: String, val desc: String) {
     DISPLAY("display", "显示", "缩放、方向、刘海屏"),
-    PERSONALIZATION("personalization", "个性化", "主题、颜色、字体、语言"),
+    PERSONALIZATION("personalization", "终端背景", "背景色、自定义图片、语言"),
     INPUT("input", "输入", "鼠标指针、触控板、虚拟键盘"),
     GAMEPAD("gamepad", "游戏手柄", "虚拟手柄开关与布局设置"),
     ABOUT("about", "关于", "应用与设备信息")
@@ -398,86 +402,105 @@ private fun DisplaySection(onOpenMouse: () -> Unit) {
 }
 
 // ============================================================
-// 个性化：主题 / 颜色 / 字体 / 语言
+// 终端背景：背景色 / 自定义图片背景 / 显示语言
 // ============================================================
+
+/** 终端背景色预设（色值键，"default" = 经典黑 #0C0C0C）。 */
+private val TERMINAL_BG_PRESETS = listOf(
+    "default" to "默认",
+    "#000000" to "纯黑",
+    "#1E1E1E" to "深灰",
+    "#0D1B2A" to "深蓝",
+    "#0B2011" to "墨绿",
+    "#2A0E0E" to "酒红"
+)
 
 @Composable
 private fun PersonalizationSection() {
     val theme = LocalWinTheme.current
     val app = LinBoxApp.get()
     val scope0 = rememberCoroutineScope()
-    val colorMode by app.settingsStore.appColorMode.collectAsState(initial = "auto")
-    val accent by app.settingsStore.appAccent.collectAsState(initial = "default")
-    val fontScale by app.settingsStore.fontScale.collectAsState(initial = 1f)
-    val fontColor by app.settingsStore.fontColor.collectAsState(initial = "auto")
-    val fontStyle by app.settingsStore.fontStyle.collectAsState(initial = "default")
     val language by app.settingsStore.language.collectAsState(initial = "zh-CN")
-    val themes = com.linbox.core.theme.Themes.all
+    val bgColorKey by app.settingsStore.terminalBgColor.collectAsState(initial = "default")
+    val bgImageEnabled by app.settingsStore.terminalBgImage.collectAsState(initial = false)
+    val context = LocalContext.current
+    val imageFile = remember { java.io.File(context.filesDir, "terminal_bg.jpg") }
+    var previewBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
-    SectionHeader("个性化", "主题、颜色、字体、语言")
-
-    // ===== 主题选择 =====
-    Text(
-        "主题（窗口配色）",
-        color = if (theme.isDark) Color.White else Color.Black,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium
-    )
-    Spacer(Modifier.height(8.dp))
-    themes.forEach { themeOption ->
-        ThemeCard(
-            themeOption = themeOption,
-            isSelected = themeOption.variant == theme.variant,
-            onClick = { scope0.launch { app.themeManager.setTheme(themeOption.variant) } }
-        )
-        Spacer(Modifier.height(6.dp))
-    }
-    Spacer(Modifier.height(12.dp))
-
-    // ===== 颜色模式 =====
-    SettingsBlockCard("颜色模式") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SegmentedOption("跟随主题", colorMode == "auto") { scope0.launch { app.settingsStore.setAppColorMode("auto") } }
-            SegmentedOption("深色", colorMode == "dark") { scope0.launch { app.settingsStore.setAppColorMode("dark") } }
-            SegmentedOption("浅色", colorMode == "light") { scope0.launch { app.settingsStore.setAppColorMode("light") } }
-        }
+    // 预览缩略图（与终端实际使用的降采样解码同路）
+    LaunchedEffect(bgImageEnabled) {
+        previewBitmap = if (bgImageEnabled) withContext(Dispatchers.IO) {
+            decodeBgPreview(imageFile)
+        } else null
     }
 
-    // ===== 强调色 =====
-    SettingsBlockCard("强调色") {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            AccentSwatch("#default", accent) { scope0.launch { app.settingsStore.setAppAccent("default") } }
-            listOf("#0078D7", "#00B294", "#CA5010", "#8764B8", "#E3008C", "#00CC6A").forEach { hex ->
-                AccentSwatch(hex, accent) { scope0.launch { app.settingsStore.setAppAccent(hex) } }
+    // 选图（SAF，不需要存储权限）：拷贝到 filesDir 持久化，避免
+    // content:// URI 权限随重启失效
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope0.launch(Dispatchers.IO) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    imageFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                app.settingsStore.setTerminalBgImage(true)
+            } catch (e: Exception) {
+                android.util.Log.w("LinBoxSettings", "终端背景图保存失败: ${e.message}")
             }
         }
     }
 
-    // ===== 字体 =====
-    SettingsBlockCard("字体大小（${(fontScale * 100).roundToInt()}%）") {
-        Slider(
-            value = fontScale,
-            onValueChange = { scope0.launch { app.settingsStore.setFontScale(it) } },
-            valueRange = 0.85f..1.4f,
-            steps = 10
-        )
-    }
-    SettingsBlockCard("字体颜色") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SegmentedOption("跟随主题", fontColor == "auto") { scope0.launch { app.settingsStore.setFontColor("auto") } }
-            SegmentedOption("白", fontColor == "white") { scope0.launch { app.settingsStore.setFontColor("white") } }
-            SegmentedOption("黑", fontColor == "black") { scope0.launch { app.settingsStore.setFontColor("black") } }
-        }
-    }
-    SettingsBlockCard("字体样式") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SegmentedOption("默认", fontStyle == "default") { scope0.launch { app.settingsStore.setFontStyle("default") } }
-            SegmentedOption("衬线", fontStyle == "serif") { scope0.launch { app.settingsStore.setFontStyle("serif") } }
-            SegmentedOption("等宽", fontStyle == "mono") { scope0.launch { app.settingsStore.setFontStyle("mono") } }
+    SectionHeader("终端背景", "背景色、自定义图片背景")
+
+    // ===== 背景色 =====
+    SettingsBlockCard("背景色" + if (bgImageEnabled) "（图片背景启用时不生效）" else "") {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TERMINAL_BG_PRESETS.forEach { (key, label) ->
+                BgSwatch(label, key, bgColorKey) {
+                    scope0.launch { app.settingsStore.setTerminalBgColor(key) }
+                }
+            }
         }
     }
 
-    // ===== 语言 =====
+    // ===== 自定义图片背景 =====
+    SettingsBlockCard("自定义图片背景") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(width = 96.dp, height = 64.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (bgImageEnabled) "已启用：图片暗化叠加，保证文字可读"
+                    else "未设置：使用上方纯色背景",
+                    color = theme.secondaryTextColor,
+                    fontSize = 11.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SegmentedOption("选择图片…", selected = false) { pickImage.launch("image/*") }
+                    SegmentedOption("恢复默认", selected = false) {
+                        scope0.launch(Dispatchers.IO) {
+                            imageFile.delete()
+                            app.settingsStore.setTerminalBgImage(false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== 显示语言 =====
     SettingsBlockCard("显示语言") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SegmentedOption("简体中文", language == "zh-CN") { scope0.launch { app.settingsStore.setLanguage("zh-CN") } }
@@ -508,67 +531,44 @@ private fun SettingsBlockCard(title: String, content: @Composable ColumnScope.()
     Spacer(Modifier.height(8.dp))
 }
 
+/** 终端背景色色块（选中态白描边）。 */
 @Composable
-private fun AccentSwatch(hex: String, current: String, onClick: () -> Unit) {
+private fun BgSwatch(label: String, colorKey: String, current: String, onClick: () -> Unit) {
     val theme = LocalWinTheme.current
-    val color = if (hex == "#default") theme.windowTitleBarIconColor
-    else Color(android.graphics.Color.parseColor(hex))
-    Box(
-        modifier = Modifier
-            .size(28.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(color)
-            .border(
-                width = if (current == hex) 2.dp else 1.dp,
-                color = if (current == hex) Color.White else theme.dividerColor,
-                shape = RoundedCornerShape(6.dp)
-            )
-            .clickable(onClick = onClick)
-    )
-}
-
-@Composable
-private fun ThemeCard(themeOption: WinTheme, isSelected: Boolean, onClick: () -> Unit) {
-    val theme = LocalWinTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
-            .border(
-                1.dp,
-                if (isSelected) theme.accentColor else theme.dividerColor,
-                RoundedCornerShape(6.dp)
-            )
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    val color = if (colorKey == "default") Color(0xFF0C0C0C)
+    else Color(android.graphics.Color.parseColor(colorKey))
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(themeOption.windowTitleBarColor)
-                .border(1.dp, themeOption.windowBorderColor, RoundedCornerShape(4.dp))
+                .size(30.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(color)
+                .border(
+                    width = if (current == colorKey) 2.dp else 1.dp,
+                    color = if (current == colorKey) Color.White else theme.dividerColor,
+                    shape = RoundedCornerShape(6.dp)
+                )
+                .clickable(onClick = onClick)
         )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                themeOption.displayName,
-                color = if (theme.isDark) Color.White else Color.Black,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                "窗口强调色 " + String.format("#%06X", 0xFFFFFF and themeOption.accentColor.hashCode()),
-                color = theme.secondaryTextColor,
-                fontSize = 11.sp
-            )
-        }
-        if (isSelected) {
-            Text("已选择", color = theme.accentColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        }
+        Spacer(Modifier.height(4.dp))
+        Text(label, color = theme.secondaryTextColor, fontSize = 10.sp)
     }
+}
+
+/** 背景图预览缩略图解码（降采样，与终端实际使用同路）。 */
+private fun decodeBgPreview(file: java.io.File): android.graphics.Bitmap? = try {
+    if (!file.isFile) null else {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        while (bounds.outHeight / sample > 1280 || bounds.outWidth / sample > 720) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(
+            file.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        )
+    }
+} catch (_: Exception) {
+    null
 }
 
 // ============================================================
@@ -675,7 +675,6 @@ private fun AboutSection() {
     AboutRow("版本", BuildConfig.VERSION_NAME)
     AboutRow("包名", context.packageName)
     AboutRow("X11 显示号", ":13（终端 linbox-x11 命令调起）")
-    AboutRow("当前主题", theme.displayName)
     AboutRow("项目", "LinBox - Termux + X11")
     AboutRow("License", "MIT")
 }

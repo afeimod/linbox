@@ -49,6 +49,11 @@ class SettingsStore(private val context: Context) {
         val FONT_STYLE = stringPreferencesKey("font_style")
         val LANGUAGE = stringPreferencesKey("language")
 
+        // 终端背景：纯色（default / #RRGGBB）+ 自定义图片开关
+        // （图片本体存 filesDir/terminal_bg.jpg，选图时拷贝持久化）
+        val TERMINAL_BG_COLOR = stringPreferencesKey("terminal_bg_color")
+        val TERMINAL_BG_IMAGE = booleanPreferencesKey("terminal_bg_image")
+
         // 输入：鼠标指针 / 触控板
         val MOUSE_POINTER_SPEED = floatPreferencesKey("mouse_pointer_speed")
         val MOUSE_CURSOR_ENABLED = booleanPreferencesKey("mouse_cursor_enabled")
@@ -87,6 +92,10 @@ class SettingsStore(private val context: Context) {
     val fontColor: Flow<String> = context.appPrefs.data.map { it[Keys.FONT_COLOR] ?: "auto" }
     val fontStyle: Flow<String> = context.appPrefs.data.map { it[Keys.FONT_STYLE] ?: "default" }
     val language: Flow<String> = context.appPrefs.data.map { it[Keys.LANGUAGE] ?: "zh-CN" }
+
+    // ===== 终端背景 =====
+    val terminalBgColor: Flow<String> = context.appPrefs.data.map { it[Keys.TERMINAL_BG_COLOR] ?: "default" }
+    val terminalBgImage: Flow<Boolean> = context.appPrefs.data.map { it[Keys.TERMINAL_BG_IMAGE] ?: false }
 
     // ===== 输入：鼠标 / 触控板 =====
     val mousePointerSpeed: Flow<Float> = context.appPrefs.data.map { it[Keys.MOUSE_POINTER_SPEED] ?: 1.0f }
@@ -148,6 +157,15 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setLanguage(lang: String) {
         context.appPrefs.edit { it[Keys.LANGUAGE] = lang }
+    }
+
+    // ===== 终端背景 =====
+    suspend fun setTerminalBgColor(color: String) {
+        context.appPrefs.edit { it[Keys.TERMINAL_BG_COLOR] = color }
+    }
+
+    suspend fun setTerminalBgImage(enabled: Boolean) {
+        context.appPrefs.edit { it[Keys.TERMINAL_BG_IMAGE] = enabled }
     }
 
     // ===== 输入：鼠标 / 触控板 =====

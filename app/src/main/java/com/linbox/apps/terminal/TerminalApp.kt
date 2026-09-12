@@ -1,11 +1,15 @@
 package com.linbox.apps.terminal
 
 import android.view.KeyEvent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.pointerInput
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,6 +21,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.linbox.LinBoxApp
 import com.linbox.apps.terminal.termux.LinBoxShellBridge
 import com.linbox.apps.terminal.termux.ExtraKeysModifierState
 import com.linbox.apps.terminal.termux.TermuxBootstrapInstaller
@@ -32,6 +40,9 @@ import com.linbox.apps.terminal.termux.TermuxSessionController
 import com.linbox.termux.view.TerminalView
 import com.linbox.core.shell.ShellController
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -41,7 +52,10 @@ import kotlinx.coroutines.withContext
  *   归档，安装时同长度重写 com.termux → com.linbox 路径前缀）；
  * - 会话为真实 login shell（bash），pkg/apt 可用；
  * - 视图为 termux 官方 TerminalView（Apache-2.0 移植）；
- * - 两排快捷键栏 + 可切换符号层（ESC/CTRL/ALT/TAB/方向/Home/PgUp…）；
+ * - 快捷键栏为 Termux 原版双排布局（ESC/-/HOME/↑/END/PGUP +
+ *   ⇤/CTRL/ALT/←/↓/→/PGDN），方向键短按单击、长按连续重复；
+ * - 双指捏合缩放字号（TerminalView 内置 ScaleGestureDetector）;
+ * - 终端背景可自定义：设置→终端背景（纯色 / 自定义图片）;
  * - 工具栏一键跳转 X11 图形界面 / 设置页；终端里执行 `linbox-x11`
  *   也会自动跳转（见 X11WindowController 广播）；
  * - 会话随 App 进程存活，退出 App 或系统杀死进程后重建为全新 shell。
@@ -242,6 +256,60 @@ object TermuxTerminalHolder {
     }
 }
 
+// ------------------------------------------------------------------
+// 终端背景（设置→终端背景：纯色 / 自定义图片）
+// ------------------------------------------------------------------
+
+private const val BACKGROUND_IMAGE_FILE = "terminal_bg.jpg"
+
+/** 终端背景解析结果：纯色或图片（图片模式下 TerminalView 透明）。 */
+private class TerminalBackgroundState(val color: Color, val bitmap: android.graphics.Bitmap?) {
+    /** TerminalView 背景色：图片模式透明（露出下层图片 + 暗化叠加）。 */
+    val viewBackgroundArgb: Int =
+        if (bitmap != null) android.graphics.Color.TRANSPARENT else color.toArgb()
+}
+
+@Composable
+private fun rememberTerminalBackground(): TerminalBackgroundState {
+    val app = LinBoxApp.get()
+    val context = LocalContext.current
+    val colorKey by app.settingsStore.terminalBgColor.collectAsState(initial = "default")
+    val imageEnabled by app.settingsStore.terminalBgImage.collectAsState(initial = false)
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(imageEnabled) {
+        bitmap = if (imageEnabled) withContext(Dispatchers.IO) {
+            decodeSampledBackground(java.io.File(context.filesDir, BACKGROUND_IMAGE_FILE))
+        } else null
+    }
+
+    val color = remember(colorKey) {
+        if (colorKey == "default") Color(0xFF0C0C0C)
+        else try {
+            Color(android.graphics.Color.parseColor(colorKey))
+        } catch (_: Exception) {
+            Color(0xFF0C0C0C)
+        }
+    }
+    return TerminalBackgroundState(color, bitmap)
+}
+
+/** 大图降采样解码（1440×2560 上限），避免全尺寸位图内存峰值。 */
+private fun decodeSampledBackground(file: java.io.File): android.graphics.Bitmap? = try {
+    if (!file.isFile) null else {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        while (bounds.outHeight / sample > 2560 || bounds.outWidth / sample > 1440) sample *= 2
+        android.graphics.BitmapFactory.decodeFile(
+            file.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        )
+    }
+} catch (_: Exception) {
+    null
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RealTerminalArea() {
@@ -258,18 +326,19 @@ private fun RealTerminalArea() {
         viewRef.value?.let { controller.attach(it) }
     }
 
-    // v2.22.1 IME 修复：移除 imePadding ——
-    // MainActivity 的 windowSoftInputMode=adjustResize 在键盘弹出时已把
-    // 整个工作区（终端全屏页）压缩到键盘上方。
-    // 此处若再叠加 imePadding（键盘全高 inset），Column 内容被二次压缩：
-    // toolbar/extrakeys 与输入行被挤出可视区，只剩 Column 的黑色背景铺满
-    // 页面下半部（用户反馈的"调用输入法时下方黑块太大、命令行被截断"）。
-    // TerminalView.updateSize() 在窗口重排后自动跟随最新
-    // 输出行（mTopRow=0），无需额外滚动处理。
+    // 终端背景（纯色 / 自定义图片，图片时终端视图透明）
+    val bg = rememberTerminalBackground()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0C0C0C))
+            // v2.23 IME 遮挡修复：沉浸式（setDecorFitsSystemWindows(false)）下
+            // API 30+ 系统忽略 adjustResize，键盘弹出时必须靠 ime() inset 主动
+            // 让位——整列（工具栏/终端/快捷键栏）抬到输入法上方；快捷键栏无
+            // 输入法时贴屏幕底边、有输入法时贴输入法上沿（对齐官方 Termux）。
+            // API 30 以下 adjustResize 生效且 ime() inset 报 0，两者不叠加。
+            .imePadding()
+            .background(if (bg.bitmap != null) Color.Black else bg.color)
     ) {
         // ---------- 工具栏 ----------
         TerminalToolbar(
@@ -289,19 +358,29 @@ private fun RealTerminalArea() {
             onOpenSettings = { ShellController.showSettings() }
         )
 
-        // ---------- 终端视图 ----------
+        // ---------- 终端视图（图片背景时透明 + 底层图片与暗化叠加） ----------
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
         ) {
+            if (bg.bitmap != null) {
+                Image(
+                    bitmap = bg.bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                // 暗化叠加：保证终端文字在任意图片上可读
+                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)))
+            }
             AndroidView(
                 factory = { ctx ->
-                    TermuxTerminalFactory.create(ctx, controller).also { view ->
+                    TermuxTerminalFactory.create(ctx, controller, bg.viewBackgroundArgb).also { view ->
                         viewRef.value = view
                     }
                 },
-                update = { /* TerminalView 自管理重绘 */ },
+                update = { view -> view.setBackgroundColor(bg.viewBackgroundArgb) },
                 onRelease = { view ->
                     if (viewRef.value === view) viewRef.value = null
                     controller.detach(view)
@@ -327,11 +406,15 @@ private fun RealTerminalArea() {
     }
 }
 
-/** TerminalView 工厂：视图创建 + 控制器接线。 */
+/** TerminalView 工厂：视图创建 + 控制器接线（背景色由调用方传入，图片背景时透明）。 */
 private object TermuxTerminalFactory {
-    fun create(context: android.content.Context, controller: TermuxSessionController): TerminalView {
+    fun create(
+        context: android.content.Context,
+        controller: TermuxSessionController,
+        backgroundArgb: Int
+    ): TerminalView {
         val view = TerminalView(context, null)
-        view.setBackgroundColor(android.graphics.Color.rgb(12, 12, 12))
+        view.setBackgroundColor(backgroundArgb)
         controller.attach(view)
         view.isFocusable = true
         view.isFocusableInTouchMode = true
@@ -436,8 +519,11 @@ private fun ToolbarButton(
 }
 
 // ====================================================================
-// 快捷键栏（Termux ExtraKeys 等效实现）
+// 快捷键栏（Termux ExtraKeys 原版双排布局）
 // ====================================================================
+
+/** 方向键长按连发的重复间隔（ms）——短按单击，按住约 400ms 后连续移动。 */
+private const val KEY_REPEAT_INTERVAL_MS = 60L
 
 /** 常用键名 → KeyEvent 键码（对齐官方 PRIMARY_KEY_CODES_FOR_STRINGS）。 */
 private val KEY_CODE_MAP: Map<String, Int> = mapOf(
@@ -493,7 +579,7 @@ private fun TermuxExtraKeysBar(
             .fillMaxWidth()
             .background(Color(0xFF161616))
     ) {
-        // 第一排：ESC CTRL ALT TAB ← ↑ ↓ →
+        // 第一排（对齐官方 Termux）：ESC / — HOME ↑ END PGUP
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -501,16 +587,32 @@ private fun TermuxExtraKeysBar(
             horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             ExtraKey("ESC") { key -> sendKeyToTerminal(view, key, modifiers) }
-            ModifierKey("CTRL", modifiers.ctrl)
-            ModifierKey("ALT", modifiers.alt)
-            ExtraKey("TAB") { key -> sendKeyToTerminal(view, key, modifiers) }
-            ExtraKey("←") { sendKeyToTerminal(view, "LEFT", modifiers) }
-            ExtraKey("↑") { sendKeyToTerminal(view, "UP", modifiers) }
-            ExtraKey("↓") { sendKeyToTerminal(view, "DOWN", modifiers) }
-            ExtraKey("→") { sendKeyToTerminal(view, "RIGHT", modifiers) }
+            ExtraKey("/") { key -> sendKeyToTerminal(view, key, modifiers) }
+            // 显示长横线、发送连字符（对齐 Termux 默认键位）
+            ExtraKey("—") { sendKeyToTerminal(view, "-", modifiers) }
+            ExtraKey("HOME") { key -> sendKeyToTerminal(view, key, modifiers) }
+            RepeatableKey("↑", key = "UP", view = view, modifiers = modifiers)
+            ExtraKey("END") { key -> sendKeyToTerminal(view, key, modifiers) }
+            ExtraKey("PGUP") { key -> sendKeyToTerminal(view, key, modifiers) }
         }
 
-        // 第二排（可切换）：导航键层 / 符号键层
+        // 第二排（对齐官方 Termux）：⇤(TAB) CTRL ALT ← ↓ → PGDN
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 3.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            ExtraKey("⇤") { sendKeyToTerminal(view, "TAB", modifiers) }
+            ModifierKey("CTRL", modifiers.ctrl)
+            ModifierKey("ALT", modifiers.alt)
+            RepeatableKey("←", key = "LEFT", view = view, modifiers = modifiers)
+            RepeatableKey("↓", key = "DOWN", view = view, modifiers = modifiers)
+            RepeatableKey("→", key = "RIGHT", view = view, modifiers = modifiers)
+            ExtraKey("PGDN") { key -> sendKeyToTerminal(view, key, modifiers) }
+        }
+
+        // 第三排（可选）：符号键层（工具栏 SYM 切换）
         if (symbolLayer) {
             Row(
                 modifier = Modifier
@@ -528,27 +630,68 @@ private fun TermuxExtraKeysBar(
                     ExtraKey(s, fixedWidth = true) { key -> sendKeyToTerminal(view, key, modifiers) }
                 }
             }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 3.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                ExtraKey("HOME") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("PGUP") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("PGDN") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("END") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("~") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("-") { key -> sendKeyToTerminal(view, key, modifiers) }
-                ExtraKey("⇧", modifierLabel = modifiers.shift.isEngaged) {
-                    modifiers.shift.toggle()
-                }
-                ExtraKey("FN", modifierLabel = modifiers.fn.isEngaged) {
-                    modifiers.fn.toggle()
-                }
-            }
         }
+    }
+}
+
+/**
+ * 方向键（可长按连发）：
+ * - 短按 = 单击一次（按下立即响应，无点击延迟）；
+ * - 按住超过系统长按阈值后自动连续重复（对齐 Termux/系统键盘的
+ *   按住移动节奏），松手立即停止。
+ */
+@Composable
+private fun RowScope.RepeatableKey(
+    label: String,
+    key: String,
+    view: TerminalView?,
+    modifiers: ExtraKeysModifierState
+) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(40.dp)
+            .background(Color(0xFF242424), RoundedCornerShape(5.dp))
+            .pointerInput(key) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    haptic.performHapticFeedback(
+                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                    )
+                    // 短按：按下立即生效
+                    sendKeyToTerminal(view, key, modifiers)
+                    // 长按：超过系统长按阈值后进入连续重复，松手即停
+                    val repeatJob = launch {
+                        delay(viewConfiguration.longPressTimeoutMillis)
+                        haptic.performHapticFeedback(
+                            androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                        )
+                        while (isActive) {
+                            delay(KEY_REPEAT_INTERVAL_MS)
+                            sendKeyToTerminal(view, key, modifiers)
+                        }
+                    }
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.none { it.pressed }) break
+                            event.changes.forEach { it.consume() }
+                        }
+                    } finally {
+                        repeatJob.cancel()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = Color(0xFFE0E0E0),
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }
 
