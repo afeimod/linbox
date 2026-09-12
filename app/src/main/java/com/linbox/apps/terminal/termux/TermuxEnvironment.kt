@@ -43,13 +43,16 @@ object TermuxEnvironment {
      * bootstrap 分发——独立 assets/termux/x11-xkb.tar.gz 在用户 CI
      * 仓库管线中会整文件丢失，fresh 安装必失败截图实锤；而 bootstrap
      * *.zip 从未丢过）——SHA-256 随之更新。
+     * fix9.11：LinBox 改造（sources.list 服务地址旧名→linbox，
+     * 等 10 字节等长替换）后 SHA-256 再次更新——离线包必须与
+     * BOOTSTRAP_AARCH64_SHA256 一一对应，改包必改哈希。
      */
     const val TERMUX_APP_VERSION = "0.118.0"
     const val BOOTSTRAP_BUILD_VERSION = "2022.01.07-r1"
     const val BOOTSTRAP_SOURCE_URL =
         "https://github.com/termux/termux-packages/releases/download/bootstrap-$BOOTSTRAP_BUILD_VERSION/bootstrap-%s.zip"
     const val BOOTSTRAP_AARCH64_SHA256 =
-        "34949b5f70b5b030c472d8a8af54121f0cb06388d212c6bf7f87b8eefe6f935f"
+        "9ec1cc75384329530f31117386154aefa7ba02614bf41ac576fa4e28f19863b9"
 
     // ------------------------------------------------------------------
     // 运行期路径（全部由 Context 派生，避免硬编码二次引入）
