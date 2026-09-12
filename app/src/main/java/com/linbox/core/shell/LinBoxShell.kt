@@ -15,6 +15,7 @@ import com.linbox.apps.settings.SettingsScreen
 import com.linbox.apps.terminal.TerminalScreen
 import com.linbox.apps.x11.X11Screen
 import com.linbox.core.input.MouseController
+import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.VirtualKeyboardOverlay
 import com.linbox.core.input.gamepad.GamepadOverlay
