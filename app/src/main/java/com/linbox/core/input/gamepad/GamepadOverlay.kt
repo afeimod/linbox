@@ -199,8 +199,8 @@ private fun GamepadElementHost(
             }
             .size(element.sizeDp.dp)
             // v2.16.4：把元素命中矩形（窗口坐标）登记给 GamepadController，
-            // 浏览器侧 ZoomPinchLayout 据此把"落在手柄元素上"的指针从
-            // MotionEvent 流中剥离，让网页拖动/点击与手柄操作互不干扰
+            // interop 容器据此把"落在手柄元素上"的指针从 MotionEvent 流中
+            // 剥离，让页面拖动/点击与手柄操作互不干扰
             .onGloballyPositioned { coords ->
                 val p = coords.positionInWindow()
                 val s = coords.size
@@ -373,9 +373,9 @@ private fun JoystickContent(
                         // v2.16.4：重写为 awaitEachGesture 且不再消费事件。
                         // 根因：摇杆按住时 consume() 会让 Compose interop 过滤器
                         // （PointerInteropFilter）判定"有指针变化被消费"而停止向
-                        // WebView 派发事件 —— 手柄移动时网页收不到另一根手指的
-                        // 拖动，3D 视角旋转失灵。去消费后 WebView 侧由
-                        // ZoomPinchLayout 剥离手柄指针，两边各收各的指针。
+                        // 内嵌原生 View 派发事件 —— 手柄移动时页面收不到另一根
+                        // 手指的拖动。去消费后由 interop 容器侧剥离手柄指针，
+                        // 两边各收各的指针。
                         // requireUnconsumed=false：网页先按下（过滤器消费全部变化）
                         // 后再按摇杆也能响应。摇杆头直接跟随触点位置（相对中心限幅）。
                         // finally 兜底：手势被取消（如切编辑模式）时也清空方向，

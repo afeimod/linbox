@@ -11,16 +11,15 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import com.linbox.core.input.ZoomPinchLayout
 import kotlin.math.abs
 
 /**
  * 注入合成事件在【原生 View 层】使用的指针 id 基线。
  *
  * ⚠️ 判别注入流与真实手指的两个维度：
- * - 原生 View 层（[com.linbox.MainActivity.dispatchTouchEvent]、
- *   [com.linbox.core.input.ZoomPinchLayout] 等）：拿到的是未经映射的
- *   原始 MotionEvent，直接用 `pointerId >= INJECTED_POINTER_ID` 判定。
+ * - 原生 View 层（[com.linbox.MainActivity.dispatchTouchEvent] 等）：
+ *   拿到的是未经映射的原始 MotionEvent，直接用
+ *   `pointerId >= INJECTED_POINTER_ID` 判定。
  * - Compose 层：Compose 1.6.8 的 MotionEventAdapter 维护
  *   `motionEventToComposePointerIdMap`，把原始 pointerId 映射为内部自增 id
  *   （永不回落），id 维度无法区分注入与真实 —— 一律改用 [PointerType]：
@@ -46,10 +45,9 @@ internal const val INJECTED_POINTER_ID = 99
  * 手势集不变：
  * - 单指滑动 = 移动指针；轻点 = 单击；按住不动 ≥ 320ms = 拖拽（或"长按
  *   右键"设置下呼出菜单）；双指滑动 = 滚轮；双指轻点 = 右键菜单。
- * - 右键菜单 v2.20 改为【主窗口内渲染】（见 DesktopContextMenu）：
- *   双指轻点直接回调 onContextMenu，菜单打开后滑动/点按不会再触发
- *   Popup 的 ACTION_OUTSIDE dismiss —— "双指右键出菜单无法滑动选择"
- *   修复点。
+ * - 右键菜单在主窗口内渲染：双指轻点直接回调 onContextMenu，菜单打开后
+ *   滑动/点按不会再触发 Popup 的 ACTION_OUTSIDE dismiss —— "双指右键
+ *   出菜单无法滑动选择"修复点。
  */
 @Suppress("UNUSED_PARAMETER") // onTwoFingerTap 为签名兼容保留（见下方注释）
 @Composable
@@ -230,11 +228,6 @@ object TrackpadController {
      * 后加入者 z 序更高），命中最顶层的一个派发（坐标同步换算）；反射失败
      * 回退主窗口。真实多窗口路由语义与系统一致：点在弹窗上 → 弹窗处理；
      * 点在弹窗外 → 主窗口处理。
-     *
-     * 落点在原生 interop 容器（[ZoomPinchLayout]，浏览器画布）上时【旁路
-     * 派发】——直接 dispatchTouchEvent 给容器，绕开 interop 过滤器
-     * （过滤器在真实手指被消费后的状态下会把注入流闩死并向 WebView 发
-     * CANCEL；v2.20 门禁虽不再消费真实手指，此旁路对 interop 过滤器仍然必需）。
      */
     private fun dispatchTouchAt(view: View, event: MotionEvent, x: Float, y: Float) {
         try {
@@ -247,18 +240,8 @@ object TrackpadController {
                 val lx = x + mainLoc[0] - loc[0]
                 val ly = y + mainLoc[1] - loc[1]
                 if (lx >= 0f && ly >= 0f && lx < root.width && ly < root.height) {
-                    val bypass = findBypassTarget(root, lx, ly)
-                    if (bypass != null) {
-                        // 换算到容器局部坐标后直接派发（绕过 interop 过滤器）
-                        val bLoc = IntArray(2); bypass.getLocationOnScreen(bLoc)
-                        val bx = x + mainLoc[0] - bLoc[0]
-                        val by = y + mainLoc[1] - bLoc[1]
-                        event.offsetLocation(bx - event.x, by - event.y)
-                        bypass.dispatchTouchEvent(event)
-                    } else {
-                        event.offsetLocation(lx - event.x, ly - event.y)
-                        root.dispatchTouchEvent(event)
-                    }
+                    event.offsetLocation(lx - event.x, ly - event.y)
+                    root.dispatchTouchEvent(event)
                     return
                 }
                 i--
@@ -266,22 +249,6 @@ object TrackpadController {
         } catch (_: Exception) {
         }
         view.dispatchTouchEvent(event)
-    }
-
-    /**
-     * 查找 (x,y)（root 局部坐标）处可旁路的原生 interop 容器。
-     * 自最深可见子 View 沿 parent 上溯，命中 [ZoomPinchLayout] 即返回
-     * （浏览器画布）；到达 root 仍未命中 → null（走普通根派发路径）。
-     * 其它 AndroidView（如有）不上溯命中，保持原有行为。
-     */
-    private fun findBypassTarget(root: View, x: Float, y: Float): View? {
-        val deepest = deepestViewAt(root, x, y) ?: return null
-        var cur: View = deepest
-        while (cur !== root) {
-            if (cur is ZoomPinchLayout) return cur
-            cur = cur.parent as? View ?: return null
-        }
-        return null
     }
 
     /** 本进程全部已 attach 的窗口根 View（主窗口 + Popup/Dialog 子窗口） */

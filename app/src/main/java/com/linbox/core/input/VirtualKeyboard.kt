@@ -222,7 +222,8 @@ class StringTarget(
  *
  * - target：当前聚焦文本框的编辑会话（focus 钩子维护）
  * - visible：键盘可见性（focus 呼出 / Esc 或隐藏按钮收起）
- * - onWinKey：Win 徽标键回调（DesktopEnvironment 注入 = 切换开始菜单）
+ * - onWinKey：Win 徽标键回调（预留钩子，当前无注入方；Win 键按下时若
+ *   外部已设置则触发，未设置则无操作）
  */
 object VirtualKeyboardController {
 

@@ -30,7 +30,8 @@ import kotlin.math.roundToInt
 /**
  * 虚拟鼠标指针（v2.13）：Windows 经典箭头样式的屏幕指针。
  *
- * - 位置：由 DesktopEnvironment 根节点以"纯观察者"方式跟踪全部触摸事件更新，
+ * - 位置：由 View 层输入路由（TrackpadRouter，入口在
+ *   MainActivity.dispatchTouchEvent）以"纯观察者"方式跟踪全部触摸事件更新，
  *   指针贴着手指移动，抬手后停留在原地（与真实桌面一致）。
  * - 点击动画：快速轻点时在指针热点处播放一次扩散涟漪。
  * - 主题/大小：白(经典) / 黑 / 蓝 / 绿 四种主题，16..48dp 缩放。

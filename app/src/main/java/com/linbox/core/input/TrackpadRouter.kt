@@ -44,7 +44,7 @@ internal fun LayoutCoordinates.boundsInWindowCompat(): Rect {
  *    累积 → 随机出现手势僵死/事件错乱，门禁协程饿死 → "触控板逻辑丢失、
  *    恢复触摸点击、鼠标不动"。
  * 3. 【菜单即触即关】focusable Popup 收到 ACTION_OUTSIDE 即 dismiss ——
- *    属菜单自身实现问题，另行修复（DesktopContextMenu v2.20 改主窗口内渲染）。
+ *    右键菜单已在主窗口内渲染规避（见 TrackpadLayer 头注释）。
  *
  * ## v2.20 架构（对齐 termux-x11 的 TouchInputHandler）
  *

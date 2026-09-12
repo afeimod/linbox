@@ -550,13 +550,12 @@ object GamepadController {
     // ============================================================
     // 背景：手柄摇杆/按钮按住时会消费自己的指针变化，而 Compose interop
     // 过滤器（compose-ui 1.6.8 PointerInteropFilter.dispatchToView）只要
-    // 发现"任何一个指针变化被消费"就停止向 WebView 派发事件 —— 导致
-    // 手柄移动时另一根手指的拖动/点击永远到不了网页（3D 视角旋转失灵）。
-    // 修复链路：GamepadOverlay 用 onGloballyPositioned 把每个元素的
-    // boundsInRoot（窗口坐标）登记到这里；浏览器侧 ZoomPinchLayout 在
-    // dispatchTouchEvent 入口把"落点在手柄元素内"的指针从 MotionEvent
-    // 中剥离，WebView 收到与"手柄不存在"一致的干净流（等效 GameBox 的
-    // 原生 View 分指：手柄按钮和 WebView 各收各的指针）。
+    // 发现"任何一个指针变化被消费"就停止向内嵌原生 View 派发事件 ——
+    // 手柄移动时另一根手指的拖动/点击永远到不了目标 View。
+    // 链路：GamepadOverlay 用 onGloballyPositioned 把每个元素的
+    // boundsInRoot（窗口坐标）登记到这里；原生 interop 容器可在
+    // dispatchTouchEvent 入口据此把"落点在手柄元素内"的指针从
+    // MotionEvent 中剥离，让手柄与页面触摸各收各的指针。
 
     /** 每个手柄元素的命中矩形（窗口坐标 px；仅 UI 线程读写） */
     private val elementHitRects = HashMap<String, FloatArray>() // [l,t,r,b]
