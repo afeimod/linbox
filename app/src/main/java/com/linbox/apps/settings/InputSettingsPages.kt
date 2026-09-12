@@ -9,7 +9,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Icon
@@ -26,7 +25,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.linbox.LinBoxApp
-import com.linbox.core.input.MouseCursorPreview
 import com.linbox.core.input.keyboardAware
 import com.linbox.core.input.keyboardAwareEditor
 import com.linbox.core.theme.LocalWinTheme
@@ -35,8 +33,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * 输入设置页（v2.13）：鼠标设置 / 键盘设置。
- * 由"蓝牙和设备"分区进入（应用内子页，返回上级分区）。
+ * 输入设置页：键盘设置（KeyboardSettingsPage）。
+ * v2.27：鼠标设置（MouseSettingsPage）已随需求移除；
+ * 由设置左侧导航"输入"分区进入（应用内子页，返回上级分区）。
  */
 
 /** 子页头部：返回按钮 + 标题 */
@@ -134,177 +133,6 @@ internal fun SettingsBlock(title: String, content: @Composable ColumnScope.() ->
 }
 
 // ============================================================
-// 鼠标设置
-// ============================================================
-
-@Composable
-internal fun MouseSettingsPage(onBack: () -> Unit) {
-    val app = LinBoxApp.get()
-    val theme = LocalWinTheme.current
-    val scope = rememberCoroutineScope()
-
-    val cursorEnabled by app.settingsStore.mouseCursorEnabled.collectAsState(initial = true)
-    val cursorTheme by app.settingsStore.mouseCursorTheme.collectAsState(initial = "white")
-    val cursorSize by app.settingsStore.mouseCursorSize.collectAsState(initial = 26f)
-    val rightClick by app.settingsStore.mouseRightClick.collectAsState(initial = "twofinger")
-    val speed by app.settingsStore.mousePointerSpeed.collectAsState(initial = 1.0f)
-    // 指针移动方式：touch 跟随手指 / trackpad 触控板
-    val controlMode by app.settingsStore.mouseControlMode.collectAsState(initial = "touch")
-
-    SubPageHeader("鼠标设置", onBack)
-
-    // 注意：宿主（SettingsApp 右侧内容区）已是 verticalScroll 滚动容器，
-    // 子页禁止再套 verticalScroll —— 嵌套会被以无限高度约束测量并抛
-    // IllegalStateException（v2.13.1 修复的运行时崩溃），滚动由宿主统一负责。
-    Column(modifier = Modifier.fillMaxWidth()) {
-
-        // ===== 指针显示 =====
-        SettingsCard(
-            icon = Icons.Default.Mouse,
-            iconBackgroundColor = Color(0xFF00B294),
-            title = "显示鼠标指针",
-            subtitle = "Windows 风格箭头指针，跟随手指移动，轻点显示涟漪",
-            trailingContent = {
-                ToggleSwitch(cursorEnabled) { v ->
-                    scope.launch { app.settingsStore.setMouseCursorEnabled(v) }
-                }
-            }
-        )
-        Spacer(Modifier.height(10.dp))
-
-        // ===== v2.18 移动方式（触控 / 触控板） =====
-        SettingsBlock("移动方式") {
-            SegmentedControl(
-                options = listOf("touch" to "触控", "trackpad" to "触控板"),
-                selected = controlMode
-            ) { mode -> scope.launch { app.settingsStore.setMouseControlMode(mode) } }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (controlMode == "trackpad")
-                    L("整个屏幕当作触控板：滑动移动指针，轻点 = 单击，快速连点两下 = 双击，按住不动后拖动 = 按住拖拽，双指轻点 = 右键，双指滑动 = 滚动页面")
-                else
-                    L("指针跟随手指移动（默认，触屏习惯）"),
-                color = theme.secondaryTextColor,
-                fontSize = 11.sp
-            )
-            if (controlMode == "trackpad") {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "触控板模式已自动设为：双击打开 + 双指右键",
-                    color = theme.accentColor,
-                    fontSize = 11.sp
-                )
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-
-        // ===== 指针主题 =====
-        SettingsBlock("指针主题") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                listOf(
-                    "white" to "经典白", "black" to "经典黑",
-                    "blue" to "蓝色", "green" to "高对比绿"
-                ).forEach { (id, label) ->
-                    val active = id == cursorTheme
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (active) theme.accentColor.copy(alpha = 0.12f) else Color.Transparent)
-                            .clickable { scope.launch { app.settingsStore.setMouseCursorTheme(id) } }
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        MouseCursorPreview(themeId = id, sizeDp = 26f)
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            label,
-                            color = if (active) theme.accentColor else theme.secondaryTextColor,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-            }
-        }
-
-        // ===== 指针大小 =====
-        SettingsBlock("指针大小（${cursorSize.roundToInt()}dp）") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = cursorSize,
-                    onValueChange = { v ->
-                        scope.launch { app.settingsStore.setMouseCursorSize(v) }
-                    },
-                    valueRange = 16f..48f,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                MouseCursorPreview(themeId = cursorTheme, sizeDp = cursorSize)
-            }
-        }
-
-        // ===== 右键手势 =====
-        SettingsBlock("右键手势") {
-            SegmentedControl(
-                options = listOf("twofinger" to "双指轻点", "longpress" to "长按"),
-                selected = rightClick
-            ) { mode -> scope.launch { app.settingsStore.setMouseRightClick(mode) } }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (rightClick == "twofinger") "双指轻点触发右键（触控板模式，默认）"
-                else "单指按住约 0.5 秒触发右键（触控板模式）",
-                color = theme.secondaryTextColor,
-                fontSize = 11.sp
-            )
-        }
-
-        // ===== 光标速度 =====
-        SettingsBlock("光标速度（${(speed * 100).roundToInt()}%）") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = speed,
-                    onValueChange = { v ->
-                        scope.launch { app.settingsStore.setMousePointerSpeed(v) }
-                    },
-                    valueRange = 0.5f..2.0f,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Text(
-                "影响外接蓝牙鼠标的指针移动速度",
-                color = theme.secondaryTextColor,
-                fontSize = 11.sp
-            )
-        }
-
-        // ===== 测试区域 =====
-        SettingsBlock("点击测试") {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(84.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(theme.windowBackgroundColor)
-                    .border(
-                        1.dp,
-                        theme.secondaryTextColor.copy(alpha = 0.25f),
-                        RoundedCornerShape(6.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "在此区域轻点或拖动，观察指针与点击涟漪效果",
-                    color = theme.secondaryTextColor,
-                    fontSize = 11.sp
-                )
-            }
-        }
-    }
-}
-
-// ============================================================
 // 键盘设置
 // ============================================================
 
@@ -325,7 +153,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
 
     SubPageHeader("键盘设置", onBack)
 
-    // 同 MouseSettingsPage：不可加 verticalScroll（宿主已有滚动层，嵌套必崩）。
+    // 注意：不可加 verticalScroll（宿主已有滚动层，嵌套必崩）。
     Column(modifier = Modifier.fillMaxWidth()) {
 
         // ===== 总开关 =====

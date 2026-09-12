@@ -83,6 +83,9 @@ class SettingsStore(private val context: Context) {
         // 输入：虚拟游戏手柄
         val GAMEPAD_ENABLED = booleanPreferencesKey("gamepad_enabled")
         val GAMEPAD_CONFIG = stringPreferencesKey("gamepad_config")
+
+        // 开发者选项：CPU 保持唤醒（终端常驻服务持有 partial wake lock）
+        val DEV_KEEP_CPU_AWAKE = booleanPreferencesKey("dev_keep_cpu_awake")
     }
 
     // ===== 显示 =====
@@ -131,6 +134,9 @@ class SettingsStore(private val context: Context) {
     // ===== 输入：虚拟游戏手柄 =====
     val gamepadEnabled: Flow<Boolean> = context.appPrefs.data.map { it[Keys.GAMEPAD_ENABLED] ?: false }
     val gamepadConfig: Flow<String> = context.appPrefs.data.map { it[Keys.GAMEPAD_CONFIG] ?: "" }
+
+    // ===== 开发者选项 =====
+    val devKeepCpuAwake: Flow<Boolean> = context.appPrefs.data.map { it[Keys.DEV_KEEP_CPU_AWAKE] ?: false }
 
     // ===== 显示 =====
     suspend fun setUiScale(scale: Float) {
@@ -263,5 +269,10 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setGamepadConfig(json: String) {
         context.appPrefs.edit { it[Keys.GAMEPAD_CONFIG] = json }
+    }
+
+    // ===== 开发者选项 =====
+    suspend fun setDevKeepCpuAwake(enabled: Boolean) {
+        context.appPrefs.edit { it[Keys.DEV_KEEP_CPU_AWAKE] = enabled }
     }
 }

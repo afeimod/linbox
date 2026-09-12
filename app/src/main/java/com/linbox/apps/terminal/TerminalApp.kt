@@ -262,6 +262,8 @@ object TermuxTerminalHolder {
             }
             sessionFinished = false
             revision++
+            // v2.27：会话创建即拉起前台常驻服务（状态栏常驻通知防后台误杀）
+            TerminalKeepAliveService.start(context.applicationContext)
         }
         return controller!!
     }
@@ -277,8 +279,13 @@ object TermuxTerminalHolder {
         }
         sessionFinished = false
         revision++
+        // v2.27：新会话同样拉起前台常驻服务
+        TerminalKeepAliveService.start(context.applicationContext)
         return controller!!
     }
+
+    /** 是否存在存活终端会话（TerminalKeepAliveService 巡检用）。 */
+    fun hasLiveSession(): Boolean = controller?.session?.isRunning() == true
 }
 
 // ------------------------------------------------------------------

@@ -7,9 +7,12 @@
   linbox-mirror        体检/切换 apt 软件源（下载 403 时用）
   linbox-glibc         一键安装 glibc 运行环境
   linbox-x11           启动内置 X11 桌面（pkg install xfce4 后体验）
-  theme win11          切换窗口主题
-  apps / start 浏览器  联动 LinBox 应用
+  linbox-x11-stop      停止 X11 桌面
+  start x11 / settings 切换 LinBox 界面
   help                 查看更多
+
+进程莫名被杀（Killed / 报错 9）？
+设置 → 开发者选项 → 停止限制子进程，一键解决。
 
 欢迎使用由 LinBox 移植的 Termux 环境。
 本环境基于 termux-packages 官方 bootstrap，

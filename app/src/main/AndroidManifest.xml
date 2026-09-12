@@ -16,10 +16,19 @@
     <!-- 虚拟键盘 / 虚拟手柄按键触觉反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- X11 会话前台常驻服务 -->
+    <!-- X11 / 终端会话前台常驻服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 开发者选项：CPU 保持唤醒（终端常驻服务 partial wake lock） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 开发者选项：申请忽略电池优化（降低 Doze 冻结概率） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 开发者选项：停止限制子进程（幽灵进程杀手致报错 9）。
+         signature|development 权限，需一次性 ADB 授权：
+         adb shell pm grant com.linbox android.permission.WRITE_SECURE_SETTINGS -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".LinBoxApp"
@@ -51,14 +60,28 @@
         </activity>
 
         <!-- X11 会话前台常驻（防止 X server/App 后台被冻结杀死）。
-             会话结束（linbox-x11-stop / X server 进程死亡）时服务自动退出。 -->
+             会话结束（linbox-x11-stop / X server 进程死亡）时服务自动退出。
+             stopWithTask=false：用户划掉任务卡后服务与进程仍存活，保护不中断。 -->
         <service
             android:name="com.linbox.apps.x11.X11KeepAliveService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="X11 session keep alive" />
+        </service>
+
+        <!-- 终端会话前台常驻（v2.27）：shell/子进程树防后台冻结误杀。
+             会话结束（exit / 被杀）时巡检自动退出；新建会话重新拉起。 -->
+        <service
+            android:name="com.linbox.apps.terminal.TerminalKeepAliveService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Terminal session keep alive" />
         </service>
     </application>
 

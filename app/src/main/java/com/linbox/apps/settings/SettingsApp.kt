@@ -1,7 +1,12 @@
 package com.linbox.apps.settings
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -14,13 +19,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Mouse
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -35,11 +43,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.linbox.BuildConfig
 import com.linbox.LinBoxApp
+import com.linbox.apps.terminal.TerminalKeepAliveService
 import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.shell.ShellController
 import com.linbox.core.theme.LocalWinTheme
@@ -55,8 +67,9 @@ import kotlin.math.roundToInt
  * 只保留对本应用（终端 + X11 + 虚拟手柄）真实有意义的设置：
  * - 显示：分辨率信息 / UI 缩放 / 显示方向 / 刘海屏
  * - 终端背景：背景色 / 自定义图片背景 / 显示语言
- * - 输入：鼠标指针 / 触控板（MouseSettingsPage）、虚拟键盘（KeyboardSettingsPage）
+ * - 输入：虚拟键盘（KeyboardSettingsPage）
  * - 游戏手柄：开关 + 悬浮设置窗入口（X11 游戏用）
+ * - 开发者选项：停止限制子进程（防报错 9）/ 忽略电池优化 / CPU 保持唤醒
  * - 关于：应用与设备信息
  *
  * 返回键回终端主页。
@@ -76,15 +89,15 @@ fun SettingsScreen() {
 /** 右侧内容路由（子页优先） */
 private sealed interface SettingsRoute {
     data object Home : SettingsRoute
-    data object Mouse : SettingsRoute
     data object Keyboard : SettingsRoute
 }
 
 private enum class NavSection(val id: String, val label: String, val desc: String) {
     DISPLAY("display", "显示", "缩放、方向、刘海屏"),
     PERSONALIZATION("personalization", "终端背景", "背景色、自定义图片、透明度、语言"),
-    INPUT("input", "输入", "鼠标指针、触控板、虚拟键盘"),
+    INPUT("input", "输入", "虚拟键盘"),
     GAMEPAD("gamepad", "游戏手柄", "虚拟手柄开关与布局设置"),
+    DEVELOPER("developer", "开发者选项", "进程保护、后台存活"),
     ABOUT("about", "关于", "应用与设备信息")
 }
 
@@ -137,16 +150,13 @@ private fun SettingsContent() {
         ) {
             when (route) {
                 SettingsRoute.Home -> when (section) {
-                    NavSection.DISPLAY -> DisplaySection(onOpenMouse = { route = SettingsRoute.Mouse })
+                    NavSection.DISPLAY -> DisplaySection()
                     NavSection.PERSONALIZATION -> PersonalizationSection()
-                    NavSection.INPUT -> InputSection(
-                        onOpenMouse = { route = SettingsRoute.Mouse },
-                        onOpenKeyboard = { route = SettingsRoute.Keyboard }
-                    )
+                    NavSection.INPUT -> InputSection(onOpenKeyboard = { route = SettingsRoute.Keyboard })
                     NavSection.GAMEPAD -> GamepadSection()
+                    NavSection.DEVELOPER -> DeveloperSection()
                     NavSection.ABOUT -> AboutSection()
                 }
-                SettingsRoute.Mouse -> MouseSettingsPage(onBack = { route = SettingsRoute.Home })
                 SettingsRoute.Keyboard -> KeyboardSettingsPage(onBack = { route = SettingsRoute.Home })
             }
             Spacer(Modifier.height(24.dp))
@@ -311,7 +321,7 @@ internal fun AboutRow(label: String, value: String) {
 // ============================================================
 
 @Composable
-private fun DisplaySection(onOpenMouse: () -> Unit) {
+private fun DisplaySection() {
     val theme = LocalWinTheme.current
     val app = LinBoxApp.get()
     val context = LocalContext.current
@@ -607,18 +617,11 @@ private fun decodeBgPreview(file: java.io.File): android.graphics.Bitmap? = try 
 // ============================================================
 
 @Composable
-private fun InputSection(onOpenMouse: () -> Unit, onOpenKeyboard: () -> Unit) {
-    SectionHeader("输入", "鼠标指针、触控板、虚拟键盘")
+private fun InputSection(onOpenKeyboard: () -> Unit) {
+    SectionHeader("输入", "虚拟键盘")
 
-    SettingsCard(
-        icon = Icons.Default.Mouse,
-        iconBackgroundColor = Color(0xFF00B294),
-        title = "鼠标与触控板",
-        subtitle = "指针显示/主题/大小、移动方式（触控或触控板）、光标速度",
-        onClick = onOpenMouse
-    )
-    Spacer(Modifier.height(8.dp))
-
+    // v2.27：鼠标设置已移除（对现有输入链路无实际作用）；虚拟鼠标指针
+    // 按默认行为（显示、触控模式）继续工作，数据层保留无副作用。
     SettingsCard(
         icon = Icons.Default.Keyboard,
         iconBackgroundColor = Color(0xFF8764B8),
@@ -676,6 +679,216 @@ private fun GamepadSection() {
         color = theme.secondaryTextColor,
         fontSize = 11.sp
     )
+}
+
+// ============================================================
+// 开发者选项
+// ============================================================
+
+/** 幽灵进程监控开关的系统键（Android 12+，与 adb settings put global 同名）。 */
+private const val KEY_PHANTOM_MONITOR = "settings_enable_monitor_phantom_procs"
+/** device_config 命名空间与键：单应用子进程数量上限。 */
+private const val NS_PHANTOM = "activity_manager"
+private const val KEY_PHANTOM_MAX = "max_phantom_processes"
+/** AOSP 默认子进程上限（32）：关闭保护时恢复用。 */
+private const val PHANTOM_MAX_DEFAULT = "32"
+
+/** WRITE_SECURE_SETTINGS 一次性授权命令（复制给用户在电脑上执行）。 */
+private const val ADB_GRANT_CMD = "adb shell pm grant com.linbox android.permission.WRITE_SECURE_SETTINGS"
+
+/**
+ * 开发者选项（v2.27）：进程保护 / 后台存活。
+ * 目标是解决"终端进程莫名被杀（Killed / signal 9 / 报错 9）"一类问题：
+ * - 停止限制子进程：关闭系统幽灵进程杀手（需 WRITE_SECURE_SETTINGS，
+ *   页面内提供一次性 ADB 授权命令并支持复制）；
+ * - 忽略电池优化：跳转系统授权页，降低 Doze 冻结概率；
+ * - CPU 保持唤醒：终端常驻服务持有 partial wake lock（真实生效）。
+ */
+@Composable
+private fun DeveloperSection() {
+    val theme = LocalWinTheme.current
+    val context = LocalContext.current
+    val app = LinBoxApp.get()
+    val scope0 = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // ===== 系统侧真实状态（实时读取，非本地记忆） =====
+    var granted by remember { mutableStateOf(false) }
+    var phantomOff by remember { mutableStateOf(false) }
+    var battIgnored by remember { mutableStateOf(false) }
+    var showGrantDialog by remember { mutableStateOf(false) }
+
+    fun refreshStatus() {
+        granted = try {
+            context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) {
+            false
+        }
+        phantomOff = try {
+            val cr = context.contentResolver
+            val monitor = android.provider.Settings.Global.getString(cr, KEY_PHANTOM_MONITOR)
+            val max = if (Build.VERSION.SDK_INT >= 30)
+                android.provider.Settings.Config.getString(cr, NS_PHANTOM, KEY_PHANTOM_MAX) else null
+            monitor == "false" || ((max?.toLongOrNull() ?: 0L) > 32L)
+        } catch (_: Exception) {
+            false
+        }
+        battIgnored = try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            pm.isIgnoringBatteryOptimizations(context.packageName)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    // 首次进入 + 从系统授权页返回（ON_RESUME）时刷新真实状态
+    LaunchedEffect(Unit) { refreshStatus() }
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshStatus()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    SectionHeader("开发者选项", "进程保护 / 后台存活（解决报错 9 等问题）")
+
+    // ===== 停止限制子进程（幽灵进程杀手 → 报错 9 根因） =====
+    SettingsCard(
+        icon = Icons.Default.Shield,
+        iconBackgroundColor = Color(0xFF00B294),
+        title = "停止限制子进程",
+        subtitle = if (phantomOff) "已停止限制 · 子进程不再被系统幽灵进程杀手清理（防报错 9）"
+        else if (granted) "已具备授权 · 开启后解除系统对子进程数量的限制"
+        else "需一次性 ADB 授权 · 解决 [Process killed / signal 9] 报错",
+        trailingContent = {
+            ToggleSwitch(phantomOff) { v ->
+                if (v) {
+                    if (!granted) {
+                        showGrantDialog = true
+                    } else {
+                        val ok = try {
+                            val cr = context.contentResolver
+                            android.provider.Settings.Global.putString(cr, KEY_PHANTOM_MONITOR, "false")
+                            if (Build.VERSION.SDK_INT >= 30) {
+                                android.provider.Settings.Config.putString(
+                                    cr, NS_PHANTOM, KEY_PHANTOM_MAX, "2147483647"
+                                )
+                            }
+                            true
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (!ok) {
+                            android.widget.Toast.makeText(
+                                context, "写入系统设置失败", android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        refreshStatus()
+                    }
+                } else {
+                    try {
+                        val cr = context.contentResolver
+                        android.provider.Settings.Global.putString(cr, KEY_PHANTOM_MONITOR, "true")
+                        if (Build.VERSION.SDK_INT >= 30) {
+                            android.provider.Settings.Config.putString(
+                                cr, NS_PHANTOM, KEY_PHANTOM_MAX, PHANTOM_MAX_DEFAULT
+                            )
+                        }
+                    } catch (_: Exception) {
+                    }
+                    refreshStatus()
+                }
+            }
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+
+    // ===== 忽略电池优化 =====
+    SettingsCard(
+        icon = Icons.Default.BatteryChargingFull,
+        iconBackgroundColor = Color(0xFF0078D7),
+        title = "忽略电池优化",
+        subtitle = if (battIgnored) "已忽略 · 系统省电/休眠策略不再冻结 LinBox"
+        else "未开启 · 点击申请，显著降低后台被杀概率",
+        onClick = {
+            if (!battIgnored) {
+                try {
+                    context.startActivity(
+                        Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                    )
+                } catch (_: Exception) {
+                    // 个别 ROM 无此页面 → 退到电池优化列表页
+                    try {
+                        context.startActivity(
+                            Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        )
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+
+    // ===== CPU 保持唤醒（终端常驻服务真实持有 wake lock） =====
+    val cpuAwake by app.settingsStore.devKeepCpuAwake.collectAsState(initial = false)
+    SettingsCard(
+        icon = Icons.Default.Memory,
+        iconBackgroundColor = Color(0xFFCA5010),
+        title = "CPU 保持唤醒",
+        subtitle = if (cpuAwake) "已开启 · 终端常驻服务持有唤醒锁，后台下载/编译不因休眠中断"
+        else "关闭（默认）· 系统可正常休眠省电",
+        trailingContent = {
+            ToggleSwitch(cpuAwake) { v ->
+                scope0.launch { app.settingsStore.setDevKeepCpuAwake(v) }
+                TerminalKeepAliveService.setCpuAwake(context, v)
+            }
+        }
+    )
+    Spacer(Modifier.height(8.dp))
+
+    Text(
+        "报错 9 说明：终端进程突然消失并提示 Killed（signal 9 / 退出码 9），" +
+            "多为 Android 12+ 幽灵进程限制（单应用子进程数超限即被杀）或省电冻结所致。" +
+            "开启「停止限制子进程」与「忽略电池优化」即可解决。",
+        color = theme.secondaryTextColor,
+        fontSize = 11.sp
+    )
+
+    if (showGrantDialog) {
+        AlertDialog(
+            onDismissRequest = { showGrantDialog = false },
+            title = { Text("需要一次 ADB 授权") },
+            text = {
+                Text(
+                    "「停止限制子进程」需授予 LinBox 写入系统设置的权限。\n\n" +
+                        "电脑连接设备后执行一次（可复制下方命令）：\n\n" +
+                        ADB_GRANT_CMD + "\n\n" +
+                        "执行后回到本页重新打开开关即可。",
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("adb", ADB_GRANT_CMD))
+                        android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {
+                    }
+                    showGrantDialog = false
+                }) { Text("复制命令") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGrantDialog = false }) { Text("关闭") }
+            }
+        )
+    }
 }
 
 // ============================================================
