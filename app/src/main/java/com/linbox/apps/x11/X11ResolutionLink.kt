@@ -249,7 +249,9 @@ object X11ResolutionLink {
         val prefs = LoriePreferences.prefs ?: return
         val p = percent.coerceIn(50, 200)
         prefs.displayResolutionMode.put("scaled")
-        prefs.displayScale.put(p)
+        // IntPreference 无 put(Int)（上游仅提供 get），经 PrefsProto.putInt
+        // 写入 —— 与 IntPreference.get() 读取同一 SharedPreferences，链路一致。
+        prefs.putInt("displayScale", p)
         exactFromRunner = false
         windowStretch = false
         _state.value = ResolutionState("scaled", "", false)
