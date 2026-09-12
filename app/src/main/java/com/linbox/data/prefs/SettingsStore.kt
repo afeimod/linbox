@@ -49,10 +49,16 @@ class SettingsStore(private val context: Context) {
         val FONT_STYLE = stringPreferencesKey("font_style")
         val LANGUAGE = stringPreferencesKey("language")
 
-        // 终端背景：纯色（default / #RRGGBB）+ 自定义图片开关
+        // 终端背景：纯色（default / #RRGGBB）+ 自定义图片开关 + 透明度
         // （图片本体存 filesDir/terminal_bg.jpg，选图时拷贝持久化）
         val TERMINAL_BG_COLOR = stringPreferencesKey("terminal_bg_color")
         val TERMINAL_BG_IMAGE = booleanPreferencesKey("terminal_bg_image")
+        // 背景透明度 0..1（0=不透明，1=完全透明露黑底，文字不受影响）
+        val TERMINAL_BG_TRANSPARENCY = floatPreferencesKey("terminal_bg_transparency")
+
+        // 悬浮球位置（归一化 0..1，相对终端区域）
+        val FAB_POS_X = floatPreferencesKey("fab_pos_x")
+        val FAB_POS_Y = floatPreferencesKey("fab_pos_y")
 
         // 输入：鼠标指针 / 触控板
         val MOUSE_POINTER_SPEED = floatPreferencesKey("mouse_pointer_speed")
@@ -96,6 +102,11 @@ class SettingsStore(private val context: Context) {
     // ===== 终端背景 =====
     val terminalBgColor: Flow<String> = context.appPrefs.data.map { it[Keys.TERMINAL_BG_COLOR] ?: "default" }
     val terminalBgImage: Flow<Boolean> = context.appPrefs.data.map { it[Keys.TERMINAL_BG_IMAGE] ?: false }
+    val terminalBgTransparency: Flow<Float> = context.appPrefs.data.map { it[Keys.TERMINAL_BG_TRANSPARENCY] ?: 0f }
+
+    // ===== 悬浮球位置 =====
+    val fabPosX: Flow<Float> = context.appPrefs.data.map { it[Keys.FAB_POS_X] ?: 0.85f }
+    val fabPosY: Flow<Float> = context.appPrefs.data.map { it[Keys.FAB_POS_Y] ?: 0.85f }
 
     // ===== 输入：鼠标 / 触控板 =====
     val mousePointerSpeed: Flow<Float> = context.appPrefs.data.map { it[Keys.MOUSE_POINTER_SPEED] ?: 1.0f }
@@ -166,6 +177,18 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setTerminalBgImage(enabled: Boolean) {
         context.appPrefs.edit { it[Keys.TERMINAL_BG_IMAGE] = enabled }
+    }
+
+    suspend fun setTerminalBgTransparency(value: Float) {
+        context.appPrefs.edit { it[Keys.TERMINAL_BG_TRANSPARENCY] = value.coerceIn(0f, 1f) }
+    }
+
+    // ===== 悬浮球位置 =====
+    suspend fun setFabPos(x: Float, y: Float) {
+        context.appPrefs.edit {
+            it[Keys.FAB_POS_X] = x.coerceIn(0f, 1f)
+            it[Keys.FAB_POS_Y] = y.coerceIn(0f, 1f)
+        }
     }
 
     // ===== 输入：鼠标 / 触控板 =====

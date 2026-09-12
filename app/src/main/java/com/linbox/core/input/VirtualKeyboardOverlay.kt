@@ -65,7 +65,7 @@ import kotlin.math.roundToInt
  *   修饰键 + 方向键）+ 数字小键盘（可开关，含方向键列）
  * - 修饰键：Shift（单击一次性 / 双击大写锁定）、Caps、Ctrl（A/C/X/V 组合）、
  *   Win（呼出开始菜单）、Alt
- * - 主题：浅色 / 深色 / 蓝色 / 玻璃 四套
+ * - 主题：浅色 / 深色 / 蓝色 / 玻璃 / 透明 五套（v2.24 新增全透明背板）
  * - 大小：0.75..1.35 缩放 —— 三种调节方式：设置滑杆 / 工具栏 -+ / 双指捏合（v2.13.2）；
  *   位置：默认底部居中，可拖动（拖动开关可关）
  * - 键盘振动 / 触摸反馈设置真实生效（触觉 + 按压缩放高亮动画）
@@ -267,7 +267,9 @@ fun VirtualKeyboardOverlay() {
                     })
                     ToolbarChip("主题", theme, scale, onTap = {
                         val next = when (themeId) {
-                            "light" -> "dark"; "dark" -> "blue"; "blue" -> "glass"; else -> "light"
+                            "light" -> "dark"; "dark" -> "blue"; "blue" -> "glass"
+                            "glass" -> "transparent"
+                            else -> "light"
                         }
                         scope.launch { app.settingsStore.setKeyboardTheme(next) }
                     })
@@ -557,6 +559,12 @@ internal fun kbThemeOf(id: String): KbTheme = when (id) {
     )
     "glass" -> KbTheme(
         bg = Color(0xCC181820), keyBg = Color(0x2EFFFFFF), keyPressed = Color(0x55FFFFFF),
+        keyActive = Color(0x802C7BE5), specialBg = Color(0x1FFFFFFF),
+        keyText = Color.White, specialText = Color(0xFFDDDDDD),
+        toolbarText = Color(0xFFBBBBBB)
+    )
+    "transparent" -> KbTheme( // v2.24：全透明背板（无背景，仅键体留半透明玻璃片）
+        bg = Color(0x00000000), keyBg = Color(0x2EFFFFFF), keyPressed = Color(0x61FFFFFF),
         keyActive = Color(0x802C7BE5), specialBg = Color(0x1FFFFFFF),
         keyText = Color.White, specialText = Color(0xFFDDDDDD),
         toolbarText = Color(0xFFBBBBBB)

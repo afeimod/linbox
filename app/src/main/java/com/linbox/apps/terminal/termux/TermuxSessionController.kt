@@ -94,7 +94,13 @@ class TermuxSessionController(
         private const val MAX_FONT_SIZE = 40
     }
 
-    var terminalView: TerminalView? = null
+    // v2.24 fix：改为 Compose 可观察状态。
+    // 旧版为普通属性：首次组合时快捷键栏（TermuxExtraKeysBar）读取到的
+    // terminalView 为 null（AndroidView 工厂在组合之后才创建视图并 attach），
+    // 且后续赋值不触发重组 —— 方向键/快捷键注入的对象一直是 null，
+    // 表现为“方向键不起作用”；改用 mutableStateOf 后 attach/detach 会
+    // 立即驱动快捷键栏重组并拿到最新视图。
+    var terminalView: TerminalView? by mutableStateOf(null)
         private set
 
     var session: TerminalSession? = null

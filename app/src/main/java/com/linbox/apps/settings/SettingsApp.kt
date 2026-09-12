@@ -82,7 +82,7 @@ private sealed interface SettingsRoute {
 
 private enum class NavSection(val id: String, val label: String, val desc: String) {
     DISPLAY("display", "显示", "缩放、方向、刘海屏"),
-    PERSONALIZATION("personalization", "终端背景", "背景色、自定义图片、语言"),
+    PERSONALIZATION("personalization", "终端背景", "背景色、自定义图片、透明度、语言"),
     INPUT("input", "输入", "鼠标指针、触控板、虚拟键盘"),
     GAMEPAD("gamepad", "游戏手柄", "虚拟手柄开关与布局设置"),
     ABOUT("about", "关于", "应用与设备信息")
@@ -452,7 +452,7 @@ private fun PersonalizationSection() {
         }
     }
 
-    SectionHeader("终端背景", "背景色、自定义图片背景")
+    SectionHeader("终端背景", "背景色、自定义图片背景、透明度")
 
     // ===== 背景色 =====
     SettingsBlockCard("背景色" + if (bgImageEnabled) "（图片背景启用时不生效）" else "") {
@@ -498,6 +498,37 @@ private fun PersonalizationSection() {
                 }
             }
         }
+    }
+
+    // ===== 背景透明度 =====
+    SettingsBlockCard("背景透明度") {
+        // 拖动中仅更新本地值（顺滑不卡顿），松手才落盘
+        val stored by app.settingsStore.terminalBgTransparency.collectAsState(initial = 0f)
+        var dragValue by remember { mutableStateOf<Float?>(null) }
+        val shown = dragValue ?: stored
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "背景向黑底淡化，文字不受影响",
+                color = theme.secondaryTextColor,
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "${(shown * 100).roundToInt()}%",
+                color = if (theme.isDark) Color.White else Color.Black,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Slider(
+            value = shown,
+            onValueChange = { dragValue = it },
+            onValueChangeFinished = {
+                dragValue?.let { v -> scope0.launch { app.settingsStore.setTerminalBgTransparency(v) } }
+            },
+            valueRange = 0f..1f
+        )
     }
 
     // ===== 显示语言 =====

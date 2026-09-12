@@ -3,30 +3,50 @@ package com.linbox.apps.terminal
 import android.view.KeyEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,6 +57,8 @@ import com.linbox.apps.terminal.termux.LinBoxShellBridge
 import com.linbox.apps.terminal.termux.ExtraKeysModifierState
 import com.linbox.apps.terminal.termux.TermuxBootstrapInstaller
 import com.linbox.apps.terminal.termux.TermuxSessionController
+import com.linbox.core.input.gamepad.GamepadController
+import com.linbox.termux.terminal.KeyHandler
 import com.linbox.termux.view.TerminalView
 import com.linbox.core.shell.ShellController
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +66,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /**
  * 终端主页（真实 Termux 移植版）—— LinBox 的主屏：
@@ -54,10 +77,12 @@ import kotlinx.coroutines.withContext
  * - 视图为 termux 官方 TerminalView（Apache-2.0 移植）；
  * - 快捷键栏为 Termux 原版双排布局（ESC/-/HOME/↑/END/PGUP +
  *   ⇤/CTRL/ALT/←/↓/→/PGDN），方向键短按单击、长按连续重复；
+ *   v2.24 起整条快捷键栏无背板（键体半透明玻璃片，与终端融为一体）；
  * - 双指捏合缩放字号（TerminalView 内置 ScaleGestureDetector）;
- * - 终端背景可自定义：设置→终端背景（纯色 / 自定义图片）;
- * - 工具栏一键跳转 X11 图形界面 / 设置页；终端里执行 `linbox-x11`
- *   也会自动跳转（见 X11WindowController 广播）；
+ * - 终端背景可自定义：设置→终端背景（纯色 / 自定义图片 / 透明度）;
+ * - v2.24：顶部工具栏收编为透明玻璃悬浮球（可拖动、可展开玻璃菜单，
+ *   含新会话/键盘/粘贴/字号/符号层/虚拟手柄/X11/设置）；终端里执行
+ *   `linbox-x11` 仍会自动跳转（见 X11WindowController 广播）；
  * - 会话随 App 进程存活，退出 App 或系统杀死进程后重建为全新 shell。
  */
 @Composable
@@ -263,10 +288,18 @@ object TermuxTerminalHolder {
 private const val BACKGROUND_IMAGE_FILE = "terminal_bg.jpg"
 
 /** 终端背景解析结果：纯色或图片（图片模式下 TerminalView 透明）。 */
-private class TerminalBackgroundState(val color: Color, val bitmap: android.graphics.Bitmap?) {
-    /** TerminalView 背景色：图片模式透明（露出下层图片 + 暗化叠加）。 */
-    val viewBackgroundArgb: Int =
-        if (bitmap != null) android.graphics.Color.TRANSPARENT else color.toArgb()
+private class TerminalBackgroundState(
+    val color: Color,
+    val bitmap: android.graphics.Bitmap?,
+    /** 背景透明度 0..1（0=不透明，1=完全透明；文字不受影响） */
+    val transparency: Float
+) {
+    /** TerminalView 背景色：图片模式透明（露出下层图片 + 暗化叠加）；
+     *  纯色模式按透明度淡化（露出的下层为黑底，视觉上即背景透明度）。 */
+    val viewBackgroundArgb: Int = when {
+        bitmap != null -> android.graphics.Color.TRANSPARENT
+        else -> color.copy(alpha = (1f - transparency).coerceIn(0f, 1f)).toArgb()
+    }
 }
 
 @Composable
@@ -275,6 +308,7 @@ private fun rememberTerminalBackground(): TerminalBackgroundState {
     val context = LocalContext.current
     val colorKey by app.settingsStore.terminalBgColor.collectAsState(initial = "default")
     val imageEnabled by app.settingsStore.terminalBgImage.collectAsState(initial = false)
+    val transparency by app.settingsStore.terminalBgTransparency.collectAsState(initial = 0f)
     var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
 
     LaunchedEffect(imageEnabled) {
@@ -291,7 +325,7 @@ private fun rememberTerminalBackground(): TerminalBackgroundState {
             Color(0xFF0C0C0C)
         }
     }
-    return TerminalBackgroundState(color, bitmap)
+    return TerminalBackgroundState(color, bitmap, transparency)
 }
 
 /** 大图降采样解码（1440×2560 上限），避免全尺寸位图内存峰值。 */
@@ -326,53 +360,41 @@ private fun RealTerminalArea() {
         viewRef.value?.let { controller.attach(it) }
     }
 
-    // 终端背景（纯色 / 自定义图片，图片时终端视图透明）
+    // 终端背景（纯色 / 自定义图片，图片时终端视图透明；透明度全局可调）
     val bg = rememberTerminalBackground()
+    var areaSize by remember { mutableStateOf(IntSize.Zero) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             // v2.23 IME 遮挡修复：沉浸式（setDecorFitsSystemWindows(false)）下
             // API 30+ 系统忽略 adjustResize，键盘弹出时必须靠 ime() inset 主动
-            // 让位——整列（工具栏/终端/快捷键栏）抬到输入法上方；快捷键栏无
+            // 让位——整列（终端/快捷键栏）抬到输入法上方；快捷键栏无
             // 输入法时贴屏幕底边、有输入法时贴输入法上沿（对齐官方 Termux）。
             // API 30 以下 adjustResize 生效且 ime() inset 报 0，两者不叠加。
             .imePadding()
-            .background(if (bg.bitmap != null) Color.Black else bg.color)
+            // v2.24：底层统一黑底 —— 背景透明度调节时颜色/图片向黑底淡化，
+            // 文字保持不透明，呈现“背景透出去”的效果
+            .background(Color.Black)
     ) {
-        // ---------- 工具栏 ----------
-        TerminalToolbar(
-            onNewSession = {
-                TermuxTerminalHolder.newSession(context)
-            },
-            onKeyboardToggle = { toggleSoftKeyboard(context, viewRef.value) },
-            onPaste = {
-                val text = clipboardText(context) ?: return@TerminalToolbar
-                viewRef.value?.mEmulator?.paste(text)
-            },
-            onFontDecrease = { controller.changeFontSize(-2) },
-            onFontIncrease = { controller.changeFontSize(+2) },
-            onLayerToggle = { symbolLayer = !symbolLayer },
-            symbolLayerActive = symbolLayer,
-            onOpenX11 = { ShellController.showX11() },
-            onOpenSettings = { ShellController.showSettings() }
-        )
-
         // ---------- 终端视图（图片背景时透明 + 底层图片与暗化叠加） ----------
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .onGloballyPositioned { areaSize = it.size }
         ) {
             if (bg.bitmap != null) {
+                // 图片自身按透明度淡化（1=完全透明 → 只剩黑底）
                 Image(
                     bitmap = bg.bitmap.asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    alpha = (1f - bg.transparency).coerceIn(0f, 1f)
                 )
-                // 暗化叠加：保证终端文字在任意图片上可读
-                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)))
+                // 暗化叠加：保证终端文字在任意图片上可读（随透明度同步淡化）
+                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f * (1f - bg.transparency))))
             }
             AndroidView(
                 factory = { ctx ->
@@ -396,9 +418,26 @@ private fun RealTerminalArea() {
                     }
                 )
             }
+
+            // ---------- 透明悬浮球（原顶部工具栏功能全部收编于此） ----------
+            GlassFab(
+                areaPx = areaSize,
+                symbolLayerActive = symbolLayer,
+                onNewSession = { TermuxTerminalHolder.newSession(context) },
+                onKeyboardToggle = { toggleSoftKeyboard(context, viewRef.value) },
+                onPaste = {
+                    val text = clipboardText(context) ?: return@GlassFab
+                    viewRef.value?.mEmulator?.paste(text)
+                },
+                onFontDecrease = { controller.changeFontSize(-2) },
+                onFontIncrease = { controller.changeFontSize(+2) },
+                onLayerToggle = { symbolLayer = !symbolLayer },
+                onOpenX11 = { ShellController.showX11() },
+                onOpenSettings = { ShellController.showSettings() }
+            )
         }
 
-        // ---------- 快捷键栏（两排） ----------
+        // ---------- 快捷键栏（两排，透明底） ----------
         TermuxExtraKeysBar(
             controller = controller,
             symbolLayer = symbolLayer
@@ -446,75 +485,269 @@ private fun SessionEndedOverlay(onNewSession: () -> Unit) {
 }
 
 // ====================================================================
-// 工具栏
+// 透明悬浮球（v2.24）
 // ====================================================================
+//
+// 原顶部工具栏（新会话/键盘/粘贴/字号/符号层/X11/设置）全部收编进
+// 一个玻璃质感的可拖动悬浮球：
+// - 玻璃拟态：多层半透明白渐变 + 顶部高光 + 细描边 + 终端绿辉光投影，
+//   附带缓慢的呼吸缩放，悬浮但不"死板"；
+// - 单击展开玻璃胶囊菜单（自球体上/下侧扇出，逐项错峰浮现），
+//   菜单打开时点击任意空白处收起；
+// - 长按拖动改变位置，松手持久化（归一化坐标，跨分辨率/方向）；
+// - "虚拟手柄"项实时反映手柄开关状态（点亮态），单击切换；
+//   长按直接打开手柄布局设置悬浮窗。
+
+/** 悬浮球菜单项数据（onClick 放在末位以支持尾随 lambda 写法）。 */
+private data class FabItem(
+    val label: String,
+    val glyph: String,
+    val active: Boolean = false,
+    val onLongClick: (() -> Unit)? = null,
+    val onClick: () -> Unit
+)
 
 @Composable
-private fun TerminalToolbar(
+private fun GlassFab(
+    areaPx: IntSize,
+    symbolLayerActive: Boolean,
     onNewSession: () -> Unit,
     onKeyboardToggle: () -> Unit,
     onPaste: () -> Unit,
     onFontDecrease: () -> Unit,
     onFontIncrease: () -> Unit,
     onLayerToggle: () -> Unit,
-    symbolLayerActive: Boolean,
     onOpenX11: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF161616))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val app = LinBoxApp.get()
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+
+    // 悬浮球位置（归一化 0..1）+ 拖动偏移
+    val fabPosX by app.settingsStore.fabPosX.collectAsState(initial = 0.85f)
+    val fabPosY by app.settingsStore.fabPosY.collectAsState(initial = 0.85f)
+    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
+
+    var expanded by remember { mutableStateOf(false) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragging by remember { mutableStateOf(false) }
+
+    val fabSizePx = with(density) { 54.dp.toPx() }
+    val itemHPx = with(density) { 38.dp.toPx() }
+    val gapPx = with(density) { 6.dp.toPx() }
+    val menuWPx = with(density) { 118.dp.toPx() }
+    val maxX = (areaPx.width - fabSizePx).coerceAtLeast(0f)
+    val maxY = (areaPx.height - fabSizePx).coerceAtLeast(0f)
+
+    val x = (maxX * fabPosX + dragOffset.x).coerceIn(0f, maxX)
+    val y = (maxY * fabPosY + dragOffset.y).coerceIn(0f, maxY)
+    // 球体在下半屏 → 菜单向上展开；上半屏 → 向下展开
+    val expandUp = y > maxY * 0.45f
+
+    fun persistPos() {
+        if (maxX <= 0f || maxY <= 0f) return
+        val cx = (maxX * fabPosX + dragOffset.x).coerceIn(0f, maxX)
+        val cy = (maxY * fabPosY + dragOffset.y).coerceIn(0f, maxY)
+        dragOffset = Offset.Zero
+        val nx = (cx / maxX).coerceIn(0f, 1f)
+        val ny = (cy / maxY).coerceIn(0f, 1f)
+        scope.launch { app.settingsStore.setFabPos(nx, ny) }
+    }
+
+    val items = remember(
+        symbolLayerActive, gamepadEnabled, onNewSession, onKeyboardToggle,
+        onPaste, onFontDecrease, onFontIncrease, onLayerToggle, onOpenX11, onOpenSettings
     ) {
-        Text(
-            "TERMUX",
-            color = Color(0xFF00E676),
-            fontSize = 9.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(start = 4.dp, end = 2.dp)
+        listOf(
+            FabItem("新会话", "＋") { onNewSession() },
+            FabItem("键盘", "⌨") { onKeyboardToggle() },
+            FabItem("粘贴", "贴") { onPaste() },
+            FabItem("字号－", "A-") { onFontDecrease() },
+            FabItem("字号＋", "A+") { onFontIncrease() },
+            FabItem("符号层", "SY", active = symbolLayerActive) { onLayerToggle() },
+            FabItem("虚拟手柄", "柄", active = gamepadEnabled,
+                onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },
+                onLongClick = { GamepadController.settingsOpen = true }),
+            FabItem("X11 桌面", "X") { onOpenX11() },
+            FabItem("设置", "⚙") { onOpenSettings() }
         )
-        ToolbarButton("新会话", onClick = onNewSession)
-        ToolbarButton("键盘", onClick = onKeyboardToggle)
-        ToolbarButton("粘贴", onClick = onPaste)
-        Spacer(Modifier.weight(1f))
-        ToolbarButton("A－", onClick = onFontDecrease)
-        ToolbarButton("A＋", onClick = onFontIncrease)
-        ToolbarButton(
-            if (symbolLayerActive) "SYM•" else "SYM",
-            onClick = onLayerToggle,
-            highlighted = symbolLayerActive
+    }
+
+    // 呼吸动画（轻微缩放，赋予"活"的质感）
+    val pulse by rememberInfiniteTransition(label = "fabPulse").animateFloat(
+        initialValue = 0.95f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "fabPulseScale"
+    )
+    // 展开进度 0..1
+    val expand by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        label = "fabExpand"
+    )
+    val menuHPx = items.size * (itemHPx + gapPx)
+
+    Box(Modifier.fillMaxSize()) {
+        // 展开时的半透明遮罩：点击任意处收起（折叠时不存在，不拦截终端触摸）
+        if (expanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) { detectTapGestures { expanded = false } }
+            )
+        }
+
+        // ===== 玻璃胶囊菜单 =====
+        Column(
+            modifier = Modifier
+                .offset {
+                    val menuLeft = (x + fabSizePx / 2f - menuWPx / 2f)
+                        .coerceIn(0f, (areaPx.width - menuWPx).coerceAtLeast(0f))
+                    val menuTop = if (expandUp) y - menuHPx * expand - with(density) { 10.dp.toPx() }
+                    else y + fabSizePx + with(density) { 10.dp.toPx() }
+                    IntOffset(menuLeft.roundToInt(), menuTop.roundToInt())
+                }
+                .width(118.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items.forEachIndexed { i, item ->
+                // 错峰浮现：后一项比前一项晚 ~6% 进度
+                val progress = ((expand * 1.4f) - i * 0.06f).coerceIn(0f, 1f)
+                FabMenuItem(
+                    item = item,
+                    progress = progress
+                )
+            }
+        }
+
+        // ===== 玻璃球本体 =====
+        val ballBorder = Brush.linearGradient(
+            listOf(
+                if (expanded) Color(0xB369F0AE) else Color(0x8CFFFFFF),
+                if (expanded) Color(0x3300E676) else Color(0x1FFFFFFF)
+            )
         )
-        ToolbarButton("X11", onClick = onOpenX11, highlighted = true)
-        ToolbarButton("设置", onClick = onOpenSettings)
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                .size(54.dp)
+                .graphicsLayer {
+                    if (!dragging) {
+                        scaleX = pulse
+                        scaleY = pulse
+                    }
+                }
+                .shadow(
+                    elevation = if (expanded) 18.dp else 10.dp,
+                    shape = CircleShape,
+                    clip = false,
+                    ambientColor = Color(0xFF00E676),
+                    spotColor = Color(0xFF00E676)
+                )
+                .clip(CircleShape)
+                .background(
+                    // 玻璃球面：左上高光 → 右下近透明的斜向白渐变
+                    Brush.linearGradient(
+                        listOf(Color(0x66FFFFFF), Color(0x26FFFFFF), Color(0x0FFFFFFF)),
+                        start = Offset.Zero,
+                        end = Offset.Infinite
+                    )
+                )
+                .border(1.2.dp, ballBorder, CircleShape)
+                // 终端绿内辉光
+                .background(
+                    Brush.radialGradient(
+                        listOf(Color(0x3300E676), Color(0x0000E676))
+                    )
+                )
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { dragging = true },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            dragOffset += amount
+                        },
+                        onDragEnd = { dragging = false; persistPos() },
+                        onDragCancel = { dragging = false; persistPos() }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { expanded = !expanded })
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "❯_",
+                color = Color(0xFF69F0AE),
+                fontSize = 16.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
+/** 玻璃胶囊菜单项：progress 0..1 控制浮现（透明度 + 缩放），未浮现完成前不可点。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ToolbarButton(
-    label: String,
-    onClick: () -> Unit,
-    highlighted: Boolean = false
-) {
-    Box(
-        modifier = Modifier
-            .background(
-                if (highlighted) Color(0xFF1B5E20) else Color(0xFF212121),
-                RoundedCornerShape(4.dp)
+private fun FabMenuItem(item: FabItem, progress: Float) {
+    val scale = 0.7f + 0.3f * progress
+    val clickable = if (progress > 0.2f) {
+        if (item.onLongClick != null) {
+            Modifier.combinedClickable(
+                onClick = { item.onClick() },
+                onLongClick = { item.onLongClick!!() }
             )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        contentAlignment = Alignment.Center
+        } else Modifier.clickable(onClick = { item.onClick() })
+    } else Modifier
+    Row(
+        modifier = Modifier
+            .graphicsLayer {
+                alpha = progress
+                scaleX = scale
+                scaleY = scale
+            }
+            .height(38.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(19.dp))
+            .background(
+                if (item.active) Brush.linearGradient(listOf(Color(0x9600C853), Color(0x5C00E676)))
+                else Brush.linearGradient(listOf(Color(0x3DFFFFFF), Color(0x1AFFFFFF)))
+            )
+            .border(
+                0.8.dp,
+                if (item.active) Brush.linearGradient(listOf(Color(0xAA69F0AE), Color(0x3300E676)))
+                else Brush.linearGradient(listOf(Color(0x59FFFFFF), Color(0x1FFFFFFF))),
+                RoundedCornerShape(19.dp)
+            )
+            .then(clickable)
+            .padding(horizontal = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            label,
-            color = if (highlighted) Color(0xFF00E676) else Color(0xFFBDBDBD),
-            fontSize = 11.sp,
+            item.glyph,
+            color = if (item.active) Color(0xFFB9F6CA) else Color(0xFF69F0AE),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace
         )
+        Text(
+            item.label,
+            color = Color.White.copy(alpha = 0.93f),
+            fontSize = 12.sp
+        )
+        if (item.active) {
+            Spacer(Modifier.weight(1f))
+            Box(
+                Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFB9F6CA))
+            )
+        }
     }
 }
 
@@ -552,7 +785,18 @@ private fun sendKeyToTerminal(view: TerminalView?, key: String, modifiers: Extra
     val shift = modifiers.shift.isEngaged
     val fn = modifiers.fn.isEngaged
 
-    if (keyCode != null) {
+    if (keyCode != null && !fn) {
+        // v2.24 方向键修复：直接走 handleKeyCode（Termux 官方同源协议）——
+        // 由 KeyHandler 查表后把 ESC 序列写入会话。旧版合成 ACTION_UP KeyEvent
+        // 再过 onKeyDown，路径长且在某些 ROM/组合下被 isSystem/IME 分支截走，
+        // 导致方向键等系统键不起作用。
+        var keyMod = 0
+        if (ctrl) keyMod = keyMod or KeyHandler.KEYMOD_CTRL
+        if (alt) keyMod = keyMod or KeyHandler.KEYMOD_ALT
+        if (shift) keyMod = keyMod or KeyHandler.KEYMOD_SHIFT
+        v.handleKeyCode(keyCode, keyMod)
+    } else if (keyCode != null) {
+        // FN 激活时保留官方 kcm 回退语义（fn+键 → kcm fallback，如 fn+↑ = PGUP）
         var meta = 0
         if (ctrl) meta = meta or (KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON)
         if (alt) meta = meta or (KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON)
@@ -574,11 +818,9 @@ private fun TermuxExtraKeysBar(
     val view = controller.terminalView
     val modifiers = TermuxTerminalHolder.modifiers
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF161616))
-    ) {
+    // v2.24 透明快捷键栏：去掉整条背板色，键体改为半透明白玻璃片 ——
+    // 视觉上与终端融为一体（用户要求“底部键盘不要背景”）
+    Column(modifier = Modifier.fillMaxWidth()) {
         // 第一排（对齐官方 Termux）：ESC / — HOME ↑ END PGUP
         Row(
             modifier = Modifier
@@ -656,7 +898,7 @@ private fun RowScope.RepeatableKey(
         modifier = Modifier
             .weight(1f)
             .height(40.dp)
-            .background(Color(0xFF242424), RoundedCornerShape(5.dp))
+            .background(Color(0x2EFFFFFF), RoundedCornerShape(5.dp))
             .pointerInput(key) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -715,7 +957,7 @@ private fun RowScope.ExtraKey(
             .then(if (fixedWidth) Modifier.width(44.dp) else Modifier.weight(1f))
             .height(38.dp)
             .background(
-                if (modifierLabel) Color(0xFF1B5E20) else Color(0xFF242424),
+                if (modifierLabel) Color(0x661B5E20) else Color(0x2EFFFFFF),
                 RoundedCornerShape(5.dp)
             )
             .combinedClickable(
@@ -741,9 +983,9 @@ private fun RowScope.ExtraKey(
 private fun RowScope.ModifierKey(label: String, modifier: com.linbox.apps.terminal.termux.StickyModifier) {
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val bg = when {
-        modifier.locked -> Color(0xFF00600F)
-        modifier.active -> Color(0xFF1B5E20)
-        else -> Color(0xFF242424)
+        modifier.locked -> Color(0x9900600F)
+        modifier.active -> Color(0x661B5E20)
+        else -> Color(0x2EFFFFFF)
     }
     val fg = when {
         modifier.locked || modifier.active -> Color(0xFF69F0AE)
