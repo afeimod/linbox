@@ -46,13 +46,17 @@ object TermuxEnvironment {
      * fix9.11：LinBox 改造（sources.list 服务地址旧名→linbox，
      * 等 10 字节等长替换）后 SHA-256 再次更新——离线包必须与
      * BOOTSTRAP_AARCH64_SHA256 一一对应，改包必改哈希。
+     * fix9.12：sources.list 主源 TUNA→ISCAS（TUNA/BFSU 自 2026-09
+     * 起 dists/InRelease 对 apt 一律 403，ISCAS 经 pool 级双验证
+     * 通过；.cn 域名保住老版 pkg select_mirror 的轮换跳过特性）
+     * ——SHA-256 随之更新。
      */
     const val TERMUX_APP_VERSION = "0.118.0"
     const val BOOTSTRAP_BUILD_VERSION = "2022.01.07-r1"
     const val BOOTSTRAP_SOURCE_URL =
         "https://github.com/termux/termux-packages/releases/download/bootstrap-$BOOTSTRAP_BUILD_VERSION/bootstrap-%s.zip"
     const val BOOTSTRAP_AARCH64_SHA256 =
-        "9ec1cc75384329530f31117386154aefa7ba02614bf41ac576fa4e28f19863b9"
+        "2b542b38a1808b6d2dd58b10f77076439a4a441bba7020408965bdbeab50b13d"
 
     // ------------------------------------------------------------------
     // 运行期路径（全部由 Context 派生，避免硬编码二次引入）

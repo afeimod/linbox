@@ -113,8 +113,13 @@ fix_glibc_source() {
 }
 
 # 把文件内已知坏源/老源/轮换源地址重写到指定仓库根。
+# fix9.12：TUNA/BFSU 自 2026-09 起 dists/InRelease 对 apt 一律 403
+# （多设备实测），入列坏源；与安装器 fixAptSources 保持同一模式集合，
+# 否则 --force 换源时"主源已切换"打印了、sources.list 却纹丝不动。
 rewrite_file() { # $1=文件 $2=新根
     sed -i \
+        -e 's#https\?://mirrors\.tuna\.tsinghua\.edu\.cn/termux/apt#'"$2"'#g' \
+        -e 's#https\?://mirrors\.bfsu\.edu\.cn/termux/apt#'"$2"'#g' \
         -e 's#https\?://packages-cf\.termux\.org/apt#'"$2"'#g' \
         -e 's#https\?://packages\.termux\.org/apt#'"$2"'#g' \
         -e 's#https\?://packages\.termux\.dev/apt#'"$2"'#g' \

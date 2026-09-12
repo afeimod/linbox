@@ -285,7 +285,7 @@ object TermuxBootstrapInstaller {
     //   个 root，root 不动）+ 对抗上限（钉满 4 轮仍被改回 → 放手）+
     //   缩屏下限（≥握手面积 50%）。脚本侧同步：--x11-diag logcat 采样
     //   加深至 -t 20000（旧 -t 240 抓不到完整决策链）。
-    private const val EXTRAS_REVISION = 39
+    private const val EXTRAS_REVISION = 40
 
     /** 安装状态（Compose 界面订阅渲染）。 */
     sealed class InstallState {
@@ -981,14 +981,20 @@ object TermuxBootstrapInstaller {
     }
 
     /**
-     * 首选镜像仓库根（清华 TUNA）。
+     * 首选镜像仓库根（中科院 ISCAS）。
      *
      * 选它有三个原因：pool 级下载稳定；对国内网络速度快；
      * 域名以 .cn 结尾，老版 termux-tools 的 pkg select_mirror 见到
      * .cn 源会直接跳过轮换，避免再次被加权随机切到坏镜像。
+     *
+     * fix9.12：原首选 TUNA（连同 BFSU）自 2026-09 起 dists/InRelease
+     * 对 apt 请求一律 403 Forbidden（用户多台设备实测），而 ISCAS
+     * 经 Release 头 + 真实 .deb 分段下载双验证通过，故首选根切换
+     * 到 ISCAS，TUNA/BFSU 加入坏源重写清单（与 bin/linbox-mirror
+     * 的 rewrite_file 保持同一模式集合）。
      */
     private const val PREFERRED_MIRROR_ROOT =
-        "https://mirrors.tuna.tsinghua.edu.cn/termux/apt"
+        "https://mirror.iscas.ac.cn/termux/apt"
 
     /**
      * 存量安装的 apt 源修复（纯文本替换、不联网）。
@@ -1000,6 +1006,8 @@ object TermuxBootstrapInstaller {
      *
      * 这里把 sources.list 中已知的坏源/老源/轮换源统一重写到
      * [PREFERRED_MIRROR_ROOT]（.cn 域名同时让轮换永久跳过本源）。
+     * fix9.12 起清单含 TUNA/BFSU（2026-09 起 dists 403，存量安装
+     * 升级新 APK 时由增量迁移自动改写到 ISCAS）。
      * pool 级验证与 sources.list.d 附加源（gpkg）同步由
      * bin/linbox-mirror 负责（linbox-glibc 安装前自动调用）。
      */
@@ -1014,6 +1022,8 @@ object TermuxBootstrapInstaller {
         val root = PREFERRED_MIRROR_ROOT
         val mainSuffix = "$root/termux-main"
         val new = old
+            .replace(Regex("https?://mirrors\\.tuna\\.tsinghua\\.edu\\.cn/termux/apt"), root)
+            .replace(Regex("https?://mirrors\\.bfsu\\.edu\\.cn/termux/apt"), root)
             .replace(Regex("https?://packages-cf\\.termux\\.org/apt"), root)
             .replace(Regex("https?://packages\\.termux\\.org/apt"), root)
             .replace(Regex("https?://packages\\.termux\\.dev/apt"), root)
@@ -1024,7 +1034,7 @@ object TermuxBootstrapInstaller {
         if (new != old) {
             try {
                 list.writeText(new)
-                android.util.Log.i(TAG, "apt 源已修复到 TUNA 镜像（原为坏镜像/轮换源）")
+                android.util.Log.i(TAG, "apt 源已修复到首选镜像（原为坏镜像/轮换源）")
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "apt 源修复写入失败: ${e.message}")
             }

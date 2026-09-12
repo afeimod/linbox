@@ -4,7 +4,7 @@
   pkg install <包名>   安装软件包（官方 apt 源）
   pkg search <关键字>  搜索软件包
   pkg update           更新软件源
-  linbox-mirror        体检/切换 apt 软件源（403 自动换源重试）
+  linbox-mirror        体检/切换 apt 软件源（下载 403 时用）
   linbox-glibc         一键安装 glibc 运行环境
   linbox-x11           启动内置 X11 桌面（pkg install xfce4 后体验）
   theme win11          切换窗口主题
