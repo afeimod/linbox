@@ -278,7 +278,7 @@
 APP_PREFIX="${GLR_APP_PREFIX:-/data/data/com.linbox/files/usr}"
 GLIBC_PREFIX="${APP_PREFIX}/glibc"
 GLR_LD=${GLIBC_PREFIX}/lib/ld-linux-aarch64.so.1
-GLR_VERSION="3.13-linbox8"
+GLR_VERSION="3.12-linbox7"
 
 # [R1] 分辨率握手协议文件 (LinBox X11 窗口监听此文件)
 GLR_RES_FILE="${APP_PREFIX}/tmp/.linbox-x11-res"
@@ -502,24 +502,29 @@ glr_zink_setup() {
 
 usage() {
     cat <<'USAGE'
-glibc-runner v3.13-linbox8 —— glibc 启动器 + wine 快捷启动 (startonwine 合并版)
+glibc-runner v3.12-linbox7 —— glibc 启动器 + wine 快捷启动 (startonwine 合并版)
 
 【wine 快捷启动】glibc-runner [选项] <游戏.exe | wine子命令>
  -d[WxH], --desktop[=WxH]  X 屏幕 = 指定分辨率; 窗口化游戏自动贴合
                            拉伸铺满无黑边（X 屏随游戏窗口自适应）;
-                           -d 不加分辨率 = 全屏 (默认 1280x720);
-                           启用 wine 蓝底桌面 (explorer /desktop=shell,
-                           桌面尺寸 = 分辨率, 恰好铺满 X 屏)
+                           -d 不加分辨率 = 全屏 (默认 1280x720)
  -v[WxH], --vd[=WxH]      启用 wine 虚拟桌面 (explorer /desktop);
                            轩宇剑4类游戏必须运行在虚拟桌面内才不报错;
                            不加分辨率默认 1280x720; 需指定尺寸时紧贴:
                            -v1024x768 或 -d1024x768 -v
  -f[WxH], --force-desktop[=WxH]
-                          强制 wine 蓝底桌面 (与 -d 同源): explorer
-                          /desktop=shell,WxH + 握手同款 (窗口化游戏
-                          App 侧自动贴合拉伸铺满, 无黑边, 老游戏不再
-                          被 resize 战斗卡住); 不加分辨率默认
-                          1280x720 (与 -d 同款), 需指定时紧贴:
+                          强制窗口直出 (针对 wine10 和 proton 版 wine
+                          及以上), 与 -d 同源的两个动作: ① 不传
+                          explorer /desktop 参数, 游戏窗口直接显示
+                          在项目 X11 桌面窗口 (画面直出); ② 每次启
+                          动前清除注册表 wine 蓝色背景桌面 (HKCU\
+                          Software\Wine\Explorer 的 Desktop 值与
+                          Desktops 键, Mobox 迁移/winecfg 勾选/repack
+                          资产常持久化它 → 游戏被关进蓝底桌面、窗口
+                          居中缩水); 铺满与 -d 完全同源: 握手同款
+                          (窗口化游戏 App 侧自动贴合拉伸铺满, 无黑边,
+                          老游戏不再被 resize 战斗卡住); 不加分辨率
+                          默认 1280x720 (与 -d 同款), 需指定时紧贴:
                           -f1280x720 (GLR_FORCE_VD=1 同效); 现代游戏
                           想原生分辨率渲染可再叠 -F (见下)
  -F, --fitwin             撑满模式: 把游戏窗口 resize 到 X 屏幕尺寸
@@ -559,7 +564,7 @@ glibc-runner v3.13-linbox8 —— glibc 启动器 + wine 快捷启动 (startonwi
 【glibc 原生模式】(传入 Linux/box64 二进制时自动走此模式)
  -c/--configure            patchelf 配置二进制 (rpath+interpreter)
  --findlib                检查二进制缺失的动态库 (原短选项 -f 已让给
-                           --force-desktop, 本功能保留长选项)
+                           强制窗口直出 --force-desktop, 本功能保留长选项)
  -n/--no-linker            不经由 ld.so 直接启动
  -s/--shell                进入 glibc bash (或执行其命令)
  -i/--info                 打印环境信息 (含 wine/前缀/盘符)
@@ -573,7 +578,7 @@ glibc-runner v3.13-linbox8 —— glibc 启动器 + wine 快捷启动 (startonwi
 示例:
  glibc-runner -d /sdcard/game/game.exe            # 全屏启动游戏 (不加分辨率)
  glibc-runner -d1280x720 /sdcard/game/game.exe    # 虚拟桌面 1280x720 启动
- glibc-runner -f /sdcard/game/game.exe            # 强制 wine 蓝底桌面 (铺满同 -d, explorer /desktop=shell)
+ glibc-runner -f /sdcard/game/game.exe            # 强制窗口直出+清wine蓝色背景桌面 (默认 1280x720, 铺满同 -d)
  glibc-runner -f800x600 /sdcard/game/game.exe     # 同上, X 屏幕 800x600
  glibc-runner -g /sdcard/game/game.exe            # OpenGL3 驱动启动
  glibc-runner taskmgr                             # 直接启动 wine 程序
@@ -614,7 +619,7 @@ GLR_WINE=0; GLR_SHOWLOG=0; GLR_FORCE=0; GLR_ADMIN=0; GLR_SERVER_DIRECT=0
 GLR_OPT_DESKTOP=""; GLR_OPT_WINE=""; GLR_ENV_WINE="${GLR_WINE_BIN:-}"
 GLR_DESKTOP_GIVEN=0   # [R1] 是否显式传了 -d (与 -dWxH 区分全屏场景)
 GLR_FITWIN=0          # fix19 [R5]: -F/--fitwin 撑满模式（握手值带 fitwin 标记）
-GLR_FORCE_VD="${GLR_FORCE_VD:-0}"  # v3.13-linbox8: -f/--force-desktop 强制 wine 桌面 (GLR_FORCE_VD=1 环境变量同效)
+GLR_FORCE_VD="${GLR_FORCE_VD:-0}"  # fix25 [R7]: -f/--force-desktop 强制窗口直出 (GLR_FORCE_VD=1 环境变量同效)
 GLR_CMD_DRIVES=0; GLR_DRIVES_ARG=""; GLR_OPT_ADDDRIVE=""; GLR_OPT_RMDRIVE=""
 GLR_CMD_KILL=0; GLR_CMD_INIT=0; GLR_CMD_INSTALL=0; GLR_CMD_FIXPREFIX=0; GLR_CMD_FIXDRIVES=0
 GLR_CMD_WINECFG=0; GLR_CMD_REGEDIT=0; GLR_CMD_TASKMGR=0; GLR_CMD_FIXAUDIO=0; GLR_CMD_FIXZINK=0
@@ -643,11 +648,14 @@ while :; do
         -s|--shell) GLR_MODE_SHELL=1 ;;
         -c|--configure) GLR_MODE_CONF=1 ;;
         -f|--force-desktop)
-            # v3.13-linbox8: 强制 wine 桌面 —— 与 -d 同源 (握手写
-            # "WxH" 不带 fitwin → App 侧贴合拉伸铺满; linbox4 曾强制
-            # 叠加 -F 撑满, 实测 DirectDraw 老游戏假稳定黑边, 已回退),
-            # explorer /desktop=shell,WxH 由统一桌面块启用。裸 -f
-            # 默认 1280x720 (与 -d 同款), -fWxH 指定尺寸(紧贴)。
+            # fix25 [R7] (linbox5 修订): 强制窗口直出 —— 与 -d [R2]
+            # 同款画面直出 (不传 explorer /desktop 参数, 直传参数与
+            # 注册表是同一个蓝底 wine 桌面的两种入口); 每次启动前
+            # 清除注册表 wine 蓝色背景桌面; 握手与 -d 完全同源
+            # (写 "WxH", 不带 fitwin) → App 侧贴合拉伸铺满, 与 -d
+            # 填满效果一致 (linbox4 曾强制叠加 -F 撑满, 实测 DirectDraw
+            # 老游戏假稳定黑边, 已回退)。裸 -f 默认 1280x720
+            # (与 -d 同款), -fWxH 指定尺寸(紧贴)。
             GLR_FORCE_VD=1
             GLR_WINE=1
             if [ -n "${2:-}" ]; then
@@ -2032,31 +2040,48 @@ if [ "${GLR_WINE}" = "1" ]; then
     [ "${use_opengl}" = "1" ] && additional_args+=("--rendering-driver" "opengl3")
     [ "${dx_dx11}"  = "1" ]   && additional_args+=("-dx11")
 
-    # wine 桌面全量恢复 [v3.13-linbox8, v2.29 用户需求]:
-    #   LinBox 已有独立 X11 桌面窗口, [R2] 时代为规避窗口管理问题而
-    #   砍掉的 explorer /desktop 蓝底 wine 桌面现在恢复 —— -d/-f/-v
-    #   全部启用 explorer /desktop=shell,WxH (startonwine 原生语义):
-    #   桌面尺寸与握手分辨率一致 → wine 桌面窗口恰好铺满 X 屏幕,
-    #   无黑边（X11FitClient 看到它 rootMatch 零动作）。
-    #   - 裸 -d/-f/-v: 桌面与握手同为 1280x720;
-    #   - 不带任何尺寸选项的启动: 保持画面直出 (native, 桌面/文件
-    #     管理器场景不受影响)。
-    #   （GLR_VD=1 / GLR_FORCE_VD=1 环境变量仍有效, 分别等同 -v/-f）
-    if [ "${GLR_VD:-0}" = "1" ] || [ "${GLR_FORCE_VD:-0}" = "1" ]; then
-        GLR_DESKTOP_GIVEN=1              # 环境变量入口同样确保握手写入
-    fi
-    if [ -n "${GLR_DESKTOP_GIVEN:-}" ]; then
+    # 虚拟桌面: [v3.3 R2 变更] -dWxH 默认不开 explorer /desktop（画面直出）。
+    #   fix19 [R4]: -v/--vd 显式启用 —— 轩宇剑4 类老 DDraw 游戏离开虚拟
+    #   桌面会报错/黑屏, 必须运行在 explorer /desktop 内。VD 尺寸 =
+    #   -d/-v 指定分辨率（默认 1280x720），与握手分辨率一致 → VD 窗口
+    #   恰好铺满 X 屏幕, 无黑边（X11FitClient 看到它 rootMatch 零动作）。
+    #   （GLR_VD=1 环境变量仍有效，-v 是它的命令行等价物）
+    if [ "${GLR_VD:-0}" = "1" ]; then
         if [ -z "${GLR_OPT_DESKTOP}" ]; then
-            GLR_OPT_DESKTOP="1280x720"   # 裸 -d/-f/-v 的桌面默认尺寸
+            GLR_OPT_DESKTOP="1280x720"   # 裸 -v / 裸 -d+GLR_VD 时 VD 默认尺寸
+            GLR_DESKTOP_GIVEN=1           # 确保 res 握手写入 → X 屏幕 == VD 尺寸
         fi
         resolution=(explorer "/desktop=shell,${GLR_OPT_DESKTOP}")
     fi
 
-    # -f/--force-desktop [v3.13-linbox8]: 回归「强制 wine 桌面」本义 —
-    #   与 -d 同源: 握手写 "WxH"(不带 fitwin), 桌面经上方统一块启用
-    #   explorer /desktop=shell,WxH。原 [R7]「强制窗口直出」语义随
-    #   [R2] 一并废除 (linbox4 曾强制叠加 -F 撑满, 实测 DirectDraw 老
-    #   游戏假稳定黑边已回退; 现代游戏要撑满用 -f -F 显式叠加)。
+    # fix25 [R7] (v3.12-linbox5 修订): -f/--force-desktop 强制窗口直出
+    #   —— 与 -d [R2] 完全同款: resolution 置空, 不传任何 explorer
+    #   /desktop 参数 (linbox2 的直传参数与注册表方式是同一个蓝底
+    #   wine 桌面窗口的两种入口, 用户实测截图确认后去除); "窗口"由
+    #   握手提供: X 屏幕 = -f 尺寸, 游戏直接渲染在项目 X11 桌面窗口。
+    #   填满与 -d 完全同源 (linbox5 定稿, 推翻 linbox4): linbox4 曾
+    #   让握手值固定携带 fitwin (自动叠加 -F 撑满), 用户实测"一样的
+    #   黑边" —— DirectDraw 固定分辨率老游戏接受 resize 后仍按原分
+    #   辨率绘制 (App 侧 fix19 注释记载的假稳定: -d1024x768 只画
+    #   868x652), 右/下黑区烧在 X 画面内部, 显示层拉伸也救不回。
+    #   linbox5 回归: -f 握手写 "WxH" (与 -d 同款, 不带 fitwin) →
+    #   App 侧 fix19 默认贴合策略 (游戏窗口平移到 (0,0) + X 屏幕
+    #   缩成游戏客户区 + 显示层拉伸铺满) —— 与用户实测有效的 -d
+    #   填满效果逐位一致; 现代游戏需要原生分辨率渲染时用 -f -F
+    #   显式叠加撑满。
+    #   与 -v 同给时 -f 覆盖 -v (explorer 桌面取消)。
+    if [ "${GLR_FORCE_VD:-0}" = "1" ]; then
+        if [ -z "${GLR_OPT_DESKTOP}" ]; then
+            GLR_OPT_DESKTOP="1280x720"    # 裸 -f 默认尺寸 (与 -d 同款)
+            GLR_DESKTOP_GIVEN=1           # 确保 res 握手写入 → X 屏幕 == 指定尺寸
+        fi
+        # [R7] linbox5: 不再强制 GLR_FITWIN=1 (linbox4 实测假稳定
+        #   黑边, 已回退); 需要撑满的用户用 -f -F 显式叠加。
+        if [ "${GLR_VD:-0}" = "1" ]; then
+            _glr_warn "-f 与 -v 同给: 按 -f 强制窗口直出执行 (explorer 虚拟桌面已取消, -f 不带蓝底 wine 桌面)"
+        fi
+        resolution=()   # [R2] 同款画面直出: 不传 explorer /desktop → wine 蓝底桌面不出现
+    fi
 
     # 调试通道 (--debug; 用户已手工设置则尊重)
     if [ "${GLR_SHOWLOG}" = "1" ]; then
@@ -2089,7 +2114,7 @@ if [ "${GLR_WINE}" = "1" ]; then
     echo " box64   : ${GLR_BOX64}"
     echo " prefix  : ${WINEPREFIX}"
     echo " display : ${DISPLAY:-?}"
-    echo " desktop : ${GLR_OPT_DESKTOP:-全屏/直出}$([ -n "${GLR_DESKTOP_GIVEN:-}" ] && echo " (wine桌面 explorer)")$([ "${GLR_FITWIN}" = "1" ] && echo " (撑满)")"
+    echo " desktop : ${GLR_OPT_DESKTOP:-全屏}$([ "${GLR_FORCE_VD:-0}" = "1" ] && echo " (强制窗口直出)")$([ "${GLR_VD:-0}" = "1" ] && echo " (wine虚拟桌面)")$([ "${GLR_FITWIN}" = "1" ] && echo " (撑满)")"
     echo " 日志    : ${GLR_LOG:-(仅终端)}"
     if [ "${GLR_PULSE_READY:-0}" = "1" ]; then
         echo " audio   : pulse 就绪 (127.0.0.1:4713)${GLR_AUDIO_VOL_APPLIED:+ · sink音量 ${GLR_AUDIO_VOL_APPLIED}%}"
@@ -2100,10 +2125,11 @@ if [ "${GLR_WINE}" = "1" ]; then
         echo " gl      : ${GLR_ZINK_STATUS}"
     fi
     echo " 命令    : box64 wine ${wine_args[*]} ${resolution[*]} $* ${additional_args[*]}"
-    if [ -n "${GLR_DESKTOP_GIVEN:-}" ]; then
-        echo " 提示    : -d/-f/-v 均已启用 wine 蓝底桌面 (explorer /desktop=shell, 尺寸与 X 屏一致)"
+    if [ -n "${GLR_DESKTOP_GIVEN}" ]; then
+        echo " 提示    : 窗口化游戏自动贴合/钉满铺满 (X 屏最多调整一次, 防级联)"
+        echo "           游戏报错/闪退 (轩宇剑4类)? 加 -v 启用 wine 虚拟桌面"
+        echo "           wine 蓝色背景桌面? 加 -f (强制窗口直出+每次清注册表桌面, 铺满同 -d)"
         echo "           现代游戏想按 ${GLR_OPT_DESKTOP:-1280x720} 原生渲染可加 -F (窗口撑满)"
-        echo "           想回画面直出 (无 wine 桌面)? 去掉 -d/-f/-v 即可"
     fi
 
     # [R1/R6] 分辨率握手: 把目标分辨率告知 LinBox X11 窗口。
@@ -2167,31 +2193,44 @@ if [ "${GLR_WINE}" = "1" ]; then
     #   代码差异, 只能是残留状态)。linbox6 起 -d 与 -f [R7] 同款,
     #   每次启动前都清 (reg delete 对直出会话零风险; -v/-f 各有专属
     #   块, 本块仅 -d 直出抵达)。
-    # [R3→linbox8] 直出模式专属: 不带 -d/-f/-v 时清除前缀内持久化
-    #   的虚拟桌面注册表 (winecfg"模拟虚拟桌面"/Mobox 迁移/repack 资产
-    #   残留), 防止直出会话被幽灵桌面劫持; 带 -d/-f/-v 时桌面由命令行
-    #   explorer 参数提供, 清理无必要。
-    if [ -z "${GLR_DESKTOP_GIVEN:-}" ] \
+    if [ -n "${GLR_DESKTOP_GIVEN}" ] && [ "${GLR_VD:-0}" != "1" ] \
+       && [ "${GLR_FORCE_VD:-0}" != "1" ] \
        && [ -f "${WINEPREFIX}/system.reg" ]; then
         "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
             "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
         "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
             "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
-        echo " [R3] 直出模式: 已清除前缀内持久化虚拟桌面配置 (防 winecfg 残留劫持)"
+        echo " [R3] 已清除前缀内持久化虚拟桌面配置 (纯游戏画面, 每次清理)"
     fi
 
-    # [R7→linbox8] -f 不再清注册表桌面 (桌面即本义); 保留一次性清理:
-    #   v3.12-linbox1 旧版曾用 -f 写注册表桌面 (与语义相反), 标记存在
-    #   即清（任何模式; 新版桌面由命令行 explorer 参数提供, 不依赖
-    #   注册表持久化）。
-    if [ -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" ] \
-       && [ -f "${WINEPREFIX}/system.reg" ]; then
+    # fix25 [R7] (v3.12-linbox3 修订): -f 去 wine 蓝色背景桌面 =
+    #   -d [R3] 同款 reg delete, 但每次 -f 都执行, 不做一次性记账
+    #   —— "强制"语义 (linbox2 曾叠加 explorer /desktop=shell,WxH
+    #   直传参数, 但直传参数与注册表方式创建的是同一个蓝底 wine
+    #   桌面窗口, 用户实测截图确认后 linbox3 去除 explorer 参数,
+    #   画面直出与 -d 完全一致):
+    #     reg delete HKCU\Software\Wine\Explorer          /v Desktop
+    #     reg delete HKCU\Software\Wine\Explorer\Desktops
+    #   清除后游戏窗口直接渲染在项目 X11 桌面窗口 (用户图二 -d 效果),
+    #   蓝底桌面/任务栏不再出现。
+    if [ "${GLR_FORCE_VD:-0}" = "1" ] && [ -f "${WINEPREFIX}/system.reg" ]; then
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
+        "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
+            "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
+        rm -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" 2>/dev/null   # v3.12-linbox1 遗留记账清理
+        echo " [R7] 已清除注册表 wine 蓝色背景桌面, 强制窗口直出 ${GLR_OPT_DESKTOP} (铺满同 -d 贴合拉伸, 无 wine 桌面)"
+    elif [ "${GLR_FORCE_VD:-0}" != "1" ] \
+         && [ -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" ] \
+         && [ -f "${WINEPREFIX}/system.reg" ]; then
+        # v3.12-linbox1 曾用 -f 写入注册表桌面 (与语义相反), 此处清除
+        # 旧版遗留, 一次性; 新版 -f 不再写任何注册表键。
         "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
             "HKCU\\Software\\Wine\\Explorer" /v Desktop /f >/dev/null 2>&1
         "${GLR_LD}" "${GLR_BOX64}" "${GLR_WINE_BIN}" reg delete \
             "HKCU\\Software\\Wine\\Explorer\\Desktops" /f >/dev/null 2>&1
         rm -f "${WINEPREFIX}/linboxmeta/.linbox-vd-on" 2>/dev/null
-        echo " [R7] 已清除旧版遗留的注册表桌面配置 (现由命令行 explorer 参数提供)"
+        echo " [R7] 已清除旧版 -f 遗留的注册表窗口配置 (恢复全屏)"
     fi
 
     # fix20 [A5]: Mobox 迁移前缀 Drivers=alsa 钉死自愈(记账只跑一次)

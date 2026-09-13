@@ -390,7 +390,7 @@ int main(int argc, char **argv)
 
     /* 版本指纹（v5）：设备端一键核验部署状态 */
     if (show_version) {
-        printf("linbox-reprefix v5.2 (fix8.5, EXTRAS_REVISION 41)\n");
+        printf("linbox-reprefix v5.2 (fix8.5, EXTRAS_REVISION 43)\n");
         return 0;
     }
 

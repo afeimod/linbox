@@ -155,10 +155,7 @@ object TermuxEnvironment {
             // failsafe 会话保留系统 PATH，保证系统工具可用
             env.add("PATH=${System.getenv("PATH") ?: "/system/bin:/system/xbin"}")
         } else {
-            // v2.29 中文 locale：支持 gettext 翻译/UTF-8 输出的程序
-            // （python、perl、ncurses 应用等）默认按中文环境工作；
-            // 无中文目录的程序不受影响（自动回退 C 语义）。
-            env.add("LANG=zh_CN.UTF-8")
+            env.add("LANG=en_US.UTF-8")
             env.add("PATH=$bin")
             env.add("PWD=$workingDirectory")
             env.add("TMPDIR=$prefix/tmp")
