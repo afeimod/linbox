@@ -693,6 +693,59 @@ private const val KEY_PHANTOM_MAX = "max_phantom_processes"
 /** AOSP 默认子进程上限（32）：关闭保护时恢复用。 */
 private const val PHANTOM_MAX_DEFAULT = "32"
 
+/**
+ * Settings.Config（device_config 读写 API，运行时仅存在于 Android 11+/API 30+）。
+ *
+ * 该嵌套类不在公开 SDK 的 android.jar 里（compileSdk 34 下直接引用也会报
+ * "Unresolved reference: Config"，CI 已实证），故统一经反射访问：
+ * - API 30+ 设备：反射真实读写 device_config（activity_manager/max_phantom_processes）；
+ * - 低版本/反射失败：安全降级返回 null/false，不影响公开的
+ *   Settings.Global "settings_enable_monitor_phantom_procs" 主链路。
+ */
+private val settingsConfigClass: Class<*>? by lazy {
+    try {
+        Class.forName("android.provider.Settings\$Config")
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/** 读 device_config：等价 Settings.Config.getString(cr, ns, key)。 */
+private fun deviceConfigGetString(
+    cr: android.content.ContentResolver, ns: String, key: String
+): String? {
+    val cls = settingsConfigClass ?: return null
+    return try {
+        cls.getMethod(
+            "getString",
+            android.content.ContentResolver::class.java,
+            String::class.java,
+            String::class.java
+        ).invoke(null, cr, ns, key) as? String
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/** 写 device_config：等价 Settings.Config.putString(cr, ns, key, value)。 */
+private fun deviceConfigPutString(
+    cr: android.content.ContentResolver, ns: String, key: String, value: String
+): Boolean {
+    val cls = settingsConfigClass ?: return false
+    return try {
+        cls.getMethod(
+            "putString",
+            android.content.ContentResolver::class.java,
+            String::class.java,
+            String::class.java,
+            String::class.java
+        ).invoke(null, cr, ns, key, value)
+        true
+    } catch (_: Throwable) {
+        false
+    }
+}
+
 /** WRITE_SECURE_SETTINGS 一次性授权命令（复制给用户在电脑上执行）。 */
 private const val ADB_GRANT_CMD = "adb shell pm grant com.linbox android.permission.WRITE_SECURE_SETTINGS"
 
@@ -729,7 +782,7 @@ private fun DeveloperSection() {
             val cr = context.contentResolver
             val monitor = android.provider.Settings.Global.getString(cr, KEY_PHANTOM_MONITOR)
             val max = if (Build.VERSION.SDK_INT >= 30)
-                android.provider.Settings.Config.getString(cr, NS_PHANTOM, KEY_PHANTOM_MAX) else null
+                deviceConfigGetString(cr, NS_PHANTOM, KEY_PHANTOM_MAX) else null
             monitor == "false" || ((max?.toLongOrNull() ?: 0L) > 32L)
         } catch (_: Exception) {
             false
@@ -772,9 +825,7 @@ private fun DeveloperSection() {
                             val cr = context.contentResolver
                             android.provider.Settings.Global.putString(cr, KEY_PHANTOM_MONITOR, "false")
                             if (Build.VERSION.SDK_INT >= 30) {
-                                android.provider.Settings.Config.putString(
-                                    cr, NS_PHANTOM, KEY_PHANTOM_MAX, "2147483647"
-                                )
+                                deviceConfigPutString(cr, NS_PHANTOM, KEY_PHANTOM_MAX, "2147483647")
                             }
                             true
                         } catch (_: Exception) {
@@ -792,9 +843,7 @@ private fun DeveloperSection() {
                         val cr = context.contentResolver
                         android.provider.Settings.Global.putString(cr, KEY_PHANTOM_MONITOR, "true")
                         if (Build.VERSION.SDK_INT >= 30) {
-                            android.provider.Settings.Config.putString(
-                                cr, NS_PHANTOM, KEY_PHANTOM_MAX, PHANTOM_MAX_DEFAULT
-                            )
+                            deviceConfigPutString(cr, NS_PHANTOM, KEY_PHANTOM_MAX, PHANTOM_MAX_DEFAULT)
                         }
                     } catch (_: Exception) {
                     }
