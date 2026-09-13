@@ -1,0 +1,147 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-tarxz — 解压 tar.xz 并把所有内嵌 com.termux 路径
+#                强制改写为 com.linbox（与 pkg 安装时同款引擎）
+# ============================================================
+# 背景：官方 termux 生态的 rootfs / bootstrap / 打包 tar.xz 把
+# /data/data/com.termux 焊死在文件内容里（ELF 的 .rodata、脚本
+# shebang、.pc/.cmake 配置、dpkg 数据库……），而 LinBox 的数据
+# 目录是 /data/data/com.linbox——直接解压必然无法工作。
+#
+# 原理：com.linbox 与 com.termux 恰好同为 10 字节。解压后调用
+# 原生重写引擎 linbox-reprefix --tree 做等长字节替换：
+#   - 普通文件内容（mmap 就地改写，不移动 ELF 段偏移，二进制
+#     安全；只读权限文件自动临时加写位、改完还原）；
+#   - 目录名（data/data/com.termux → data/data/com.linbox 等
+#     成员路径目录一并改名）；
+#   - 符号链接目标。
+# 随后 --verify 复检残留必须为 0。
+#
+# 特判（与 linbox-debfix v6.3 同策略）：宿主 APK 的 X11 入口类
+# 真实类名保持 com.termux.x11.*（Java 包名不随应用包名重前缀），
+# 树内的 X11 客户端脚本重写后必然失效，故最后统一换回内置
+# 主副本（etc/linbox/x11/termux-x11）。
+#
+# 用法:
+#   linbox-tarxz <archive.tar.xz>             解压到 <去后缀同名目录>/ 并改写
+#   linbox-tarxz <archive.tar.xz> -t <目录>   解压到指定目录并改写
+#   linbox-tarxz -h | --help                  本帮助
+#
+# 兼容: *.tar.xz / *.txz（bootstrap 自带 GNU tar + xz，保留
+#       权限/符号链接/硬链接）
+# ============================================================
+set -u
+
+PREFIX=/data/data/com.linbox/files/usr
+REPREFIX="$PREFIX/bin/linbox-reprefix"
+
+usage() {
+  cat <<'USAGE'
+linbox-tarxz — 解压 tar.xz 并强制把所有内嵌 com.termux 路径改写为 com.linbox
+
+用法:
+  linbox-tarxz <archive.tar.xz>              解压到 <archive 去后缀>/ 并改写
+  linbox-tarxz <archive.tar.xz> -t <目录>    解压到指定目录并改写
+  linbox-tarxz -h | --help                   显示本帮助
+
+说明:
+  - 等长字节重写对 ELF / 文本 / 符号链接都安全
+    （com.termux 与 com.linbox 同为 10 字节，等效按 com.linbox 重新编译）；
+  - tar 成员路径若含 data/data/com.termux（官方 rootfs 常见），
+    目录会一并改名为 data/data/com.linbox；
+  - 改写完成后 --verify 复检，残留必须为 0，否则非零退出；
+  - 树内 bin/termux-x11 会被换回内置客户端（宿主 X11 入口类
+    保持 com.termux.x11.*，不可重写）。
+
+示例:
+  linbox-tarxz /sdcard/Download/termux-rootfs.tar.xz
+  linbox-tarxz bootstrap-arm64.txz -t ~/bootstrap
+USAGE
+}
+
+ARCHIVE=""
+TARGET=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    -t|--to)
+      [ $# -ge 2 ] || { echo "linbox-tarxz: -t 需要一个目录参数" >&2; exit 64; }
+      TARGET="$2"; shift 2 ;;
+    --) shift; break ;;
+    -*) echo "linbox-tarxz: 未知选项 $1（-h 查看帮助）" >&2; exit 64 ;;
+    *)
+      if [ -z "$ARCHIVE" ]; then ARCHIVE="$1"; shift
+      else echo "linbox-tarxz: 多余的参数 $1（-h 查看帮助）" >&2; exit 64; fi ;;
+  esac
+done
+
+[ -n "$ARCHIVE" ] || { usage; exit 64; }
+[ -f "$ARCHIVE" ] || { echo "linbox-tarxz: 找不到压缩包 $ARCHIVE" >&2; exit 66; }
+[ -x "$REPREFIX" ] || {
+  echo "linbox-tarxz: 重写引擎不可用（$REPREFIX 缺失或不可执行，" >&2
+  echo "              请先完成 bootstrap 安装/升级后重试）" >&2
+  exit 69
+}
+
+# 目标目录默认：压缩包同目录 + 去后缀名
+if [ -z "$TARGET" ]; then
+  _base=$(basename "$ARCHIVE")
+  _base=${_base%.tar.xz}; _base=${_base%.txz}; _base=${_base%.tar}; _base=${_base%.xz}
+  _dir=$(dirname "$ARCHIVE")
+  TARGET="$_dir/$_base"
+fi
+
+if [ -e "$TARGET" ] && [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
+  echo "linbox-tarxz: 目标目录 $TARGET 非空，为避免与旧内容混淆，" >&2
+  echo "              请先清空它或用 -t 指定一个空目录" >&2
+  exit 73
+fi
+mkdir -p "$TARGET" 2>/dev/null || { echo "linbox-tarxz: 无法创建 $TARGET" >&2; exit 73; }
+
+echo "==> [1/4] 解压 $(basename "$ARCHIVE") → $TARGET"
+if ! tar -xJf "$ARCHIVE" -C "$TARGET"; then
+  echo "linbox-tarxz: 解压失败（xz 数据损坏 / 磁盘或内存不足；" >&2
+  echo "              若含设备节点等特殊文件，GNU tar 会部分报错，请检查上方输出）" >&2
+  exit 74
+fi
+
+echo "==> [2/4] 强制改写内嵌路径 com.termux → com.linbox（等长重写，ELF 安全）"
+CHANGES=$("$REPREFIX" --tree "$TARGET")
+if [ $? -ne 0 ]; then
+  echo "linbox-tarxz: 树内存在改名失败的残留目录（见上方错误），已中止。" >&2
+  echo "              修复权限后重跑本命令即可（对已解压内容幂等）。" >&2
+  exit 1
+fi
+echo "    改动 $CHANGES 处（文件内容 + 目录名 + 符号链接目标）"
+
+echo "==> [3/4] 复检残留（必须为 0）"
+RESIDUAL=$("$REPREFIX" --verify "$TARGET")
+if [ "$RESIDUAL" != "0" ]; then
+  echo "linbox-tarxz: 警告: 复检仍有 $RESIDUAL 处 com.termux 残留" >&2
+  echo "              （异常权限/文件名残留？请检查后手动处理）" >&2
+  exit 2
+fi
+
+echo "==> [4/4] X11 客户端特判（宿主入口类保持 com.termux.x11.*，不可重写）"
+X11_MASTER="$PREFIX/etc/linbox/x11/termux-x11"
+if [ -f "$X11_MASTER" ]; then
+  find "$TARGET" -type f -name "termux-x11" 2>/dev/null | while IFS= read -r _f; do
+    if cp -f "$X11_MASTER" "$_f" 2>/dev/null && chmod 0755 "$_f" 2>/dev/null; then
+      echo "    已换回内置客户端: $_f"
+    else
+      echo "    警告: 替换失败（保留原文件）: $_f" >&2
+    fi
+  done
+else
+  echo "    内置主副本缺失，跳过（如树内含官方 X11 客户端，请勿直接使用）"
+fi
+
+echo "==> 完成：全部内嵌路径已为 com.linbox → $TARGET"
+# 常见布局提示
+if [ -d "$TARGET/data/data/com.linbox/files/usr" ]; then
+  echo "    检测到官方 rootfs 布局: $TARGET/data/data/com.linbox/files/usr"
+elif [ -d "$TARGET/usr" ]; then
+  echo "    检测到 usr 布局: $TARGET/usr"
+fi
+exit 0

@@ -285,7 +285,7 @@ object TermuxBootstrapInstaller {
     //   个 root，root 不动）+ 对抗上限（钉满 4 轮仍被改回 → 放手）+
     //   缩屏下限（≥握手面积 50%）。脚本侧同步：--x11-diag logcat 采样
     //   加深至 -t 20000（旧 -t 240 抓不到完整决策链）。
-    private const val EXTRAS_REVISION = 40
+    private const val EXTRAS_REVISION = 41
 
     /** 安装状态（Compose 界面订阅渲染）。 */
     sealed class InstallState {
@@ -685,6 +685,13 @@ object TermuxBootstrapInstaller {
         copyAssetScript(
             context, "termux/scripts/linbox-pkgfix",
             File(prefix, "bin/linbox-pkgfix"), executable = true
+        )
+        // rev41（v2.28）：tar.xz 导入器——解压任意 Termux rootfs/bootstrap
+        // tar.xz 并复用原生重写引擎强制改写全部内嵌 com.termux 路径
+        // （文件内容/目录名/符号链接目标），与 pkg 安装时同一套引擎与策略
+        copyAssetScript(
+            context, "termux/scripts/linbox-tarxz",
+            File(prefix, "bin/linbox-tarxz"), executable = true
         )
         // v2.22.3 fix10：增强版 glibc-runner（z 盘修复 + -d 分辨率握手）
         // ① 部署主副本 etc/linbox/glibc-runner（pkg 安装/升级 glibc-runner

@@ -6,6 +6,7 @@
   pkg update           更新软件源
   linbox-mirror        体检/切换 apt 软件源（下载 403 时用）
   linbox-glibc         一键安装 glibc 运行环境
+  linbox-tarxz <tar.xz> 解压 tar.xz 并自动改写 com.termux 路径
   linbox-x11           启动内置 X11 桌面（pkg install xfce4 后体验）
   linbox-x11-stop      停止 X11 桌面
   start x11 / settings 切换 LinBox 界面
