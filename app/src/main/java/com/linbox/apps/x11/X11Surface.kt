@@ -3,6 +3,8 @@ package com.linbox.apps.x11
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -423,6 +425,17 @@ private fun WaitingPanel(state: X11WindowController.State) {
  * 删除虚拟光标 padX/padY 绝对发送；模拟触摸屏按住拖拽改发相对增量
  * （按下瞬间仍绝对定位到指尖）。wine FPS 每帧 XWarpPointer 回窗口中心
  * 后不再被绝对坐标强拽 → 游戏读到的是真实相对增量，视角正常旋转。
+ *
+ * v2.30.1：滑动严重掉帧修复 —— 相对增量合并器（motion coalescer）。
+ * 原生 sendMouseEvent 每次调用都会经 X server 输入线程解析并把事件
+ * 投递给 wine（反汇编实证：一次 24 字节包 socket 写入 → 输入线程
+ * GetPointerEvents → 客户端 socket 投递）；拖拽时 Android 触摸采样率
+ * 120~240Hz，wine 游戏本身已打满 CPU，逐事件唤醒/派发直接抢占渲染
+ * 时间片 → 一滑动就严重掉帧。合并器把 MOVE 增量累加进 pending，
+ * 以 16ms 最小间隔节流冲刷（≈62.5Hz，不高于显示有效刷新率、高于
+ * 游戏 fps）：增量总量精确守恒（逐帧小增量之和 = 合并后单条增量），
+ * 视角旋转/桌面光标手感不变，X server+wine 每秒事件处理量降
+ * 50%~75%。手势结束/模式切换立即冲刷或清空，不丢不串。
  */
 internal class SmartTouchBridge(private val context: Context, private val view: LorieView) {
     private val renderData = com.termux.x11.input.RenderData()
@@ -433,6 +446,13 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         const val TOUCH_TRACKPAD = 1
         const val TOUCH_SIMULATED = 2
         const val TOUCH_DIRECT = 3
+
+        /**
+         * 相对增量最小冲刷间隔（ms）：≈62.5Hz。PC 鼠标 125Hz 档的一半、
+         * 不低于主流手机游戏在 wine 下的实际帧率，显示端 ≤60Hz 时逐帧
+         * 对齐 —— 手感无损，事件量减半以上。
+         */
+        private const val MOTION_FLUSH_INTERVAL_MS = 16L
 
         /** 活跃桥：设置面板修改触摸偏好后经 [applyTouchPrefs] 即时下发。 */
         @Volatile var activeBridge: SmartTouchBridge? = null
@@ -463,6 +483,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
             if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
             mode = Mode.IDLE
+            // v2.30.1：切换方式时丢弃未冲刷的相对增量，防止旧模式残余在新模式生效
+            dropPendingMoves()
         }
         touchMode = newMode
         scaleTouchpad = p.scaleTouchpad.get()
@@ -499,6 +521,44 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private val tapMaxMs = 260L
     private val dblTapMaxMs = 450L
     private val wheelStep = 40f
+
+    // ---- v2.30.1 相对增量合并器（motion coalescer）----
+    // MOVE 事件只累加 pending（零 JNI），由主线程 Handler 以
+    // MOTION_FLUSH_INTERVAL_MS 最小间隔冲刷（一条合并后的 relative
+    // sendCursorMove）。全部字段仅在主线程访问（onTouch 与 Handler
+    // 回调都在主线程），无需加锁。
+    private var pendX = 0f
+    private var pendY = 0f
+    private var flushPending = false
+    private val flushHandler = Handler(Looper.getMainLooper())
+    private val flushRunnable = Runnable { flushPendingMoves() }
+
+    private fun accumulateMove(dx: Float, dy: Float) {
+        pendX += dx
+        pendY += dy
+        if (!flushPending) {
+            flushPending = true
+            flushHandler.postDelayed(flushRunnable, MOTION_FLUSH_INTERVAL_MS)
+        }
+    }
+
+    private fun flushPendingMoves() {
+        flushHandler.removeCallbacks(flushRunnable)
+        flushPending = false
+        val dx = pendX
+        val dy = pendY
+        pendX = 0f; pendY = 0f
+        if (dx == 0f && dy == 0f) return
+        if (!LorieView.connected()) return
+        keySender.sendCursorMove(dx, dy, true)
+    }
+
+    /** 取消未冲刷的增量（手势系统取消/模式切换时，避免迟到冲刷发出意外移动）。 */
+    private fun dropPendingMoves() {
+        flushHandler.removeCallbacks(flushRunnable)
+        flushPending = false
+        pendX = 0f; pendY = 0f
+    }
 
     private enum class Mode { IDLE, ONE, TWO, TWO_DONE }
 
@@ -579,6 +639,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (mode == Mode.ONE && event.pointerCount >= 2) {
                     mode = Mode.TWO
+                    // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
+                    flushPendingMoves()
                     twoStartAt = android.os.SystemClock.uptimeMillis()
                     twoMoved = false
                     scrollAccum = 0f
@@ -603,14 +665,16 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                         // 游戏视角真实旋转。按下瞬间仍绝对定位到指尖
                         // （模拟触摸语义不变）；超出手抖阈值后先补齐
                         // 按下点→当前点的首段增量，再逐帧跟随。
+                        // v2.30.1：改为累加进合并器，16ms 节流冲刷 —— 事件量
+                        // 减半以上，消除 wine 游戏滑动掉帧；总量精确守恒。
                         if (!moved) {
                             val ddx = event.x - downX
                             val ddy = event.y - downY
                             moved = ddx * ddx + ddy * ddy > slopPx * slopPx
                             if (moved)
-                                keySender.sendCursorMove(ddx * scaleX, ddy * scaleY, true)
+                                accumulateMove(ddx * scaleX, ddy * scaleY)
                         } else {
-                            keySender.sendCursorMove((event.x - curX) * scaleX, (event.y - curY) * scaleY, true)
+                            accumulateMove((event.x - curX) * scaleX, (event.y - curY) * scaleY)
                         }
                         curX = event.x; curY = event.y
                     }
@@ -646,7 +710,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
 
             MotionEvent.ACTION_UP -> {
+                // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）再抬键
                 if (pressedLeft) {
+                    flushPendingMoves()
                     sendButton(InputStub.BUTTON_LEFT, false)
                     pressedLeft = false
                 }
@@ -664,6 +730,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
+                dropPendingMoves()
                 if (pressedLeft) {
                     sendButton(InputStub.BUTTON_LEFT, false)
                     pressedLeft = false
@@ -705,6 +773,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (mode == Mode.ONE && event.pointerCount >= 2) {
                     mode = Mode.TWO
+                    // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
+                    flushPendingMoves()
                     twoStartAt = android.os.SystemClock.uptimeMillis()
                     twoMoved = false
                     scrollAccum = 0f
@@ -736,10 +806,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                         // 真实旋转。slop 内丢弃（防手抖）；轻点/右键落在当前
                         // X 指针位置（相对模式无虚拟光标）。
                         // scaleTouchpad：位移按视图→X 拉伸比例放大（对齐上游）。
+                        // v2.30.1：改为累加进合并器，16ms 节流冲刷 —— 消除
+                        // wine 游戏滑动掉帧；总量精确守恒，手感不变。
                         if (moved) {
                             val mulX = if (scaleTouchpad) scaleX else 1f
                             val mulY = if (scaleTouchpad) scaleY else 1f
-                            keySender.sendCursorMove(dx * mulX, dy * mulY, true)
+                            accumulateMove(dx * mulX, dy * mulY)
                         }
                     }
                     Mode.TWO -> {
@@ -772,6 +844,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
 
             MotionEvent.ACTION_UP -> {
+                // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）
+                if (moved) flushPendingMoves()
                 if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (!moved && now - downAt <= tapMaxMs) {
@@ -795,6 +869,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
+                dropPendingMoves()
                 if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
                 mode = Mode.IDLE
             }
