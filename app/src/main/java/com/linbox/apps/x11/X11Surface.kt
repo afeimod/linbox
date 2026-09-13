@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
 import com.linbox.core.theme.LocalWinTheme
+import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.shell.ShellController
 import com.linbox.LinBoxApp
 import com.termux.x11.LoriePreferences
@@ -127,6 +128,8 @@ fun X11Screen() {
             X11ResolutionLink.attachView(null)
             // 触摸桥注册一并注销（防泄漏 + 防设置面板下发到已分离视图）
             SmartTouchBridge.activeBridge = null
+            // v2.31：桥分离时清理悬挂冲刷与受跟踪指针（防迟到事件误发）
+            touchBridge?.onDetached()
             // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
             X11WindowController.detachView(userClosed = true)
@@ -436,6 +439,19 @@ private fun WaitingPanel(state: X11WindowController.State) {
  * 游戏 fps）：增量总量精确守恒（逐帧小增量之和 = 合并后单条增量），
  * 视角旋转/桌面光标手感不变，X server+wine 每秒事件处理量降
  * 50%~75%。手势结束/模式切换立即冲刷或清空，不丢不串。
+ *
+ * v2.31：1) 手柄指针剥离 —— 虚拟手柄元素自 v2.16.4 起不消费自身
+ *   指针（终端侧由 WebView 过滤器消费兜底），X11 侧 LorieView 是裸
+ *   interop View，未消费的手柄指针会原样漏进本桥：按住手柄按钮/
+ *   摇杆时另一根手指滑动，桥看到 2 指流 → 误判双指滚轮 → 无法滑动
+ *   转视角。onTouch 入口按 DOWN 落点跟踪"屏幕手势指针"，构造只含
+ *   这些指针的子集事件交给手势逻辑，手柄指针对桥不可见；手柄元素
+ *   照常经 Compose 命中路径自收事件，两边各收各的指针。
+ *   2) 冲刷线程化 —— 合并器冲刷从主线程移到专用后台线程（16ms 节流
+ *   不变）：sendMouseEvent 是 @FastNative socket 直写，wine 打满 CPU
+ *   时 X server 输入线程消费变慢，主线程直写会被 socket 缓冲顶住
+ *   （UI 线程卡顿 = 残余掉帧）；冲刷入后台线程后主线程触摸路径零
+ *   socket I/O，手势结束仍同步冲刷保证"移动→抬键"时序。
  */
 internal class SmartTouchBridge(private val context: Context, private val view: LorieView) {
     private val renderData = com.termux.x11.input.RenderData()
@@ -453,6 +469,17 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
          * 对齐 —— 手感无损，事件量减半以上。
          */
         private const val MOTION_FLUSH_INTERVAL_MS = 16L
+
+        /**
+         * v2.31：相对增量冲刷专用线程 —— sendMouseEvent 是 @FastNative
+         * 的 socket 直写，wine 游戏打满 CPU 时 X server 输入线程消费变慢，
+         * 主线程直写可能被 socket 缓冲顶住（UI 线程卡顿 = 掉帧）。冲刷
+         * 移入独立线程后，主线程触摸路径零 socket I/O（手势结束的同步
+         * 兜底冲刷除外，单次可忽略）。进程级单例，桥实例重建共享复用。
+         */
+        private val flushThread by lazy {
+            HandlerThread("linbox-x11-motion").apply { start() }
+        }
 
         /** 活跃桥：设置面板修改触摸偏好后经 [applyTouchPrefs] 即时下发。 */
         @Volatile var activeBridge: SmartTouchBridge? = null
@@ -522,32 +549,41 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private val dblTapMaxMs = 450L
     private val wheelStep = 40f
 
-    // ---- v2.30.1 相对增量合并器（motion coalescer）----
-    // MOVE 事件只累加 pending（零 JNI），由主线程 Handler 以
+    // ---- v2.30.1 相对增量合并器（motion coalescer）/ v2.31 后台线程冲刷 ----
+    // MOVE 事件只累加 pending（零 JNI），由专用后台线程 Handler 以
     // MOTION_FLUSH_INTERVAL_MS 最小间隔冲刷（一条合并后的 relative
-    // sendCursorMove）。全部字段仅在主线程访问（onTouch 与 Handler
-    // 回调都在主线程），无需加锁。
+    // sendCursorMove）。pending 由 pendLock 保护：冲刷线程与主线程
+    // （手势结束的同步兜底冲刷）并发排水，总量精确守恒不重不漏。
+    private val pendLock = Any()
     private var pendX = 0f
     private var pendY = 0f
-    private var flushPending = false
-    private val flushHandler = Handler(Looper.getMainLooper())
+    @Volatile private var flushPending = false
+    private val flushHandler = Handler(flushThread.looper)
     private val flushRunnable = Runnable { flushPendingMoves() }
 
     private fun accumulateMove(dx: Float, dy: Float) {
-        pendX += dx
-        pendY += dy
+        if (dx == 0f && dy == 0f) return
+        synchronized(pendLock) {
+            pendX += dx
+            pendY += dy
+        }
         if (!flushPending) {
             flushPending = true
             flushHandler.postDelayed(flushRunnable, MOTION_FLUSH_INTERVAL_MS)
         }
     }
 
+    /** 后台线程周期调用；主线程手势结束时也同步调用（保证移动→抬键时序）。 */
     private fun flushPendingMoves() {
         flushHandler.removeCallbacks(flushRunnable)
         flushPending = false
-        val dx = pendX
-        val dy = pendY
-        pendX = 0f; pendY = 0f
+        val dx: Float
+        val dy: Float
+        synchronized(pendLock) {
+            dx = pendX
+            dy = pendY
+            pendX = 0f; pendY = 0f
+        }
         if (dx == 0f && dy == 0f) return
         if (!LorieView.connected()) return
         keySender.sendCursorMove(dx, dy, true)
@@ -557,7 +593,134 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private fun dropPendingMoves() {
         flushHandler.removeCallbacks(flushRunnable)
         flushPending = false
-        pendX = 0f; pendY = 0f
+        synchronized(pendLock) { pendX = 0f; pendY = 0f }
+    }
+
+    // ---- v2.31 手柄指针剥离（pad pointer stripping）----
+    // 虚拟手柄元素（摇杆/十字键/按钮）自 v2.16.4 起不消费自己的指针
+    // 事件 —— 终端浏览器侧由 WebView 过滤器消费兜底；X11 侧 LorieView
+    // 是裸 interop View，未消费的手柄指针会原样漏进本桥：按住手柄
+    // （开火/摇杆）时另一根手指滑动屏幕，桥看到 2 指流 → 误判双指
+    // 滚轮 → 视角不旋转（用户实测症状）。这里按 pointerId 跟踪"屏幕
+    // 手势指针"（DOWN 落点不在手柄元素命中矩形内的指针），构造只含
+    // 这些指针的干净 MotionEvent 交给手势逻辑；手柄指针对桥完全不可
+    // 见，手柄元素照常经 Compose 命中路径自收事件，两边各收各的指针。
+    // 坐标系：命中矩形登记的是 positionInWindow 窗口坐标，onTouch 里把
+    // 事件坐标加上 LorieView 的窗口偏移后比对（全屏铺满时偏移为 0）。
+    private val trackedPadIds = ArrayList<Int>(4)
+    private val stripProps = Array(10) { MotionEvent.PointerProperties() }
+    private val stripCoords = Array(10) { MotionEvent.PointerCoords() }
+    private val stripIdx = IntArray(10)
+    private val viewWinPos = IntArray(2) // LorieView 相对窗口原点偏移（视图坐标→窗口坐标）
+
+    /** 桥与视图分离（离开 X11 界面）时清理手势痕迹与悬挂冲刷。 */
+    fun onDetached() {
+        dropPendingMoves()
+        trackedPadIds.clear()
+    }
+
+    /**
+     * 剥离"落在手柄元素内"的指针。返回 null = 本事件与桥无关（全部
+     * 指针都属于手柄或无受跟踪指针）；返回原事件 = 无需剥离（零分配
+     * 直通）；否则构造只含受跟踪指针的子集事件（action 相应重映射：
+     * 桥内首指的按下降级为 DOWN、手柄指针的按下/抬起降级为 MOVE）。
+     */
+    private fun filterPadPointers(event: MotionEvent): MotionEvent? {
+        if (!GamepadController.hasElementHits()) {
+            trackedPadIds.clear()
+            return event
+        }
+        val action = event.actionMasked
+        val aIdx = event.actionIndex
+        val hadTracked = trackedPadIds.isNotEmpty()
+        var forward = -1 // 转发的 action；-1 = 丢弃本事件
+        var includeActionPointer = false // POINTER_UP 子集需包含抬起指针（Android 语义）
+
+        // 视图坐标→窗口坐标（命中矩形登记的是 positionInWindow 窗口坐标；
+        // LorieView 全屏铺满时偏移为 0，非铺满布局下也能正确对齐）
+        view.getLocationInWindow(viewWinPos)
+        val winX = viewWinPos[0].toFloat()
+        val winY = viewWinPos[1].toFloat()
+
+        when (action) {
+            MotionEvent.ACTION_DOWN -> {
+                trackedPadIds.clear()
+                if (!GamepadController.isOverPadElement(event.x + winX, event.y + winY))
+                    trackedPadIds.add(event.getPointerId(0))
+                if (trackedPadIds.isNotEmpty()) forward = MotionEvent.ACTION_DOWN
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                val i = event.actionIndex
+                if (!GamepadController.isOverPadElement(event.getX(i) + winX, event.getY(i) + winY))
+                    trackedPadIds.add(event.getPointerId(i))
+                forward = when {
+                    trackedPadIds.isEmpty() -> -1
+                    hadTracked -> MotionEvent.ACTION_POINTER_DOWN
+                    else -> MotionEvent.ACTION_DOWN // 桥视角：这是手势的第一根手指
+                }
+            }
+            MotionEvent.ACTION_MOVE ->
+                if (trackedPadIds.isNotEmpty()) forward = MotionEvent.ACTION_MOVE
+            MotionEvent.ACTION_POINTER_UP -> {
+                // indexOf+removeAt：规避 ArrayList<Int>.remove 的索引/按值重载歧义
+                val li = trackedPadIds.indexOf(event.getPointerId(aIdx))
+                val lifted = li >= 0
+                if (lifted) trackedPadIds.removeAt(li)
+                when {
+                    lifted && trackedPadIds.isNotEmpty() -> {
+                        forward = MotionEvent.ACTION_POINTER_UP
+                        includeActionPointer = true
+                    }
+                    lifted -> {
+                        forward = MotionEvent.ACTION_UP // 桥内最后一根手指抬起
+                        includeActionPointer = true
+                    }
+                    else -> if (hadTracked) forward = MotionEvent.ACTION_MOVE
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                // keep 计算需要抬起前的 tracked 集合，清空推迟到子集构建后
+                if (hadTracked) forward = action
+        }
+
+        if (forward < 0) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+                trackedPadIds.clear()
+            return null
+        }
+
+        // 子集 = 全部受跟踪指针（POINTER_UP 额外包含抬起的指针）
+        var count = 0
+        for (i in 0 until event.pointerCount) {
+            if (trackedPadIds.contains(event.getPointerId(i))) {
+                stripIdx[count++] = i
+                if (count == stripIdx.size) break
+            }
+        }
+        if (includeActionPointer && count < stripIdx.size &&
+            event.actionIndex < event.pointerCount && !trackedPadIds.contains(event.getPointerId(aIdx))
+        ) stripIdx[count++] = event.actionIndex
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+            trackedPadIds.clear()
+        if (count == 0) return null
+        if (count == event.pointerCount && forward == action) return event // 无需剥离
+
+        var fa = forward
+        if (forward == MotionEvent.ACTION_POINTER_DOWN || forward == MotionEvent.ACTION_POINTER_UP) {
+            var pos = 0
+            for (j in 0 until count) if (stripIdx[j] == aIdx) { pos = j; break }
+            fa = forward or (pos shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        }
+        for (j in 0 until count) {
+            event.getPointerProperties(stripIdx[j], stripProps[j])
+            event.getPointerCoords(stripIdx[j], stripCoords[j])
+        }
+        return MotionEvent.obtain(
+            event.downTime, event.eventTime, fa, count,
+            stripProps, stripCoords, event.metaState, event.buttonState,
+            event.xPrecision, event.yPrecision, event.deviceId, event.edgeFlags,
+            event.source, event.flags
+        )
     }
 
     private enum class Mode { IDLE, ONE, TWO, TWO_DONE }
@@ -610,11 +773,17 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
     fun onTouch(event: MotionEvent): Boolean {
         if (!LorieView.connected() || screenW <= 0 || screenH <= 0) return true
-        // 触摸方式分发（termux-x11 touchMode；X11 设置面板切换后即时生效）
-        return when (touchMode) {
-            TOUCH_TRACKPAD -> onTouchTrackpad(event)
-            TOUCH_DIRECT -> onTouchDirect(event)
-            else -> onTouchSimulated(event)
+        // v2.31：剥离手柄元素指针（手柄未显示时零开销直通）
+        val ev = filterPadPointers(event) ?: return true
+        try {
+            // 触摸方式分发（termux-x11 touchMode；X11 设置面板切换后即时生效）
+            return when (touchMode) {
+                TOUCH_TRACKPAD -> onTouchTrackpad(ev)
+                TOUCH_DIRECT -> onTouchDirect(ev)
+                else -> onTouchSimulated(ev)
+            }
+        } finally {
+            if (ev !== event) ev.recycle()
         }
     }
 
