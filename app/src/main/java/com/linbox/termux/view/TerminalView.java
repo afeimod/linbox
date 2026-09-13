@@ -43,6 +43,28 @@ public final class TerminalView extends View {
     /** Log terminal view key and IME events. */
     private static boolean TERMINAL_VIEW_KEY_LOGGING_ENABLED = false;
 
+    /**
+     * v2.29 内置中文等宽字体（Sarasa Mono SC 子集，拉丁:CJK = 1:2 精确栅格）：
+     * 终端中文/框线/全角符号渲染不再依赖各 ROM 的字体回退链
+     * （部分 ROM 回退缺字 → 中文豆腐块或宽度错位）。静态缓存一次；
+     * 资产缺失/加载失败时回退系统 MONOSPACE（零回归）。
+     */
+    private static Typeface sCjkTypeface;
+    private static boolean sCjkTypefaceResolved = false;
+
+    private static Typeface defaultTerminalTypeface(Context context) {
+        if (!sCjkTypefaceResolved) {
+            sCjkTypefaceResolved = true;
+            try {
+                sCjkTypeface = Typeface.createFromAsset(
+                    context.getAssets(), "fonts/TerminalCJK.ttf");
+            } catch (Throwable t) {
+                sCjkTypeface = null;   // 回退系统等宽字体
+            }
+        }
+        return sCjkTypeface != null ? sCjkTypeface : Typeface.MONOSPACE;
+    }
+
     /** The currently displayed terminal session, whose emulator is {@link #mEmulator}. */
     public TerminalSession mTermSession;
     /** Our terminal emulator whose session is {@link #mTermSession}. */
@@ -446,7 +468,7 @@ public final class TerminalView extends View {
      * @param textSize the new font size, in density-independent pixels.
      */
     public void setTextSize(int textSize) {
-        mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
+        mRenderer = new TerminalRenderer(textSize, mRenderer == null ? defaultTerminalTypeface(getContext()) : mRenderer.mTypeface);
         updateSize();
     }
 

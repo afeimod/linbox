@@ -1,19 +1,29 @@
 package com.linbox
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.WindowManager
 import com.linbox.core.input.TrackpadRouter
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
@@ -37,6 +47,66 @@ class MainActivity : ComponentActivity() {
 
         val app = LinBoxApp.get(this)
         setContent {
+            // ===== v2.29 首次启动存储权限申请 =====
+            // 原版本从不主动申请（且 Manifest 带了 maxSdkVersion 上限，
+            // Android 10+ 上权限根本不存在）——终端读写 /sdcard、导入
+            // rootfs、下载文件等全部失败。此处启动即申请；被拒且为
+            // Android 11+ 时引导到系统「所有文件访问」页（终极兜底）。
+            var showAllFilesDialog by remember { mutableStateOf(false) }
+            val storageLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { grants ->
+                val ok = grants[android.Manifest.permission.READ_EXTERNAL_STORAGE] == true ||
+                    grants[android.Manifest.permission.WRITE_EXTERNAL_STORAGE] == true
+                if (!ok && Build.VERSION.SDK_INT >= 30) showAllFilesDialog = true
+            }
+            LaunchedEffect(Unit) {
+                val need = buildList {
+                    if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+                if (need.isNotEmpty()) storageLauncher.launch(need.toTypedArray())
+            }
+            if (showAllFilesDialog) {
+                AlertDialog(
+                    onDismissRequest = { showAllFilesDialog = false },
+                    title = { Text("需要存储权限") },
+                    text = {
+                        Text(
+                            "终端无法读取 /sdcard：下载、导入 rootfs、访问下载目录等功能都会失败。" +
+                                "请授予 LinBox「所有文件访问」权限后重试。"
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showAllFilesDialog = false
+                            try {
+                                startActivity(
+                                    Intent(
+                                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                        Uri.parse("package:$packageName")
+                                    )
+                                )
+                            } catch (_: Exception) {
+                                try {
+                                    startActivity(
+                                        Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                    )
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }) { Text("去授权") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAllFilesDialog = false }) { Text("暂不") }
+                    }
+                )
+            }
+
             val baseTheme by app.themeManager.activeTheme.collectAsState(
                 initial = com.linbox.core.theme.Themes.Win11
             )

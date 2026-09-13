@@ -8,11 +8,16 @@
 
     <!-- 终端网络（apt/pkg 下载）与 X11 转发 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- 终端访问共享存储（/sdcard） -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
+    <!-- 终端访问共享存储（/sdcard）。
+         v2.29 修复"首次启动不弹存储权限"：原声明带 maxSdkVersion=32/29，
+         导致 Android 10+ 上运行时根本不存在这两个权限、系统永不弹窗
+         （targetSdk=28 的 legacy 应用全版本都可授予，去掉上限）。
+         MANAGE_EXTERNAL_STORAGE 作为 Android 11+ 的"所有文件访问"备选
+         （用户拒绝普通授权后，引导到系统"所有文件访问"页）。 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!-- 虚拟键盘 / 虚拟手柄按键触觉反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
