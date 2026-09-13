@@ -457,9 +457,9 @@ fun X11SettingsDialog() {
                 }
                 Text(
                     text = when (touchMode) {
-                        1 -> "触控板：手指相对移动虚拟光标；轻点=左键单击，双指轻点=右键，双指滑动=滚轮"
+                        1 -> "触控板：手指滑动=相对移动光标（游戏/FPS 视角真实旋转，wine 游戏推荐）；轻点=左键，双指轻点=右键，双指滑动=滚轮"
                         3 -> "直接触摸：触摸按 X 触摸事件直注（多点触摸），触摸类游戏/应用真实可用"
-                        else -> "模拟触摸屏：手指位置即鼠标位置，按下/拖拽/双击吸附/双指右键/滚轮"
+                        else -> "模拟触摸：点按=手指位置；按住拖拽=相对增量（wine 游戏转视角不乱飘）；双击吸附/双指右键/滚轮"
                     },
                     fontSize = 9.sp,
                     color = hintColor,
@@ -470,7 +470,7 @@ fun X11SettingsDialog() {
                 if (touchMode == 1) {
                     SettingSwitch(
                         title = "触控板缩放",
-                        desc = "光标位移按画面拉伸比例放大（关闭 = 手指 1:1 位移，对齐上游 scaleTouchpad）",
+                        desc = "光标相对位移按画面拉伸比例放大（关闭 = 手指 1:1 位移，对齐上游 scaleTouchpad）",
                         checked = padScale,
                         enabled = true,
                         onChecked = {

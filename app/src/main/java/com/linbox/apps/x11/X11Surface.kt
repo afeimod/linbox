@@ -417,6 +417,12 @@ private fun WaitingPanel(state: X11WindowController.State) {
  * "模拟触摸屏"方式；触控板/直接触摸见 onTouchTrackpad / onTouchDirect。
  * LinBox 的 X11 触摸事件全部经本桥进入 X（上游 TouchInputHandler 未接线），
  * 偏好变更经 X11 设置面板 → applyTouchPrefs 即时切换输入策略。
+ *
+ * v2.30：wine 游戏视角乱飘/卡死修复 —— 触控板模式改为真实相对运动
+ * （sendCursorMove relative=true，上游 TrackpadInputStrategy 同款），
+ * 删除虚拟光标 padX/padY 绝对发送；模拟触摸屏按住拖拽改发相对增量
+ * （按下瞬间仍绝对定位到指尖）。wine FPS 每帧 XWarpPointer 回窗口中心
+ * 后不再被绝对坐标强拽 → 游戏读到的是真实相对增量，视角正常旋转。
  */
 internal class SmartTouchBridge(private val context: Context, private val view: LorieView) {
     private val renderData = com.termux.x11.input.RenderData()
@@ -443,10 +449,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var scaleTouchpad = true
     private var tapToMove = false
 
-    // 触控板虚拟光标（X 屏幕坐标；-1 = 未初始化，首次触摸置于屏幕中心）
-    private var padX = -1
-    private var padY = -1
-
     /** 轻点拖拽（tapToMove）：左键已按下、等待"再轻点"释放。 */
     private var padPressed = false
 
@@ -461,7 +463,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
             if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
             mode = Mode.IDLE
-            padX = -1; padY = -1
         }
         touchMode = newMode
         scaleTouchpad = p.scaleTouchpad.get()
@@ -592,14 +593,26 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             MotionEvent.ACTION_MOVE -> {
                 when (mode) {
                     Mode.ONE -> {
-                        curX = event.x; curY = event.y
+                        // v2.30 修复（wine 游戏视角乱飘/卡死）：拖拽期间改发
+                        // 相对增量（relative=true → libXlorie XI2 raw relative
+                        // motion）。旧实现逐帧发绝对坐标：wine FPS 按住转视角时
+                        // 游戏每帧 XWarpPointer 回窗口中心，我们的绝对事件把指针
+                        // 强拽到指尖位置 → 游戏读到巨大跳变（视角猛转）；指针被
+                        // clamp 在屏幕边缘后不再变化（视角卡死"固定视角"）。
+                        // 相对增量不受 warp 影响：桌面拖拽路径与手指一致，
+                        // 游戏视角真实旋转。按下瞬间仍绝对定位到指尖
+                        // （模拟触摸语义不变）；超出手抖阈值后先补齐
+                        // 按下点→当前点的首段增量，再逐帧跟随。
                         if (!moved) {
-                            val dx = curX - downX
-                            val dy = curY - downY
-                            moved = dx * dx + dy * dy > slopPx * slopPx
+                            val ddx = event.x - downX
+                            val ddy = event.y - downY
+                            moved = ddx * ddx + ddy * ddy > slopPx * slopPx
+                            if (moved)
+                                keySender.sendCursorMove(ddx * scaleX, ddy * scaleY, true)
+                        } else {
+                            keySender.sendCursorMove((event.x - curX) * scaleX, (event.y - curY) * scaleY, true)
                         }
-                        val p = toXpx(curX, curY)
-                        sendMoveX(p[0].toInt(), p[1].toInt())
+                        curX = event.x; curY = event.y
                     }
                     Mode.TWO -> {
                         if (event.pointerCount >= 2) {
@@ -687,7 +700,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
                 moved = false
-                if (padX < 0 || padY < 0) { padX = screenW / 2; padY = screenH / 2 }
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -713,12 +725,22 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                             val ddy = curY - downY
                             moved = ddx * ddx + ddy * ddy > slopPx * slopPx
                         }
-                        // 相对位移 → X 屏幕（scaleTouchpad：按拉伸比例放大，对齐上游）
-                        val mulX = if (scaleTouchpad) scaleX else 1f
-                        val mulY = if (scaleTouchpad) scaleY else 1f
-                        padX = (padX + dx * mulX).toInt().coerceIn(0, (screenW - 1).coerceAtLeast(0))
-                        padY = (padY + dy * mulY).toInt().coerceIn(0, (screenH - 1).coerceAtLeast(0))
-                        sendMoveX(padX, padY)
+                        // v2.30 修复（wine 游戏视角乱飘/卡死）：发真实相对运动
+                        // （sendMouseEvent relative=true → libXlorie XI2 raw
+                        // relative motion，上游 TrackpadInputStrategy 同款）。
+                        // 旧实现维护虚拟光标 padX/padY 发绝对坐标：wine FPS 按住
+                        // 转视角时游戏每帧 XWarpPointer 回窗口中心，绝对事件把
+                        // 指针强拽到 padX/padY → 游戏读到巨大跳变（视角猛转），
+                        // 光标 clamp 在屏幕边缘后不再变化（视角卡死"固定视角"）。
+                        // 相对增量不受 warp 影响：桌面光标照常移动，游戏视角
+                        // 真实旋转。slop 内丢弃（防手抖）；轻点/右键落在当前
+                        // X 指针位置（相对模式无虚拟光标）。
+                        // scaleTouchpad：位移按视图→X 拉伸比例放大（对齐上游）。
+                        if (moved) {
+                            val mulX = if (scaleTouchpad) scaleX else 1f
+                            val mulY = if (scaleTouchpad) scaleY else 1f
+                            keySender.sendCursorMove(dx * mulX, dy * mulY, true)
+                        }
                     }
                     Mode.TWO -> {
                         if (event.pointerCount >= 2) {
@@ -740,9 +762,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
             MotionEvent.ACTION_POINTER_UP -> {
                 if (mode == Mode.TWO) {
-                    // 双指轻点（未滑动、时间短）→ 右键单击（落在虚拟光标处）
+                    // 双指轻点（未滑动、时间短）→ 右键单击（当前 X 指针位置）
                     if (!twoMoved && android.os.SystemClock.uptimeMillis() - twoStartAt < 320L) {
-                        sendMoveX(padX, padY)
                         sendButton(InputStub.BUTTON_RIGHT, true)
                         sendButton(InputStub.BUTTON_RIGHT, false)
                     }
