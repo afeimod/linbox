@@ -1,151 +1,244 @@
 #!/data/data/com.linbox/files/usr/bin/sh
 # ============================================================
-# LinBox DAC — Direct Android Compositing 一键启动 (v1.0)
+# LinBox DAC — Wine 显示启动器 (v1.3, 严格 POSIX sh)
 # ============================================================
-# 跳过 X11 的 Wine 呈现路径：
-#   DXVK → AHardwareBuffer → SurfaceFlinger（直接合成）
+# 三级显示栈，auto 模式自动回退（按已部署情况）：
+#   1) dac : winedac.drv 原生直合（零 X11；需 wine-dac tarball + DAC APK）
+#   2) x11 : termux-x11（社区验证的标准路径，当前推荐）
+#   3) vnc : tigervnc 无头 X + VNC 客户端（兜底）
 #
 # 用法：
-#   linbox-dac doctor              体检（依赖/驱动/设备逐项检查）
-#   linbox-dac game.exe            启动 exe（自动开 DAC 窗口 + 配置 wine）
-#   linbox-dac -s 1280x720 game.exe  指定虚拟桌面分辨率（默认 1280x720）
-#   linbox-dac --x11 game.exe      不改注册表，直接跑（诊断用）
-#   linbox-dac reg                 只注册驱动（写入 prefix 注册表），不启动
-#   linbox-dac unreg               还原 Graphics 驱动为 x11
-#   linbox-dac stop                关闭 DAC 显示窗口
+#   linbox-dac doctor                 逐项体检（含各显示栈可用性）
+#   linbox-dac setup-x11              一键安装 X11 显示栈
+#   linbox-dac reg | unreg | stop     注册表 / 停止
+#   linbox-dac [-s WxH] [--display MODE] 程序.exe [参数...]
+#       MODE = auto | x11 | dac | vnc （默认 auto）
 #
-# 显示链路：
-#   winedac.drv（新图形驱动）──unix socket──▶ LinBox App bridge
-#     └─ ASurfaceControl/ASurfaceTransaction.setBuffer(AHardwareBuffer)
-#        └─ SurfaceFlinger 直接合成（API 29+ 零拷贝；26-28 降级）
-#
-# Wine 运行形态自动适配：
-#   [Bionic Wine] 进程内 dlopen libandroid.so 直连 AHardwareBuffer
-#   [glibc Wine]  bionic 侧车 dac_allocd 代分配（脚本自动拉起）
-#
-# DXVK 前置：
-#   pkg install mesa-vulkan-icd-turnip   （Adreno；Mali 用 panvk-limited）
-#   或 lavapipe（CPU 渲染兜底，见 mesa/build-turnip-android.sh 说明）
+# 示例：
+#   linbox-dac /sdcard/Game/game.exe          # 自动选择显示栈
+#   linbox-dac -s 1280x720 notepad.exe        # 指定虚拟桌面分辨率
+#   linbox-dac --display x11 game.exe         # 强制走 X11（当前最稳）
 # ============================================================
 
-PREFIX_DIR="/data/data/com.linbox/files/usr"
+PREFIX_DIR="${PREFIX:-/data/data/com.linbox/files/usr}"
 SOCK="$PREFIX_DIR/tmp/linbox-dac.sock"
 ALLOCD_SOCK="$PREFIX_DIR/tmp/linbox-dac-allocd.sock"
 LOG="$PREFIX_DIR/tmp/linbox-dac.log"
 
 DESKTOP_W=1280
 DESKTOP_H=720
-SETUP_REGISTRY=1
-EXE_ARGS=()
+MODE=auto
 
-# ---------------- 参数解析 ----------------
+log() { printf '[linbox-dac] %s\n' "$*"; }
+err() { printf '[linbox-dac] 错误: %s\n' "$*" >&2; }
+die() { err "$*"; printf '[linbox-dac] 完整日志: %s\n' "$LOG" >&2; exit 1; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------- 子命令直通 ----------------
+case "${1:-}" in
+    doctor) exec "$PREFIX_DIR/bin/linbox-dac-doctor" ;;
+    stop)   exec "$PREFIX_DIR/bin/linbox-dac-stop" ;;
+    unreg)  exec "$PREFIX_DIR/bin/linbox-dac-unreg" ;;
+    setup-x11)
+        log "安装 X11 显示栈（termux-x11）..."
+        have pkg || die "pkg 不可用（bootstrap 未就绪？）"
+        pkg install -y x11-repo 2>&1 | tail -n 2
+        pkg install -y termux-x11-nightly 2>&1 | tail -n 2
+        if pm path com.termux.x11 >/dev/null 2>&1; then
+            log "伴侣 App 已安装 (com.termux.x11) ✓"
+        else
+            log "还差最后一步 —— 安装 Termux:X11 伴侣 App："
+            log "  1) 手机浏览器打开: github.com/termux/termux-x11/releases"
+            log "  2) 下载 app-debug-arm64-v8a.zip（按设备架构），解压安装其中的 APK"
+            log "  3) 安装后无需打开，linbox-dac 会自动唤起"
+        fi
+        log "完成后运行: linbox-dac --display x11 程序.exe"
+        exit 0 ;;
+esac
+
+# ---------------- 参数解析（POSIX：标志在前，exe 及其后参数原样保留在 "$@"）----
 while [ $# -gt 0 ]; do
     case "$1" in
-        -s) shift; SIZE="$1"; DESKTOP_W="${SIZE%x*}"; DESKTOP_H="${SIZE#*x}" ;;
-        --x11) SETUP_REGISTRY=0 ;;
-        doctor) exec linbox-dac-doctor ;;
-        reg)    exec linbox-dac-reg "$DESKTOP_W" "$DESKTOP_H" ;;
-        unreg)  exec linbox-dac-unreg ;;
-        stop)   exec linbox-dac-stop ;;
-        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
-        *) EXE_ARGS+=("$1") ;;
+        -s|--size)
+            [ $# -ge 2 ] || die "-s 需要参数 WxH"
+            SIZE="$2"
+            case "$SIZE" in
+                *x*x*|*[!0-9x]*|x*) die "分辨率格式: -s 1280x720" ;;
+            esac
+            DESKTOP_W="${SIZE%x*}"; DESKTOP_H="${SIZE#*x}"
+            [ -n "$DESKTOP_W" ] && [ -n "$DESKTOP_H" ] || die "分辨率格式: -s 1280x720"
+            shift ;;
+        --display|-d)
+            [ $# -ge 2 ] || die "--display 需要参数 auto|x11|dac|vnc"
+            MODE="$2"; shift ;;
+        reg)
+            exec "$PREFIX_DIR/bin/linbox-dac-reg" "$DESKTOP_W" "$DESKTOP_H" ;;
+        -h|--help)
+            sed -n '2,30p' "$0" 2>/dev/null || true; exit 0 ;;
+        -*)
+            err "未知选项: $1（--help 查看用法）"; exit 2 ;;
+        *)
+            break ;;   # 第一个位置参数 = exe，其后全部原样保留
     esac
     shift
 done
+[ $# -ge 1 ] || set -- explorer
 
-log()  { echo "[linbox-dac] $*"; }
-err()  { echo "[linbox-dac] 错误: $*" >&2; }
-die()  { err "$*"; echo "[linbox-dac] 完整日志: $LOG" >&2; exit 1; }
-
-: > "$LOG" 2>/dev/null || LOG=/dev/null
+# 环境检查必须在日志初始化之前（: 为 POSIX 特殊内建，重定向失败会退出脚本）
+[ -d "$PREFIX_DIR" ] || { echo "本脚本仅可在 LinBox 终端内运行"; exit 1; }
+mkdir -p "$PREFIX_DIR/tmp" 2>/dev/null || true
+true > "$LOG" 2>/dev/null || LOG=/dev/null
 
 # ---------------- 0. 环境自检 ----------------
-[ -d "$PREFIX_DIR" ] || { echo "本脚本仅可在 LinBox 终端内运行"; exit 1; }
-
-WINE_BIN="$(command -v wine || command -v wine64)"
-[ -n "$WINE_BIN" ] || die "未找到 wine —— 先安装：linbox-glibc && grun 安装 wine，或 pkg 安装 bionic 版 wine"
-
+WINE_BIN="$(command -v wine 2>/dev/null || command -v wine64 2>/dev/null)"
+[ -n "$WINE_BIN" ] || die "未找到 wine —— 先安装 wine（linbox-glibc 环境 / bionic wine 包）"
+WINE_REAL="$(readlink -f "$WINE_BIN" 2>/dev/null || echo "$WINE_BIN")"
+WINE_ROOT="$(dirname "$WINE_REAL")/../.."
 log "0/6 环境自检 (wine: $WINE_BIN)"
 
-# ---------------- 1. 打开 DAC 显示窗口 ----------------
-log "1/6 请求 LinBox 打开 DAC 显示窗口 (${DESKTOP_W}x${DESKTOP_H})..."
-am broadcast -a com.linbox.action.DAC_START \
-    --ei width "$DESKTOP_W" --ei height "$DESKTOP_H" >/dev/null 2>&1 || true
-
-# 等待 app 广播回执（socket 出现即视为就绪，最长 10s）
-WAITED=0
-while [ ! -S "$SOCK" ] && [ $WAITED -lt 20 ]; do
-    sleep 0.5; WAITED=$((WAITED+1))
+# winedac.drv 是否已装入 wine（lib/wine/*/winedac.*）
+DAC_DRV=0
+for d in "$WINE_ROOT/lib/wine" "$WINE_ROOT/lib64/wine" "$PREFIX_DIR/opt/wine/lib/wine"; do
+    [ -d "$d" ] && find "$d" -name 'winedac*' 2>/dev/null | grep -q . && DAC_DRV=1 && break
 done
-[ -S "$SOCK" ] || die "DAC 显示窗口未就绪（$SOCK 不存在）。检查 LinBox 是否已升级含 DAC 模块。"
 
-# ---------------- 2. glibc Wine：拉起 bionic 侧车 ----------------
-log "2/6 检测 Wine 运行形态..."
+# glibc wine 判定（readlink 输出含 ld-linux / 目录含 glibc）
 WINE_FORM=bionic
-if grun --version >/dev/null 2>&1 && [ -n "${WINE_GRUN:-}" ] || [ -f "$PREFIX_DIR/opt/glibc" ] || file "$(readlink -f "$WINE_BIN")" 2>/dev/null | grep -q "interpreter.*glibc\|ld-linux"; then
+if file "$WINE_REAL" 2>/dev/null | grep -Eq 'interpreter.*(ld-linux|glibc)|interpreter.*ld-'; then
+    WINE_FORM=glibc
+elif echo "$WINE_REAL" | grep -q glibc || [ -d "$PREFIX_DIR/opt/glibc" ]; then
     WINE_FORM=glibc
 fi
-
-if [ "$WINE_FORM" = "glibc" ]; then
-    log "  glibc Wine → 拉起 bionic 侧车 dac_allocd..."
-    ALLOCD="$PREFIX_DIR/bin/dac_allocd"
-    [ -x "$ALLOCD" ] || ALLOCD="$(find "$PREFIX_DIR/lib" "$PREFIX_DIR/bin" -name 'dac_allocd' -o -name 'libdac_allocd.so' 2>/dev/null | head -1)"
-    [ -n "$ALLOCD" ] && [ -e "$ALLOCD" ] || die "dac_allocd 未安装（应随 APK 分发，重装 LinBox）"
-    chmod +x "$ALLOCD" 2>/dev/null
-    if [ ! -S "$ALLOCD_SOCK" ]; then
-        TMPDIR="$PREFIX_DIR/tmp" "$ALLOCD" >>"$LOG" 2>&1 &
-        echo $! > "$PREFIX_DIR/tmp/linbox-dac-allocd.pid"
-        sleep 1
+run_wine() {
+    if [ "$WINE_FORM" = glibc ] && have grun; then
+        grun wine "$@"
+    else
+        wine "$@"
     fi
-    [ -S "$ALLOCD_SOCK" ] || log "  警告: 侧车未就绪（桌面 CPU 路径可能降级）"
-else
-    log "  bionic Wine → 进程内直连 AHardwareBuffer"
-fi
+}
 
-# ---------------- 3. 注册 winedac.drv ----------------
-if [ "$SETUP_REGISTRY" = "1" ]; then
+# ---------------- 显示栈解析 ----------------
+if [ "$MODE" = auto ]; then
+    if [ "$DAC_DRV" = 1 ]; then
+        MODE=dac
+    elif have termux-x11; then
+        MODE=x11
+    elif have Xvnc || have vncserver; then
+        MODE=vnc
+    else
+        err "没有可用的显示栈。三条路径任选其一："
+        printf '%s\n' \
+            "  [推荐] X11:  运行 linbox-dac setup-x11 一键安装" \
+            "  [原生] DAC:  部署 wine-dac tarball（含 winedac.drv）后自动启用" \
+            "  [兜底] VNC:  pkg install tigervnc，并用任意 VNC 客户端连 127.0.0.1:5901"
+        exit 1
+    fi
+fi
+log "显示栈: $MODE (虚拟桌面 ${DESKTOP_W}x${DESKTOP_H})"
+
+# ============================================================
+# 路径 1: DAC 原生直合
+# ============================================================
+if [ "$MODE" = dac ]; then
+    log "1/6 请求 LinBox 打开 DAC 显示窗口 (${DESKTOP_W}x${DESKTOP_H})..."
+    am broadcast -a com.linbox.action.DAC_START \
+        --ei width "$DESKTOP_W" --ei height "$DESKTOP_H" >/dev/null 2>&1 || true
+
+    WAITED=0
+    while [ ! -S "$SOCK" ] && [ "$WAITED" -lt 20 ]; do
+        sleep 1; WAITED=$((WAITED+1))
+    done
+    [ -S "$SOCK" ] || die "DAC 窗口未就绪（$SOCK 不存在）—— APK 需含 DAC 模块，或改用: linbox-dac --display x11"
+
+    log "2/6 检测 Wine 运行形态 ($WINE_FORM)..."
+    if [ "$WINE_FORM" = glibc ]; then
+        ALLOCD="$PREFIX_DIR/bin/dac_allocd"
+        [ -e "$ALLOCD" ] || ALLOCD="$(find "$PREFIX_DIR/lib" "$PREFIX_DIR/bin" -name 'dac_allocd' -o -name 'libdac_allocd.so' 2>/dev/null | head -n 1)"
+        [ -n "$ALLOCD" ] && [ -e "$ALLOCD" ] || die "dac_allocd 未安装（应随 APK 分发）"
+        chmod +x "$ALLOCD" 2>/dev/null || true
+        if [ ! -S "$ALLOCD_SOCK" ]; then
+            TMPDIR="$PREFIX_DIR/tmp" "$ALLOCD" >>"$LOG" 2>&1 &
+            echo $! > "$PREFIX_DIR/tmp/linbox-dac-allocd.pid"
+            sleep 1
+        fi
+        [ -S "$ALLOCD_SOCK" ] || log "  警告: 侧车未就绪（CPU 路径可能降级）"
+    fi
+
     log "3/6 注册图形驱动 Graphics=dac ..."
-    linbox-dac-reg "$DESKTOP_W" "$DESKTOP_H" >>"$LOG" 2>&1 || \
-        log "  警告: 注册表写入失败（继续尝试）"
-else
-    log "3/6 跳过注册表配置 (--x11)"
+    "$PREFIX_DIR/bin/linbox-dac-reg" "$DESKTOP_W" "$DESKTOP_H" >>"$LOG" 2>&1 \
+        || log "  警告: 注册表写入失败（继续尝试）"
+
+    log "4/6 启动 wine (winedac.drv → $SOCK → SurfaceFlinger)..."
+    export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+    run_wine explorer /desktop=dac,"${DESKTOP_W}x${DESKTOP_H}" "$@" >>"$LOG" 2>&1
+    RC=$?
+    log "5/6 wine 退出 (rc=$RC)"
+    [ "$RC" -ne 0 ] && log "  排查: cat $LOG | tail -50；或运行 linbox-dac doctor"
+    "$PREFIX_DIR/bin/linbox-dac-stop" >/dev/null 2>&1 || true
+    exit "$RC"
 fi
 
-# ---------------- 4. DXVK / Vulkan 预检 ----------------
-log "4/6 Vulkan 环境预检..."
-VK_INFO="未检测到"
-if [ -n "${VK_ICD_FILENAMES:-}" ]; then
-    VK_INFO="$VK_ICD_FILENAMES"
-elif ls /system/vendor/lib64/hw/vulkan.* >/dev/null 2>&1; then
-    VK_INFO="系统 ICD (设备 Vulkan)"
-elif pkg list-installed 2>/dev/null | grep -q mesa-vulkan; then
-    VK_INFO="mesa (termux pkg)"
+# ============================================================
+# 路径 2: termux-x11（社区验证标准路径）
+# ============================================================
+if [ "$MODE" = x11 ]; then
+    have termux-x11 || die "termux-x11 未安装 —— 运行 linbox-dac setup-x11 一键安装"
+    pm path com.termux.x11 >/dev/null 2>&1 || \
+        log "警告: 未检测到 Termux:X11 伴侣 App（com.termux.x11）。"
+    log "  若无显示，请安装: https://github.com/termux/termux-x11/releases (X11 APK)"
+
+    # 确保 Graphics 驱动不是 dac（未部署 winedac.drv 时会启动失败）
+    "$PREFIX_DIR/bin/linbox-dac-unreg" >/dev/null 2>&1 || true
+
+    log "1/5 启动 termux-x11 X server (:0)..."
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$PREFIX_DIR/tmp}"
+    mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    termux-x11 :0 >>"$LOG" 2>&1 &
+    XPID=$!
+
+    i=0
+    while [ "$i" -lt 6 ]; do
+        kill -0 "$XPID" 2>/dev/null || break
+        sleep 1; i=$((i+1))
+    done
+    kill -0 "$XPID" 2>/dev/null \
+        || die "termux-x11 启动失败 —— 伴侣 App 未安装？见 github.com/termux/termux-x11/releases；日志: $LOG"
+
+    log "2/5 X server 运行中 (pid=$XPID)"
+    export DISPLAY="${DISPLAY:-:0}"
+    export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+    log "3/5 启动 wine (${DESKTOP_W}x${DESKTOP_H} 虚拟桌面 → X11 → 屏幕)..."
+    run_wine explorer /desktop=linbox,"${DESKTOP_W}x${DESKTOP_H}" "$@"
+    RC=$?
+    log "4/5 wine 退出 (rc=$RC)"
+    log "5/5 X server 仍在后台（切回 Termux:X11 App 查看画面；关闭运行: kill $XPID）"
+    exit "$RC"
 fi
-log "  Vulkan: $VK_INFO（DXVK 需要；GDI 应用可无）"
 
-# ---------------- 5. 启动 wine（虚拟桌面模式） ----------------
-log "5/6 启动 wine 虚拟桌面 (${DESKTOP_W}x${DESKTOP_H})..."
-log "  链路: ${EXE_ARGS[*]:-explorer} → winedac.drv → $SOCK → SurfaceFlinger"
+# ============================================================
+# 路径 3: VNC 兜底
+# ============================================================
+if [ "$MODE" = vnc ]; then
+    XVNC_BIN="$(command -v Xvnc 2>/dev/null)"
+    [ -n "$XVNC_BIN" ] || die "未找到 Xvnc（pkg install tigervnc；或改用 --display x11）"
+    "$PREFIX_DIR/bin/linbox-dac-unreg" >/dev/null 2>&1 || true
 
-WINE_ENV="WINEDEBUG=err+seh,err+loaddll WINE_LOG=$LOG"
-export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+    log "1/4 启动 Xvnc (:1, 5901)..."
+    Xvnc :1 -geometry "${DESKTOP_W}x${DESKTOP_H}" -depth 24 \
+        -rfbport 5901 -localhost no -SecurityTypes None >>"$LOG" 2>&1 &
+    XPID=$!
+    sleep 2
+    kill -0 "$XPID" 2>/dev/null || die "Xvnc 启动失败（端口占用？看 $LOG）"
 
-EXE_STR="${EXE_ARGS[*]:-}"
-[ -n "$EXE_STR" ] || EXE_STR="explorer"
-
-set -- "$EXE_ARGS[@]" 2>/dev/null || set -- explorer
-if [ $# -eq 0 ] || [ -z "${1:-}" ]; then set -- explorer; fi
-
-if [ "$WINE_FORM" = "glibc" ]; then
-    grun wine explorer /desktop=dac,"${DESKTOP_W}x${DESKTOP_H}" "$@" 2>>"$LOG"
-else
-    wine explorer /desktop=dac,"${DESKTOP_W}x${DESKTOP_H}" "$@" 2>>"$LOG"
+    export DISPLAY=:1
+    export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+    log "2/4 启动 wine..."
+    run_wine explorer /desktop=linbox,"${DESKTOP_W}x${DESKTOP_H}" "$@"
+    RC=$?
+    log "3/4 wine 退出 (rc=$RC)"
+    log "4/4 VNC 客户端连接 127.0.0.1:5901 查看画面；关闭: kill $XPID"
+    exit "$RC"
 fi
-RC=$?
 
-# ---------------- 6. 收尾 ----------------
-log "6/6 wine 退出 (rc=$RC)"
-[ $RC -ne 0 ] && log "  如遇问题: cat $LOG; 并运行 linbox-dac doctor"
-
-am broadcast -a com.linbox.action.DAC_STOP >/dev/null 2>&1 || true
-exit $RC
+die "未知显示模式: $MODE"

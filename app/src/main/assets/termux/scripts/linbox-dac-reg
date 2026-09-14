@@ -1,61 +1,63 @@
 #!/data/data/com.linbox/files/usr/bin/sh
 # ============================================================
-# linbox-dac-reg — 注册 winedac.drv 为 wine 图形驱动
-# 用法: linbox-dac-reg [宽] [高]   （宽高供 winboot 前缀初始化提示，可选）
+# linbox-dac-reg — 注册 winedac.drv 为 wine 图形驱动 (v1.3, POSIX sh)
+# 用法: linbox-dac-reg [宽] [高]
 # ============================================================
-# 机制：wine 按 HKCU\Software\Wine\Drivers 的 "Graphics" 值选择驱动，
-# 值为 "dac" 时加载 winedac.drv（与 x11→winex11.drv 同机制）。
-# 直接改 user.reg 无需启动 wine，幂等安全。
+# 机制：wine 读取 HKCU\Software\Wine\Drivers 的 "Graphics" 值决定加载哪个
+# 图形驱动（"dac" → winedac.drv，与 "x11" → winex11.drv 同机制）。
+# 优先用 wine reg add 写（最可靠）；wine 不可用时直接文本改 user.reg
+#（wineboot 下次启动生效）。
 # ============================================================
 
-WINEPREFIXES="${WINEPREFIX:-$HOME/.wine}"
+WP="${WINEPREFIX:-$HOME/.wine}"
+USER_REG="$WP/user.reg"
 
-reg_file() {
-    # 定位 user.reg（各 prefix 布局兼容）
-    echo "$1/system.reg"  # 注册在 system.reg 与 user.reg 均可，HKCU 写 user.reg
+log() { printf '[linbox-dac-reg] %s\n' "$*"; }
+
+run_wine_reg() {
+    WINE_BIN="$(command -v wine 2>/dev/null || command -v wine64 2>/dev/null)"
+    [ -n "$WINE_BIN" ] || return 1
+    WINE_REAL="$(readlink -f "$WINE_BIN" 2>/dev/null)"
+    if [ -n "$WINE_REAL" ] && file "$WINE_REAL" 2>/dev/null | grep -Eq 'ld-linux|glibc' \
+            && command -v grun >/dev/null 2>&1; then
+        grun wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d dac /f
+    else
+        wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d dac /f
+    fi
 }
 
-for prefix in "$WINEPREFIXES"; do
-    [ -d "$prefix" ] || continue
-    USER_REG="$prefix/user.reg"
-    [ -f "$USER_REG" ] || continue
+if [ -d "$WP" ] && run_wine_reg; then
+    log "已通过 wine reg 设置 Graphics=dac (prefix: $WP)"
+    exit 0
+fi
 
-    # 幂等移除旧值后写入
-    sed -i '/^\[Software\\\\Wine\\\\Drivers\]/,/^\[/ { /^"Graphics"=/d; }' "$USER_REG" 2>/dev/null
+# ---- 回退：文本方式改 user.reg ----
+[ -f "$USER_REG" ] || { log "未找到 $USER_REG（先运行一次 wineboot 初始化 prefix）"; exit 1; }
 
-    if grep -q '^\[Software\\\\Wine\\\\Drivers\]' "$USER_REG"; then
-        # 键已存在：在该键段落内追加
-        awk -v ins='"Graphics"="dac"' '
-            $0 ~ /^\[Software\\\\Wine\\\\Drivers\]/ { print; inkey=1; getline_nl=1; next }
-            inkey && /^\[/ { print "[Software\\\\Wine\\\\DriversXXX_PLACEHOLDER]"; inkey=0 }
-            { print }
-        ' "$USER_REG" > "$USER_REG.tmp" 2>/dev/null || {
-            echo "[linbox-dac-reg] awk 处理失败，回退追加方式" >&2
+# 一趟 awk 完成：删除段落内旧 "Graphics" 行 + 在段头后插入新值；段落缺失则追加
+# 注意：user.reg 中反斜杠为双写（Software\\Wine\\Drivers），awk 字符串中需四写
+if awk '
+    /^\[Software\\\\Wine\\\\Drivers\]/ {
+        print
+        print "\"Graphics\"=\"dac\""
+        ins=1; done=1
+        next
+    }
+    ins && /^\[/ { ins=0 }
+    ins && /^"Graphics"=/ { next }
+    { print }
+    END {
+        if (!done) {
+            print ""
+            print "[Software\\\\Wine\\\\Drivers]"
+            print "\"Graphics\"=\"dac\""
         }
-    fi
-
-    # 简化实现：直接以 wine reg 写（若 wine 可用），否则 user.reg 追加
-    if command -v wine >/dev/null 2>&1 || command -v wine64 >/dev/null 2>&1; then
-        if command -v grun >/dev/null 2>&1 && [ "$LINBOX_DAC_USE_GRUN" = "1" ]; then
-            grun wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d dac /f
-        else
-            wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d dac /f
-        fi
-        echo "[linbox-dac-reg] 已通过 wine reg 设置 Graphics=dac (prefix: $prefix)"
-        exit 0
-    fi
-
-    # wine 不可用：user.reg 文本追加（wineboot 下次启动生效）
-    if ! grep -q '^\[Software\\\\Wine\\\\Drivers\]' "$USER_REG"; then
-        printf '\n[Software\\Wine\\Drivers]\n"Graphics"="dac"\n' >> "$USER_REG"
-        echo "[linbox-dac-reg] 已写入 $USER_REG (Graphics=dac)"
-    else
-        # 键已存在 → sed 追加值行
-        sed -i '/^\[Software\\\\Wine\\\\Drivers\]/{n;a\
-"Graphics"="dac"
-}' "$USER_REG"
-        echo "[linbox-dac-reg] 已更新 $USER_REG (Graphics=dac)"
-    fi
-done
-
-echo "[linbox-dac-reg] 完成"
+    }
+' "$USER_REG" > "$USER_REG.tmp" && [ -s "$USER_REG.tmp" ]; then
+    mv "$USER_REG.tmp" "$USER_REG"
+    log "已写入 $USER_REG (Graphics=dac)"
+else
+    rm -f "$USER_REG.tmp"
+    log "awk 处理失败，user.reg 未改动"
+    exit 1
+fi

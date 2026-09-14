@@ -1,12 +1,42 @@
 #!/data/data/com.linbox/files/usr/bin/sh
-# linbox-dac-unreg — 还原图形驱动为 x11
-for prefix in "${WINEPREFIX:-$HOME/.wine}"; do
-    [ -d "$prefix" ] || continue
-    if command -v wine >/dev/null 2>&1; then
-        wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d x11 /f
-    elif [ -f "$prefix/user.reg" ]; then
-        sed -i '/^\[Software\\\\Wine\\\\Drivers\]/,/^\[/ s/^"Graphics"="dac"/"Graphics"="x11"/' \
-            "$prefix/user.reg"
+# ============================================================
+# linbox-dac-unreg — 移除 Graphics=dac（还原图形驱动自动选择）
+# (v1.3, POSIX sh)
+# ============================================================
+# 删除而非改写为 x11：wine 会按默认顺序加载可用驱动
+# （glibc wine → winex11.drv；bionic wine → wineandroid.drv），
+# 对两种 wine 形态都正确。
+# ============================================================
+
+WP="${WINEPREFIX:-$HOME/.wine}"
+USER_REG="$WP/user.reg"
+
+log() { printf '[linbox-dac-unreg] %s\n' "$*"; }
+
+WINE_BIN="$(command -v wine 2>/dev/null || command -v wine64 2>/dev/null)"
+if [ -d "$WP" ] && [ -n "$WINE_BIN" ]; then
+    WINE_REAL="$(readlink -f "$WINE_BIN" 2>/dev/null)"
+    if [ -n "$WINE_REAL" ] && file "$WINE_REAL" 2>/dev/null | grep -Eq 'ld-linux|glibc' \
+            && command -v grun >/dev/null 2>&1; then
+        WINE_RUN="grun wine"
+    else
+        WINE_RUN="wine"
     fi
-    echo "[linbox-dac-unreg] $prefix → Graphics=x11"
-done
+    $WINE_RUN reg delete 'HKCU\Software\Wine\Drivers' /v Graphics /f >/dev/null 2>&1
+    log "已移除 Graphics 值（prefix: $WP）"
+    exit 0
+fi
+
+# 回退：文本方式删除段落内 Graphics 行
+if [ -f "$USER_REG" ]; then
+    awk '
+        /^\[Software\\\\Wine\\\\Drivers\]/ { ins=1; print; next }
+        ins && /^\[/ { ins=0 }
+        ins && /^"Graphics"=/ { next }
+        { print }
+    ' "$USER_REG" > "$USER_REG.tmp" && [ -s "$USER_REG.tmp" ] && mv "$USER_REG.tmp" "$USER_REG" \
+        && log "已从 $USER_REG 移除 Graphics 行" \
+        || { rm -f "$USER_REG.tmp"; log "处理失败或无改动"; }
+else
+    log "未找到 $USER_REG —— 无需还原"
+fi

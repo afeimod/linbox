@@ -1,92 +1,114 @@
 #!/data/data/com.linbox/files/usr/bin/sh
 # ============================================================
-# linbox-dac-doctor — DAC 逐项体检
+# linbox-dac-doctor — DAC/显示栈 逐项体检 (v1.3, POSIX sh)
 # ============================================================
-G=1; PASS="✓"; FAIL="✗"; WARN="!"
+P="${PREFIX:-/data/data/com.linbox/files/usr}"
+G=1
 
-say()   { echo "[$3] $1: $2"; }
-ok()    { say "$1" "$2" "$PASS"; }
-bad()   { say "$1" "$2" "$FAIL"; G=0; }
-warn_() { say "$1" "$2" "$WARN"; }
+ok()   { printf '[+] %s: %s\n' "$1" "$2"; }
+bad()  { printf '[-] %s: %s\n' "$1" "$2"; G=0; }
+warn() { printf '[!] %s: %s\n' "$1" "$2"; }
 
 echo "=============================================="
-echo " LinBox DAC 体检 (Direct Android Compositing)"
+echo " LinBox DAC 体检"
 echo "=============================================="
 
-# 1. 环境
-[ -d /data/data/com.linbox/files/usr ] \
-    && ok "终端环境" "LinBox 前缀正常" \
-    || bad "终端环境" "不在 LinBox 终端内运行"
+# 1. 终端环境
+if [ -d "$P" ]; then ok "终端环境" "LinBox 前缀正常"; else bad "终端环境" "不在 LinBox 终端内运行"; fi
 
 # 2. wine
-WINE_BIN="$(command -v wine || command -v wine64)"
-[ -n "$WINE_BIN" ] && ok "Wine" "$WINE_BIN" || bad "Wine" "未安装（linbox-glibc / 自行安装）"
+WINE_BIN="$(command -v wine 2>/dev/null || command -v wine64 2>/dev/null)"
+if [ -n "$WINE_BIN" ]; then ok "Wine" "$WINE_BIN"; else bad "Wine" "未安装（linbox-glibc / bionic wine 包）"; fi
+
+WINE_REAL="$(readlink -f "$WINE_BIN" 2>/dev/null || echo "")"
+WINE_ROOT=""
+[ -n "$WINE_REAL" ] && WINE_ROOT="$(dirname "$WINE_REAL")/../.."
 
 # 3. wine 形态
-if [ -n "$WINE_BIN" ]; then
-    if file "$(readlink -f "$WINE_BIN")" 2>/dev/null | grep -q glibc; then
-        warn_ "Wine 形态" "glibc 构建（需 bionic 侧车 dac_allocd）"
+if [ -n "$WINE_REAL" ]; then
+    if file "$WINE_REAL" 2>/dev/null | grep -Eq 'interpreter.*(ld-linux|ld-)|glibc'; then
+        warn "Wine 形态" "glibc 构建（DAC 需 bionic 侧车 dac_allocd）"
     else
         ok "Wine 形态" "bionic 构建（AHB 直连可用）"
     fi
 fi
 
-# 4. winedac.drv 是否已装入 wine
-if [ -n "$WINE_BIN" ]; then
-    WINE_DIR="$(dirname "$(readlink -f "$WINE_BIN")")/.."
-    find "$WINE_DIR/lib" -name 'winedac*' 2>/dev/null | grep -q . \
-        && ok "winedac.drv" "驱动已安装" \
-        || bad "winedac.drv" "wine 未包含 DAC 驱动（用 wine/build_wine_dac.sh 重建）"
+# 4. winedac.drv（决定 DAC 原生栈是否可用）
+DAC_DRV=0
+if [ -n "$WINE_ROOT" ]; then
+    for d in "$WINE_ROOT/lib/wine" "$WINE_ROOT/lib64/wine" "$P/opt/wine/lib/wine"; do
+        if [ -d "$d" ] && find "$d" -name 'winedac*' 2>/dev/null | grep -q .; then
+            ok "winedac.drv" "驱动已安装 → DAC 原生路径可用"; DAC_DRV=1; break
+        fi
+    done
+    [ "$DAC_DRV" = 1 ] || warn "winedac.drv" "未安装 → DAC 原生路径不可用（wine-dac tarball），走 X11/VNC 即可"
 fi
 
-# 5. prefix 注册表
-if [ -f "${WINEPREFIX:-$HOME/.wine}/user.reg" ]; then
-    grep -q '"Graphics"="dac"' "${WINEPREFIX:-$HOME/.wine}/user.reg" \
-        && ok "驱动注册" "Graphics=dac 已设置" \
-        || warn_ "驱动注册" "未设置 —— 运行 linbox-dac reg"
+# 5. 显示栈可用性（重点新增）
+if command -v termux-x11 >/dev/null 2>&1; then
+    if pm path com.termux.x11 >/dev/null 2>&1; then
+        ok "X11 显示栈" "termux-x11 + 伴侣 App 齐备（推荐）"
+    else
+        warn "X11 显示栈" "客户端已装，缺 Termux:X11 伴侣 App（github.com/termux/termux-x11/releases）"
+    fi
+else
+    warn "X11 显示栈" "未安装（一键安装: linbox-dac setup-x11）"
+fi
+if command -v Xvnc >/dev/null 2>&1; then
+    ok "VNC 显示栈" "Xvnc 可用（127.0.0.1:5901）"
+else
+    warn "VNC 显示栈" "未安装（可选: pkg install tigervnc）"
 fi
 
-# 6. Vulkan ICD
+# 6. prefix 注册表（仅 DAC 路径相关）
+if [ "$DAC_DRV" = 1 ] && [ -f "${WINEPREFIX:-$HOME/.wine}/user.reg" ]; then
+    if grep -q '^"Graphics"="dac"' "${WINEPREFIX:-$HOME/.wine}/user.reg" 2>/dev/null || \
+       awk '/^\[Software\\\\Wine\\\\Drivers\]/{s=1;next} s&&/^\[/{s=0} s&&/^"Graphics"="dac"/{f=1} END{exit !f}' \
+           "${WINEPREFIX:-$HOME/.wine}/user.reg"; then
+        ok "驱动注册" "Graphics=dac 已设置"
+    else
+        warn "驱动注册" "未设置 —— 运行 linbox-dac reg（仅 DAC 路径需要）"
+    fi
+fi
+
+# 7. Vulkan ICD
 VK_FOUND=0
 for f in /system/vendor/lib64/hw/vulkan.* /odm/lib64/hw/vulkan.*; do
-    [ -e "$f" ] && { ok "设备 Vulkan" "$f"; VK_FOUND=1; break; }
+    if [ -e "$f" ]; then ok "设备 Vulkan" "$f"; VK_FOUND=1; break; fi
 done
-ls "$PREFIX/lib/libvulkan.so" >/dev/null 2>&1 && { ok "termux Vulkan" "loader 存在"; VK_FOUND=1; }
-[ $VK_FOUND -eq 1 ] || warn_ "Vulkan" "未检测到 ICD（DXVK 不可用；GDI 应用不受影响）"
+if [ -e "$P/lib/libvulkan.so" ]; then ok "termux Vulkan" "loader 存在"; VK_FOUND=1; fi
+[ "$VK_FOUND" = 1 ] || warn "Vulkan" "未检测到 ICD（DXVK 不可用；GDI 应用不受影响）"
 
-# 7. DXVK
-if [ -n "$WINE_BIN" ]; then
-    find "$WINE_DIR/share" "${WINEPREFIX:-$HOME/.wine}/drive_c" -name 'dxvk' -o -name 'd3d11.dll' 2>/dev/null | grep -q . \
-        && ok "DXVK" "已部署" \
-        || warn_ "DXVK" "未部署（dxvk/build-dxvk.sh）"
-fi
-
-# 8. app 侧 bridge
-SOCK="${PREFIX:-/data/data/com.linbox/files/usr}/tmp/linbox-dac.sock"
-if [ -S "$SOCK" ]; then
-    ok "DAC bridge" "socket 就绪"
-elif am broadcast -a com.linbox.action.DAC_STATUS >/dev/null 2>&1; then
-    warn_ "DAC bridge" "socket 未开 —— DAC 窗口未启动（linbox-dac 启动时会自动开窗）"
-else
-    bad "DAC bridge" "LinBox 应用未响应广播（APK 需含 DAC 模块）"
+# 8. DXVK
+if [ -n "$WINE_ROOT" ]; then
+    if find "$WINE_ROOT/share" "${WINEPREFIX:-$HOME/.wine}/drive_c" -name 'd3d11.dll' 2>/dev/null | grep -q .; then
+        ok "DXVK" "已部署"
+    else
+        warn "DXVK" "未部署（dxvk/build-dxvk.sh；纯 GDI/2D 应用不需要）"
+    fi
 fi
 
 # 9. 设备 API 级别
 API="$(getprop ro.build.version.sdk 2>/dev/null)"
 case "$API" in
-    2[6-8]) warn_ "设备 API" "$API —— CPU 降级呈现（无直合）" ;;
-    29|3*|4*) ok "设备 API" "$API —— SurfaceFlinger 直合可用" ;;
-    *) bad "设备 API" "未知 ($API)，需 ≥26" ;;
+    2[6-8])    warn "设备 API" "$API —— DAC 无直合（CPU 降级）；X11/VNC 不受影响" ;;
+    29|3*|4*)  ok "设备 API" "$API —— SurfaceFlinger 直合可用" ;;
+    *)         warn "设备 API" "未知 ($API)" ;;
 esac
 
 # 10. 侧车（glibc wine 才需要）
-if file "$(readlink -f "$WINE_BIN")" 2>/dev/null | grep -q glibc; then
-    find "$PREFIX" -name 'dac_allocd*' 2>/dev/null | grep -q . \
-        && ok "bionic 侧车" "dac_allocd 已安装" \
-        || bad "bionic 侧车" "glibc wine 需要但未安装（重装含 DAC 的 APK）"
+if file "$WINE_REAL" 2>/dev/null | grep -Eq 'ld-linux|glibc'; then
+    if find "$P" -name 'dac_allocd*' 2>/dev/null | grep -q .; then
+        ok "bionic 侧车" "dac_allocd 已安装"
+    else
+        warn "bionic 侧车" "glibc wine 的 DAC 路径需要（随含 DAC 的 APK 分发）"
+    fi
 fi
 
 echo "----------------------------------------------"
-[ $G -eq 1 ] && echo "结论: 关键组件齐备，可以运行 linbox-dac <game.exe>" \
-            || echo "结论: 存在缺失项（见 ✗ 行），修复后重试"
-exit $G
+if [ "$G" = 1 ]; then
+    echo "结论: 关键组件齐备，运行 linbox-dac 程序.exe 即可"
+else
+    echo "结论: 见 [!] 项 —— 当前可用路径已可运行；缺失项按提示补齐"
+fi
+exit 0

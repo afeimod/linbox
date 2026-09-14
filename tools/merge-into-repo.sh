@@ -8,11 +8,11 @@
 #
 # 行为：
 #   1) 复制纯新增文件（DAC cpp/Kotlin/脚本/wine 驱动/构建脚本/docs/workflows）
-#   2) 幂等补丁四个宿主文件（已注入则自动跳过）：
+#   2) 幂等补丁六个宿主文件（已注入则自动跳过）：
 #      - app/src/main/AndroidManifest.xml            注册 DacReceiver
-#      - app/build.gradle.kts                        追加 DAC 原生编译块
+#      - app/build.gradle.kts                        追加 DAC 原生编译块 + 脚本分发块
 #      - app/src/main/java/com/linbox/LinBoxApp.kt   初始化 DacApp
-#      - app/.../termux/TermuxBootstrapInstaller.kt  拷贝 dac_allocd 进 $PREFIX/bin
+#      - app/.../termux/TermuxBootstrapInstaller.kt  拷 dac_allocd + 5 个脚本进 $PREFIX/bin
 #   3) 打印 Action 构建与真机验证步骤
 # ============================================================
 set -e
@@ -227,7 +227,70 @@ cat > "$P4" <<'KTD'
 KTD
 insert_before "$REPO/app/src/main/java/com/linbox/apps/terminal/termux/TermuxBootstrapInstaller.kt" "// (2) dpkg 包装器三层布局" "$P4" "libdac_allocd.so"
 
-rm -f "$P" "$P2" "$P3" "$P4"
+echo ">> 补丁 app/build.gradle.kts（DAC 显示脚本分发块）..."
+P5=$(mktemp)
+cat > "$P5" <<'KTS'
+
+// ============================================================
+// LinBox DAC —— 显示脚本分发（tools/merge-into-repo.sh 幂等追加块）
+// ============================================================
+// 将 assets/termux/scripts 的 linbox-dac* shell 脚本以 lib*.so 名义并入
+// jniLibs（复用 DAC 原生库管线，全 ABI 目录各放一份，防 assets 提取逻辑
+// 不确定性），安装后由 TermuxBootstrapInstaller 还原为 $PREFIX/bin/linbox-dac*。
+// keepDebugSymbols：防 release strip 对非 ELF 文件报错（AGP ≥ 7.3）。
+// 依赖：上方「LinBox DAC —— 原生桥编译」块定义的 dacAbis / dacOut。
+// ============================================================
+android {
+    packaging {
+        jniLibs {
+            keepDebugSymbols.add("**/liblinbox_dac_*.so")
+        }
+    }
+}
+
+tasks.register("copyDacDisplayScripts") {
+    group = "build"
+    description = "LinBox DAC shell 脚本以 lib*.so 并入 jniLibs（各 ABI 目录）"
+    val dacScriptDir = file("src/main/assets/termux/scripts")
+    inputs.dir(dacScriptDir)
+    outputs.upToDateWhen { false }
+    doLast {
+        dacAbis.keys.map { dacOut.get().dir(it).asFile }.forEach { d ->
+            d.mkdirs()
+            dacScriptDir.listFiles()?.filter { it.name.startsWith("linbox-dac") }?.forEach { f ->
+                java.io.File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn("copyDacDisplayScripts") }
+KTS
+append_once "$REPO/app/build.gradle.kts" "$P5" "LinBox DAC —— 显示脚本分发"
+
+echo ">> 补丁 TermuxBootstrapInstaller.kt（DAC 脚本还原 $PREFIX/bin）..."
+P6=$(mktemp)
+cat > "$P6" <<'KTD'
+
+        // (1.6) LinBox DAC 显示脚本（merge-into-repo.sh 注入）：
+        //       jniLibs 中以 lib*.so 分发的 shell 脚本 → 还原为 $PREFIX/bin/linbox-dac*
+        mapOf(
+            "liblinbox_dac.so" to "linbox-dac",
+            "liblinbox_dac_doctor.so" to "linbox-dac-doctor",
+            "liblinbox_dac_reg.so" to "linbox-dac-reg",
+            "liblinbox_dac_unreg.so" to "linbox-dac-unreg",
+            "liblinbox_dac_stop.so" to "linbox-dac-stop"
+        ).forEach { (lib, name) ->
+            val dacScriptSrc = File(nativeDir, lib)
+            if (dacScriptSrc.isFile) {
+                val dacScriptDst = File(prefix, "bin/$name")
+                dacScriptSrc.copyTo(dacScriptDst, overwrite = true)
+                Os.chmod(dacScriptDst.absolutePath, PERMISSION_0700)
+            }
+        }
+KTD
+insert_before "$REPO/app/src/main/java/com/linbox/apps/terminal/termux/TermuxBootstrapInstaller.kt" "// (2) dpkg 包装器三层布局" "$P6" "liblinbox_dac.so"
+
+rm -f "$P" "$P2" "$P3" "$P4" "$P5" "$P6"
 
 # ------------------------------------------------------------
 # 3) 汇总
@@ -237,13 +300,15 @@ echo "============================================================"
 echo " 集成完成（dry-run=$DRY）。下一步："
 echo "============================================================"
 echo " 1. 提交推送："
-echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.1' && git push"
+echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.3' && git push"
 echo " 2. GitHub Actions 手动运行："
 echo "      - LinBox DAC APK                → 集成 DAC 的 LinBox APK"
 echo "      - LinBox DAC Wine (winedac.drv) → wine-dac tarball"
 echo "      - LinBox DAC DXVK               → d3d→Vulkan DLL"
 echo "      - LinBox DAC Turnip ICD         → Adreno AHB ICD"
 echo " 3. 真机验证：安装 APK → 终端内部署 wine-dac tarball →"
-echo "      linbox-dac doctor && linbox-dac game.exe"
+echo "      linbox-dac setup-x11   # X11 路径（当前推荐，即装即显）"
+echo "      linbox-dac game.exe    # auto：未部署 winedac.drv 走 x11，已部署走 DAC 直合"
+echo "      linbox-dac doctor      # 逐项体检"
 echo " 详细文档：README-DAC.md / docs/DAC-BUILD.md"
 echo "============================================================"
