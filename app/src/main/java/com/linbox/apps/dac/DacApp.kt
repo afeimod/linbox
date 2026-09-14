@@ -58,21 +58,37 @@ object DacApp : DacNative.TitleSink {
             return
         }
         DacNative.nativeSetTitleSink(this)
-        titleListener = { title -> main.post { titleView?.text = title } }
         if (hostContainer != null) {
             // 宿主容器来自 LinBoxShell 浮动窗口系统（可选接线）
             rootView = hostContainer
         } else {
             // 兜底模式：捕获前台 Activity 供 ensureContainer 挂 decorView
+            // （ActivityLifecycleCallbacks 为 Java 接口，7 个抽象方法须全部实现）
             (appContext as? android.app.Application)
                 ?.registerActivityLifecycleCallbacks(
                     object : android.app.Application.ActivityLifecycleCallbacks {
+                        override fun onActivityCreated(
+                            a: android.app.Activity,
+                            savedInstanceState: android.os.Bundle?
+                        ) {
+                        }
+
+                        override fun onActivityStarted(a: android.app.Activity) {}
+
                         override fun onActivityResumed(a: android.app.Activity) {
                             currentActivity = a
                         }
 
                         override fun onActivityPaused(a: android.app.Activity) {
                             if (currentActivity === a) currentActivity = null
+                        }
+
+                        override fun onActivityStopped(a: android.app.Activity) {}
+
+                        override fun onActivitySaveInstanceState(
+                            a: android.app.Activity,
+                            outState: android.os.Bundle
+                        ) {
                         }
 
                         override fun onActivityDestroyed(a: android.app.Activity) {
@@ -164,6 +180,17 @@ object DacApp : DacNative.TitleSink {
         )
         rootView = container
         return container
+    }
+
+    /**
+     * TitleSink 实现：wine 侧窗口标题 → DAC 浮窗标题。
+     * JNI 回调线程到达，统一切主线程更新 UI，并转发给 DacInput.titleListener
+     * 二级监听（供壳层镜像窗口标题等外部接线，无监听时为空操作）。
+     */
+    override fun onTitle(title: String) {
+        Log.d(TAG, "wine title: $title")
+        main.post { titleView?.text = title }
+        DacInput.titleListener?.invoke(title)
     }
 
     private fun showTitle(text: String) {

@@ -33,7 +33,7 @@ class DacReceiver : BroadcastReceiver() {
         const val EXTRA_HEIGHT = "height"
         const val EXTRA_BACKEND = "backend"
         const val EXTRA_READY = "ready"
-        const val DAC_BROADCAST_PERMISSION: String? = null  // 同 UID 终端直发，无需权限
+        val DAC_BROADCAST_PERMISSION: String? = null  // 同 UID 终端直发，无需权限（const 不允许可空，用 val）
     }
 
     override fun onReceive(context: Context, intent: Intent) {
