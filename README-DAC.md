@@ -1,11 +1,15 @@
-# LinBox DAC — Wine 显示（X11 路径 + Direct Android Compositing 原生路径）
+# LinBox DAC — 集成进 LinBox 项目的 Wine 显示链路（非独立应用）
 
-> 为 LinBox 开发的 **Wine 显示双路径**：
-> ① **X11 路径（当前推荐，社区验证）**：termux-x11 → 屏幕，开箱即用；
-> ② **DAC 原生路径**：跳过 X11，渲染结果经 AHardwareBuffer 直交 SurfaceFlinger
->    合成（需部署含 winedac.drv 的 wine-dac tarball）。
+> **定位：并入项目的显示模块，不是独立构建。** merge 一次提交后，DAC 就是仓库源码
+> 的一部分，你现有的构建（Android Studio / gradlew / 你自己的 CI）无需任何改动
+> 即自动包含，无需再跑 merge、无需专用 workflow。
 >
-> `linbox-dac` 启动器自动按已部署情况回退：dac → x11 → vnc。
+> 显示路径（`linbox-dac` auto 自动选择，DAC 优先）：
+> ① **DAC 独立显示器**（首选）：winedac.drv → AHardwareBuffer → SurfaceFlinger
+>    直合，零 X11（需部署 Actions 产出的 wine-dac tarball）；
+> ② **复用已有 X11**：环境里已有的 X server（已设 DISPLAY、LinBox 内置
+>    `:13` lorie/Xwayland、termux-x11）直接复用，脚本不会重复安装任何东西；
+> ③ VNC 兕底。
 
 ## 这是什么
 
@@ -32,37 +36,41 @@ EXE (d3d9/10/11) ─▶ DXVK ─▶ winevulkan ─▶ winedac.drv (Vulkan WSI �
 Wine 桌面 UI（GDI 窗口/菜单/对话框）同样直通：每窗口 CPU 位图 → 软件合成器
 按 z 序混入桌面 AHardwareBuffer → 同一 bridge 呈现。
 
-## 快速开始（GitHub Actions 构建，推荐）
+## 快速开始（一次集成，永久生效）
 
 ```bash
-# 1. 解压本包，将源码并入 linbox 仓库（幂等，可重复执行；已 merge 过 v1.1 也可直接跑）
-unzip linbox-dac-source-v1.3.zip -d dac && cd dac
+# 1. 解压本包，把源码并入 linbox 仓库（幂等，可重复执行）
+unzip linbox-dac-source-v1.5.zip -d dac && cd dac
 ./tools/merge-into-repo.sh /path/to/linbox     # --dry-run 可先预览
-# 2. 提交推送
-cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.3" && git push
-# 3. GitHub → Actions 页面手动运行：
-#    ① LinBox DAC APK                → 集成 DAC 的 LinBox APK
-#    ② LinBox DAC Wine (winedac.drv) → wine-dac tarball（启用原生路径时需要）
-#    ③ LinBox DAC DXVK               → d3d→Vulkan DLL（游戏需要）
-#    ④ LinBox DAC Turnip ICD         → Adreno AHB Vulkan ICD（可选，GPU 直合）
+# 2. 提交推送 —— 从此 DAC 就是项目源码的一部分
+cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.5" && git push
+# 3. 正常构建即可（三选一，产物相同）：
+#    ① 本地：Android Studio Run / ./gradlew assembleRelease
+#    ② 你已有的 CI：什么都不用改
+#    ③ push 触发仓库 Actions「LinBox 构建（含 DAC 集成）」→ 自动出 APK
 ```
+
+集成后无需再跑 merge，也没有「单独的 DAC 构建」——唯一新增的
+`.github/workflows/linbox-build.yml` 只是构建兜底（固定 NDK/JDK 版本 + 自动
+签名，push 即自动出 APK）；也可手动选 wine / dxvk / turnip 组件构建配套
+产物（winedac.drv tarball / DXVK DLL / Adreno ICD）。若你已有自己的 CI，
+这个文件可直接删除，不影响集成。
 
 APK 安装后，5 个 `linbox-dac*` 脚本随 bootstrap 自动落到 `$PREFIX/bin`
 （经 jniLibs `lib*.so` 管线分发，无需手动拷贝）。
 
-## 终端使用（两条显示路径）
+## 终端使用（显示路径自动选择，DAC 优先）
 
 ```bash
-# ── 路径 A：X11（当前推荐，box64+wine 即装即显）──
-linbox-dac setup-x11              # 一键装 pkg 依赖 + 提示伴侣 App 安装
-#   另需安装 Termux:X11 伴侣 App：github.com/termux/termux-x11/releases
-linbox-dac --display x11 game.exe # 跑 exe，画面在 Termux:X11 App 里
-linbox-dac game.exe               # auto 模式：未部署 winedac.drv 时自动走 x11
-
-# ── 路径 B：DAC 原生（部署 wine-dac tarball 后自动启用）──
+# ── DAC 独立显示器（首选）：部署 wine-dac tarball 后自动启用 ──
 linbox-dac doctor                 # 体检（逐项显示哪条路径可用）
-linbox-dac game.exe               # auto 模式检测到 winedac.drv → 走 DAC 直合
+linbox-dac game.exe               # auto：检测到 winedac.drv → 独立显示器直合
 linbox-dac --display dac game.exe # 强制 DAC
+
+# ── X11：仅复用环境里已有的 X server，不装任何东西 ──
+linbox-dac game.exe               # auto：DISPLAY 已设 / 内置 :13 在跑 → 直接复用
+linbox-dac --display x11 game.exe # 强制走已有 X11；皆无且有 termux-x11 才新起 :0
+linbox-dac setup-x11              # 自检：已有环境直接通过，不会下载
 ```
 
 ## 源码结构（可直接并入 linbox 仓库）
@@ -77,7 +85,7 @@ linbox-dac --display dac game.exe # 强制 DAC
 | `app/src/main/assets/termux/scripts/` | `linbox-dac` CLI（启动/体检/注册/停止） |
 | `mesa/build-turnip-android.sh` | platforms=android 的 Turnip（AHB Vulkan ICD）构建脚本 |
 | `dxvk/build-dxvk.sh` | DXVK 构建 + prefix 部署（无需打补丁） |
-| `.github/workflows/` | 4 个 Action 构建流（APK / Wine / DXVK / Turnip） |
+| `.github/workflows/linbox-build.yml` | 唯一构建入口（push 自动出 APK；wine/dxvk/turnip 为可选组件） |
 | `tools/merge-into-repo.sh` | 幂等集成脚本（复制文件 + 补丁 Manifest/Gradle/LinBoxApp/Installer） |
 | `docs/` | 架构 / 协议 / 构建文档 |
 

@@ -1,0 +1,395 @@
+name: "LinBox 构建（含 DAC 集成）"
+
+# ============================================================================
+# 唯一的构建入口 —— DAC 是集成进本仓库的模块，不是独立应用：
+#   · push 即自动构建 APK：CI 内自动执行 tools/merge-into-repo.sh（幂等，
+#     已集成则全跳过）→ DAC 原生库挂在 preBuild，正常 gradle 构建即包含
+#   · 手动触发可选组件：apk / wine / dxvk / turnip / all
+#     （wine → winedac.drv tarball；dxvk → D3D→Vulkan DLL；turnip → Adreno ICD）
+#   · 若你已有自己的 CI：无需本文件 —— 本地跑一次 merge 提交后，
+#     任何构建方式都自动包含 DAC，本 workflow 只是固定版本环境的兜底
+# ============================================================================
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "构建组件（push 触发时默认只出 APK）"
+        required: true
+        type: choice
+        default: "apk"
+        options:
+          - apk
+          - wine
+          - dxvk
+          - turnip
+          - all
+      build_type:
+        description: "APK 构建类型"
+        required: false
+        type: choice
+        default: "release"
+        options: [debug, release, both]
+      wine_version:
+        description: "Wine 版本"
+        required: false
+        default: "9.2"
+        type: string
+      apply_linbox_patches:
+        description: "Wine：应用 LinBox path/ 补丁（esync/mfplat）"
+        required: false
+        default: true
+        type: boolean
+      wine_target:
+        description: "Wine 构建目标"
+        required: false
+        type: choice
+        default: "x86_64-linux"
+        options: [x86_64-linux, aarch64-glibc]
+      dxvk_version:
+        description: "DXVK 版本 tag"
+        required: false
+        default: "2.4"
+        type: string
+      mesa_version:
+        description: "Mesa 版本"
+        required: false
+        default: "24.0.9"
+        type: string
+      api_level:
+        description: "Turnip：Android API 级别（AHB≥26，KGSL 建议 29）"
+        required: false
+        default: "29"
+        type: string
+
+concurrency:
+  group: linbox-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ============================================================
+  # APK —— DAC 已集成进 app 模块，这就是项目本身的构建
+  # ============================================================
+  apk:
+    name: APK（DAC 已集成）
+    if: github.event.inputs.component == 'apk' || github.event.inputs.component == '' || github.event.inputs.component == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      KEYSTORE_PATH: ${{ github.workspace }}/linbox-release.keystore
+      KEYSTORE_PASS: linbox-release-pass-2026
+      KEY_ALIAS: linbox
+      KEY_PASS: linbox-release-pass-2026
+
+    steps:
+      # ============ 1. 检出 ============
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ============ 2. 自动集成 DAC（幂等：已集成则全部跳过） ============
+      - name: 🧩 Auto-merge DAC sources
+        run: |
+          chmod +x tools/merge-into-repo.sh
+          bash tools/merge-into-repo.sh .
+
+      - name: ⚙️ Normalize build type
+        run: echo "BUILD_TYPE=${{ github.event.inputs.build_type || 'release' }}" >> "$GITHUB_ENV"
+
+      # ============ 3. JDK 17 ============
+      - name: ☕ Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============ 4. Gradle（仓库 gradle-wrapper.jar 可能缺失，用 setup-gradle） ============
+      - name: 🛠️ Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+
+      # ============ 5. NDK 26.3.11579264（与 app/build.gradle.kts 的 ndkVersion 一致） ============
+      - name: 🔬 Install NDK 26.3.11579264
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.3.11579264" > /dev/null 2>&1 || \
+          yes | sdkmanager "ndk;26.3.11579264" > /dev/null 2>&1
+          echo "=== Installed NDK ==="
+          ls "$ANDROID_HOME/ndk"
+
+      # ============ 6. gradle-wrapper.jar 兜底 ============
+      - name: 🔧 Ensure gradle-wrapper.jar
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            gradle wrapper --gradle-version 8.7 --distribution-type bin
+          fi
+          ls -lh gradle/wrapper/
+
+      # ============ 7. release keystore（debug 签名会被判 testOnly 拒装） ============
+      - name: 🔑 Generate release keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore linbox-release.keystore \
+            -alias linbox \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass linbox-release-pass-2026 \
+            -keypass linbox-release-pass-2026 \
+            -dname "CN=LinBox, OU=Dev, O=LinBox, L=Beijing, ST=Beijing, C=CN"
+
+      - name: 📝 Write local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      # ============ 8. DAC 集成自检（merge 后应全部通过；失败 = 宿主文件锚点漂移） ============
+      - name: 🔍 Verify DAC integration
+        run: |
+          fail=0
+          test -d app/src/main/cpp/dac                        || { echo "✗ app/src/main/cpp/dac 缺失"; fail=1; }
+          test -d app/src/main/java/com/linbox/apps/dac       || { echo "✗ apps/dac Kotlin 缺失"; fail=1; }
+          test -f app/src/main/assets/termux/scripts/linbox-dac || { echo "✗ linbox-dac 脚本缺失"; fail=1; }
+          grep -q "DacReceiver" app/src/main/AndroidManifest.xml || { echo "✗ Manifest 未注册 DacReceiver（自动集成未生效——检查 </application> 锚点）"; fail=1; }
+          grep -q "LinBox DAC" app/build.gradle.kts            || { echo "✗ build.gradle.kts 未加 DAC 编译块（自动集成未生效）"; fail=1; }
+          grep -q "DacApp" app/src/main/java/com/linbox/LinBoxApp.kt || { echo "✗ LinBoxApp 未初始化 DacApp（自动集成未生效——检查 settingsStore 锚点）"; fail=1; }
+          [ $fail -eq 0 ] && echo "✓ DAC 集成完整" || exit 1
+
+      # ============ 9. 构建（push 触发时 BUILD_TYPE 默认 release） ============
+      - name: 🔨 Build APK
+        run: |
+          case "$BUILD_TYPE" in
+            debug) gradle assembleDebug --stacktrace --no-daemon ;;
+            both)  gradle assembleDebug --stacktrace --no-daemon
+                   gradle assembleRelease --stacktrace --no-daemon ;;
+            *)     gradle assembleRelease --stacktrace --no-daemon ;;
+          esac
+
+      # ============ 10. 验证 APK 内 DAC 组件 ============
+      - name: 🧪 Verify DAC components in APK
+        if: success()
+        run: |
+          apk=$(ls app/build/outputs/apk/*/*.apk 2>/dev/null | head -1)
+          [ -n "$apk" ] || { echo "✗ 未找到 APK"; exit 1; }
+          echo "APK: $apk"
+          unzip -l "$apk" | grep -E "liblinbox_dac_bridge\.so" && echo "✓ liblinbox_dac_bridge.so 已打包" \
+            || echo "⚠ liblinbox_dac_bridge.so 未打包（检查 buildDacBridge 任务）"
+          unzip -l "$apk" | grep -E "libdac_allocd\.so" && echo "✓ libdac_allocd.so 已打包" \
+            || echo "⚠ libdac_allocd.so 未打包（检查 buildDacAllocd 任务）"
+
+      # ============ 11. 上传 Artifact ============
+      - name: 📤 Upload Debug APK
+        if: env.BUILD_TYPE == 'debug' || env.BUILD_TYPE == 'both'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-debug-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: ignore
+          retention-days: 30
+          compression-level: 0
+
+      - name: 📤 Upload Release APK
+        if: env.BUILD_TYPE == 'release' || env.BUILD_TYPE == 'both'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-release-${{ github.run_number }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 📤 Build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinBox-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            **/build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## LinBox APK（DAC 已集成）" >> $GITHUB_STEP_SUMMARY
+          echo "| 项 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| 显示路径 | winedac.drv → socket → SurfaceFlinger 直合（DAC 独立显示器） |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | $BUILD_TYPE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # Wine + winedac.drv tarball（DAC 独立显示器的 wine 侧组件）
+  # ============================================================
+  wine:
+    name: Wine 9.2 + winedac.drv
+    if: github.event.inputs.component == 'wine' || github.event.inputs.component == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Normalize inputs
+        run: |
+          echo "WINE_VERSION=${{ github.event.inputs.wine_version || '9.2' }}" >> "$GITHUB_ENV"
+          echo "WINE_TARGET=${{ github.event.inputs.wine_target || 'x86_64-linux' }}" >> "$GITHUB_ENV"
+          echo "APPLY_PATCHES=${{ github.event.inputs.apply_linbox_patches == true && '1' || '0' }}" >> "$GITHUB_ENV"
+          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      - name: 📦 Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-broken \
+            build-essential gcc-multilib g++-multilib \
+            mingw-w64 \
+            flex bison \
+            libfreetype-dev libfontconfig1-dev \
+            libvulkan-dev \
+            autoconf gettext perl wget xz-utils pkg-config
+          which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
+
+      - name: 🍷 Build Wine + winedac.drv
+        run: |
+          chmod +x wine/build_wine_dac.sh
+          APPLY_LINBOX_PATCHES="$APPLY_PATCHES" TARGET="$WINE_TARGET" \
+            WINE_VERSION="$WINE_VERSION" JOBS="$JOBS" ./wine/build_wine_dac.sh
+
+      - name: 🔍 Verify build output
+        run: |
+          ls -lh "$HOME/build_wine_dac/dist/"
+          tb=$(ls "$HOME/build_wine_dac/dist/"*.tar.xz | head -1)
+          echo "tarball: $tb"
+          tar -tJf "$tb" | grep -E "bin/wine$|winedac.so" && \
+            echo "✓ winedac.so 已包含" || { echo "✗ 缺 winedac.so"; exit 1; }
+
+      - name: 📤 Upload Wine-DAC tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dac-${{ env.WINE_VERSION }}-${{ github.run_number }}
+          path: |
+            /home/runner/build_wine_dac/dist/*.tar.xz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## Wine + winedac.drv" >> $GITHUB_STEP_SUMMARY
+          echo "| 项 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Wine | $WINE_VERSION |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target | $WINE_TARGET |" >> $GITHUB_STEP_SUMMARY
+          echo "| path/ patches | $APPLY_PATCHES |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
+  # DXVK（D3D → Vulkan；DAC 路径无需补丁）
+  # ============================================================
+  dxvk:
+    name: DXVK
+    if: github.event.inputs.component == 'dxvk' || github.event.inputs.component == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Normalize inputs
+        run: echo "DXVK_VERSION=${{ github.event.inputs.dxvk_version || '2.4' }}" >> "$GITHUB_ENV"
+
+      - name: 📦 Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-broken \
+            git python3 python3-pip \
+            g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+            glslang-tools ninja-build
+          pip3 install --break-system-packages meson || pip3 install meson
+          meson --version
+
+      - name: 🎮 Build DXVK
+        run: |
+          chmod +x dxvk/build-dxvk.sh
+          DXVK_VERSION="$DXVK_VERSION" DEPLOY=0 WORK="$HOME/dxvk-build" ./dxvk/build-dxvk.sh
+
+      - name: 🔍 Verify output
+        run: |
+          out="$HOME/dxvk-build/out/dxvk-$DXVK_VERSION"
+          ls -lh "$out"
+          test -f "$out/x64/d3d11.dll" || { echo "✗ 缺 x64/d3d11.dll"; exit 1; }
+          test -f "$out/x86/d3d11.dll" || { echo "✗ 缺 x86/d3d11.dll"; exit 1; }
+          echo "✓ DXVK x64/x86 DLL 齐备"
+
+      - name: 📤 Upload DXVK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-${{ env.DXVK_VERSION }}-${{ github.run_number }}
+          path: /home/runner/dxvk-build/out/dxvk-*/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ============================================================
+  # Turnip ICD（Adreno Vulkan，AHB 扩展；DAC GPU 直合路径组件）
+  # ============================================================
+  turnip:
+    name: Turnip ICD
+    if: github.event.inputs.component == 'turnip' || github.event.inputs.component == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Normalize inputs
+        run: |
+          echo "MESA_VERSION=${{ github.event.inputs.mesa_version || '24.0.9' }}" >> "$GITHUB_ENV"
+          echo "TURNIP_API=${{ github.event.inputs.api_level || '29' }}" >> "$GITHUB_ENV"
+
+      - name: ☕ Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 🔬 Install NDK 26.3.11579264
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.3.11579264" > /dev/null 2>&1 || \
+          yes | sdkmanager "ndk;26.3.11579264" > /dev/null 2>&1
+          ls "$ANDROID_HOME/ndk"
+
+      - name: 📦 Install meson/ninja
+        run: |
+          sudo apt update
+          sudo apt install -y python3 python3-pip
+          pip3 install --break-system-packages meson ninja || pip3 install meson ninja
+          meson --version && ninja --version
+
+      - name: 🔺 Build Turnip (android platform)
+        run: |
+          chmod +x mesa/build-turnip-android.sh
+          MESA_VERSION="$MESA_VERSION" API="$TURNIP_API" \
+            NDK="$ANDROID_HOME/ndk/26.3.11579264" WORK="$HOME/mesa-build" \
+            ./mesa/build-turnip-android.sh
+
+      - name: 🔍 Verify output
+        run: |
+          ls -lh "$HOME/mesa-build/out/"
+          test -f "$HOME/mesa-build/out/libvulkan_freedreno.so" || { echo "✗ 缺 libvulkan_freedreno.so"; exit 1; }
+          strings "$HOME/mesa-build/out/libvulkan_freedreno.so" | \
+            grep -q "VK_ANDROID_external_memory_android_hardware_buffer" && \
+            echo "✓ AHB 扩展已编入" || { echo "✗ 未发现 AHB 扩展字符串"; exit 1; }
+
+      - name: 📤 Upload Turnip ICD
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-android-${{ env.MESA_VERSION }}-${{ github.run_number }}
+          path: /home/runner/mesa-build/out/
+          if-no-files-found: error
+          retention-days: 30
