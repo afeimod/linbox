@@ -1,0 +1,83 @@
+name: LinBox DAC Turnip ICD
+
+# ============================================================================
+# 构建 platforms=android 的 Mesa Turnip（Adreno Vulkan ICD，含 AHB 扩展）
+# 产物：libvulkan_freedreno.so + freedreno_icd.aarch64.json
+#   部署到 $PREFIX/lib 与 $PREFIX/share/vulkan/icd.d/ 后，
+#   DXVK 经 VK_ICD_FILENAMES 发现 → DAC 的 DXVK → AHB 直合路径可用
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_version:
+        description: "Mesa 版本"
+        required: true
+        default: "24.0.9"
+        type: string
+      api_level:
+        description: "Android API 级别（AHB≥26，KGSL 建议 29）"
+        required: true
+        default: "29"
+        type: string
+
+concurrency:
+  group: dac-turnip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  turnip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: ☕ Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============ NDK（mesa 交叉工具链） ============
+      - name: 🔬 Install NDK 26.3.11579264
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.3.11579264" > /dev/null 2>&1 || \
+          yes | sdkmanager "ndk;26.3.11579264" > /dev/null 2>&1
+          ls "$ANDROID_HOME/ndk"
+
+      - name: 📦 Install meson/ninja
+        run: |
+          sudo apt update
+          sudo apt install -y python3 python3-pip
+          pip3 install --break-system-packages meson ninja || pip3 install meson ninja
+          meson --version && ninja --version
+
+      # ============ 构建（mesa/build-turnip-android.sh：meson cross + ninja） ============
+      - name: 🔺 Build Turnip (android platform)
+        run: |
+          chmod +x mesa/build-turnip-android.sh
+          MESA_VERSION=${{ github.event.inputs.mesa_version }} \
+          API=${{ github.event.inputs.api_level }} \
+          NDK="$ANDROID_HOME/ndk/26.3.11579264" \
+          WORK="$HOME/mesa-build" \
+          ./mesa/build-turnip-android.sh
+
+      - name: 🔍 Verify output
+        run: |
+          ls -lh "$HOME/mesa-build/out/"
+          test -f "$HOME/mesa-build/out/libvulkan_freedreno.so" || { echo "✗ 缺 libvulkan_freedreno.so"; exit 1; }
+          # 确认 AHB 扩展已编入（字符串存在于 so）
+          strings "$HOME/mesa-build/out/libvulkan_freedreno.so" | \
+            grep -q "VK_ANDROID_external_memory_android_hardware_buffer" && \
+            echo "✓ AHB 扩展已编入" || { echo "✗ 未发现 AHB 扩展字符串"; exit 1; }
+
+      - name: 📤 Upload Turnip ICD
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-android-${{ github.event.inputs.mesa_version }}-${{ github.run_number }}
+          path: /home/runner/mesa-build/out/
+          if-no-files-found: error
+          retention-days: 30

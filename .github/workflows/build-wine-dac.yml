@@ -1,0 +1,97 @@
+name: LinBox DAC Wine (winedac.drv)
+
+# ============================================================================
+# 构建集成 winedac.drv 的 Wine 9.2（DAC 显示驱动）
+# 产物：wine-dac-<ver>-x86_64.tar.xz（LinBox 终端内 box64/grun 运行）
+# 手动触发：Actions → LinBox DAC Wine → Run workflow
+# 可选输入：APPLY_LINBOX_PATCHES=1 会同时应用 path/ 的 esync/mfplat 补丁
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_version:
+        description: "Wine 版本"
+        required: true
+        default: "9.2"
+        type: string
+      apply_linbox_patches:
+        description: "应用 LinBox path/ 补丁（esync/mfplat 等）"
+        required: true
+        default: true
+        type: boolean
+      target:
+        description: "构建目标"
+        required: true
+        type: choice
+        default: "x86_64-linux"
+        options:
+          - x86_64-linux
+          - aarch64-glibc
+
+concurrency:
+  group: dac-wine-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wine-dac:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # ============ 构建依赖（x86_64 原生 wine + mingw PE 交叉） ============
+      - name: 📦 Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-broken \
+            build-essential gcc-multilib g++-multilib \
+            mingw-w64 \
+            flex bison \
+            libfreetype-dev libfontconfig1-dev \
+            libvulkan-dev \
+            autoconf gettext perl wget xz-utils pkg-config
+          # 交叉工具确认
+          which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
+
+      # ============ 构建（wine/build_wine_dac.sh：注入 winedac.drv + 编译 + 打包） ============
+      - name: 🍷 Build Wine + winedac.drv
+        run: |
+          chmod +x wine/build_wine_dac.sh
+          APPLY_LINBOX_PATCHES=${{ github.event.inputs.apply_linbox_patches && '1' || '0' }} \
+          TARGET=${{ github.event.inputs.target }} \
+          WINE_VERSION=${{ github.event.inputs.wine_version }} \
+          JOBS=$(nproc) \
+          ./wine/build_wine_dac.sh
+
+      # ============ 产物自检 ============
+      - name: 🔍 Verify build output
+        run: |
+          ls -lh "$HOME/build_wine_dac/dist/"
+          tb=$(ls "$HOME/build_wine_dac/dist/"*.tar.xz | head -1)
+          echo "tarball: $tb"
+          tar -tJf "$tb" | grep -E "bin/wine$|winedac.so" && \
+            echo "✓ winedac.so 已包含" || { echo "✗ 缺 winedac.so"; exit 1; }
+
+      - name: 📤 Upload Wine-DAC tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dac-${{ github.event.inputs.wine_version }}-${{ github.run_number }}
+          path: |
+            /home/runner/build_wine_dac/dist/*.tar.xz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo "## LinBox DAC Wine" >> $GITHUB_STEP_SUMMARY
+          echo "| 项 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Wine | ${{ github.event.inputs.wine_version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target | ${{ github.event.inputs.target }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| path/ patches | ${{ github.event.inputs.apply_linbox_patches }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY

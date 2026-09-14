@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# ============================================================
+# build_wine_dac.sh — 构建 + 集成 winedac.drv 的 Wine
+# ============================================================
+# 基于 LinBox path/build_wine.sh（Kron4ek Wine-Builds 模板），追加：
+#   1. 可选应用 LinBox path/ 现有补丁（esync / mfplat / termux-wine-fix）
+#   2. 应用 wine/patches/0001-configure-ac-add-winedac.drv.patch
+#   3. 把 wine/dlls/winedac.drv/ 整树拷入 wine 源码
+#   4. 常规构建 + 打包 tarball
+#
+# 运行时目标说明：
+#   LinBox 终端在 aarch64 设备上经 box64/grun 运行 **x86_64 glibc Linux**
+#   版 wine（与官方 Kron4ek tarball 一致）。winedac.drv 的 AHB 分配在该
+#   模式下走 dac_allocd 侧车（arm64 bionic，由 APK 安装到 $PREFIX/bin），
+#   CPU 位图槽位经 fd mmap 直接写入 —— 因此默认构建 TARGET=x86_64-linux。
+#
+# 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
+#   ./build_wine_dac.sh                              # 默认 x86_64-linux
+#   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
+#   WINE_VERSION=9.2 WINE_BRANCH=vanilla ./build_wine_dac.sh
+#
+# 产物：$BUILD_DIR/dist/wine-dac-<ver>-<target>.tar.xz
+# ============================================================
+set -e
+
+WINE_VERSION="${WINE_VERSION:-9.2}"
+WINE_BRANCH="${WINE_BRANCH:-vanilla}"
+TARGET="${TARGET:-x86_64-linux}"
+APPLY_LINBOX_PATCHES="${APPLY_LINBOX_PATCHES:-0}"
+BUILD_DIR="${BUILD_DIR:-$HOME/build_wine_dac}"
+JOBS="${JOBS:-$(nproc)}"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+LINBOX_ROOT="$(dirname "$SCRIPT_DIR")"            # 仓库根（含 path/）
+DAC_SRC="$SCRIPT_DIR/dlls/winedac.drv"
+DAC_PATCH="$SCRIPT_DIR/patches/0001-configure-ac-add-winedac.drv.patch"
+
+echo ">> Wine $WINE_VERSION ($WINE_BRANCH) → TARGET=$TARGET"
+
+# ---- 1. 下载/准备 wine 源码 ----
+rm -rf "$BUILD_DIR/wine" "$BUILD_DIR/build" "$BUILD_DIR/build-aarch64"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+URL_VER="$(echo "$WINE_VERSION" | cut -d. -f1).x"
+if [ ! -d wine ]; then
+    wget -q --show-progress "https://dl.winehq.org/wine/source/${URL_VER}/wine-${WINE_VERSION}.tar.xz"
+    tar xf "wine-${WINE_VERSION}.tar.xz"
+    mv "wine-${WINE_VERSION}" wine
+fi
+
+# staging（可选）
+if [ "$WINE_BRANCH" = "staging" ]; then
+    wget -q "https://github.com/wine-staging/wine-staging/archive/v${WINE_VERSION}.tar.gz"
+    tar xf "v${WINE_VERSION}.tar.gz"
+    ( cd wine && ../wine-staging-"${WINE_VERSION}"/patches/patchinstall.sh DESTDIR="$(pwd)" --all )
+fi
+
+# ---- 2. 可选：LinBox path/ 现有补丁（esync、mfplat、termux-wine-fix…） ----
+if [ "$APPLY_LINBOX_PATCHES" = "1" ] && [ -d "$LINBOX_ROOT/path" ]; then
+    echo ">> 应用 LinBox path/ 补丁 ..."
+    for p in "$LINBOX_ROOT"/path/*.patch; do
+        [ -e "$p" ] || continue
+        echo "   - $(basename "$p")"
+        if ! ( cd wine && patch -Np1 --forward < "$p" ); then
+            echo "   ⚠ 补丁应用失败（可能已含等价改动）：$(basename "$p")"
+            ( cd wine && patch -Np1 -R --dry-run < "$p" >/dev/null 2>&1 ) \
+                && echo "     （反向可退出 → 视为已应用，继续）" \
+                || { echo "     ✗ 与上游冲突；APPLY_LINBOX_PATCHES=0 可跳过"; exit 1; }
+        fi
+    done
+fi
+
+# ---- 3. 注入 DAC 驱动 ----
+echo ">> 注入 winedac.drv ..."
+( cd wine && patch -Np1 --forward < "$DAC_PATCH" )
+rm -rf wine/dlls/winedac.drv
+cp -r "$DAC_SRC" wine/dlls/winedac.drv
+echo ">> winedac.drv 注入完成"
+
+# ---- 4. 生成器 + autoreconf ----
+( cd wine && dlls/winevulkan/make_vulkan && tools/make_requests && tools/make_specfiles && autoreconf -f )
+
+# ---- 5. 构建参数（跳过 X11/桌面栈 —— DAC 替代其显示职责） ----
+CONFIGURE_OPTS="
+    --without-x --without-wayland --without-oss --without-cups
+    --without-gphoto --without-pcsclite --without-sane --without-v4l2
+    --without-xinerama --disable-tests
+"
+
+if [ "$TARGET" = "x86_64-linux" ]; then
+    # 原生 x86_64 构建：unix 侧 x86_64 + PE 侧 i386/x86_64（gcc-multilib）
+    # 设备端经 box64（x86_64 模拟）运行，AHB 走 dac_allocd 侧车。
+    OUT="wine-dac-${WINE_VERSION}-x86_64"
+    ( cd wine && ./configure --prefix="$BUILD_DIR/out/$OUT" $CONFIGURE_OPTS )
+    make -C wine -j"$JOBS"
+    make -C wine install
+
+elif [ "$TARGET" = "aarch64-glibc" ]; then
+    # aarch64 glibc 交叉构建（grun 直接跑 arm64 wine；PE 经 wow64 → 需
+    # 先本机构建 host tools，再以 --with-wine-tools 交叉）。
+    OUT="wine-dac-${WINE_VERSION}-aarch64"
+    if [ ! -d "$BUILD_DIR/tools" ]; then
+        echo ">> 构建 host tools（本机 gcc）..."
+        mkdir -p "$BUILD_DIR/tools" && cd "$BUILD_DIR/tools"
+        "$BUILD_DIR/wine/configure" $CONFIGURE_OPTS \
+            && make -j"$JOBS" __tooldeps__ libs/wine
+        cd "$BUILD_DIR"
+    fi
+    mkdir -p "$BUILD_DIR/build-aarch64" && cd "$BUILD_DIR/build-aarch64"
+    CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+    CFLAGS="-O3 -fomit-frame-pointer" CXXFLAGS="-O3 -fomit-frame-pointer" \
+    CROSSCC=x86_64-w64-mingw32-gcc \
+    "$BUILD_DIR/wine/configure" \
+        --with-wine-tools="$BUILD_DIR/tools" \
+        --enable-archs=i386,x86_64 \
+        --prefix="$BUILD_DIR/out/$OUT" \
+        $CONFIGURE_OPTS
+    make -j"$JOBS"
+    make install
+else
+    echo "未知 TARGET=$TARGET（支持 x86_64-linux | aarch64-glibc）"; exit 1
+fi
+
+# ---- 6. 打包 ----
+mkdir -p "$BUILD_DIR/dist"
+( cd "$BUILD_DIR/out" && tar -cJf "$BUILD_DIR/dist/${OUT}.tar.xz" "$OUT" )
+echo "=============================================="
+echo " 完成: $BUILD_DIR/dist/${OUT}.tar.xz"
+echo " 部署（LinBox 终端内）:"
+echo "   tar -xJf ${OUT}.tar.xz -C \$HOME"
+echo "   \$HOME/$OUT/bin/wine explorer /desktop=dac,1280x720 game.exe"
+echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
+echo "=============================================="

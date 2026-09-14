@@ -1,0 +1,9 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# linbox-dac-stop — 关闭 DAC 显示窗口与侧车
+am broadcast -a com.linbox.action.DAC_STOP >/dev/null 2>&1 || true
+if [ -f "$PREFIX/tmp/linbox-dac-allocd.pid" ]; then
+    kill "$(cat "$PREFIX/tmp/linbox-dac-allocd.pid")" 2>/dev/null
+    rm -f "$PREFIX/tmp/linbox-dac-allocd.pid" "$PREFIX/tmp/linbox-dac-allocd.sock"
+fi
+rm -f "${PREFIX:-/data/data/com.linbox/files/usr}/tmp/linbox-dac.sock"
+echo "[linbox-dac-stop] 已停止"

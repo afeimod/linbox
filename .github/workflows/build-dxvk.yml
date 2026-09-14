@@ -1,0 +1,63 @@
+name: LinBox DAC DXVK
+
+# ============================================================================
+# 构建 DXVK（d3d9/d3d10/d3d11 → Vulkan，DAC 路径无需补丁）
+# 产物：dxvk-<ver>/{x64,x86}/*.dll（部署到 wine prefix 的 system32/syswow64）
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      dxvk_version:
+        description: "DXVK 版本 tag"
+        required: true
+        default: "2.4"
+        type: string
+
+concurrency:
+  group: dac-dxvk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dxvk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 📦 Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y --fix-broken \
+            git python3 python3-pip \
+            g++-mingw-w64-x86-64 g++-mingw-w64-i686 \
+            glslang-tools ninja-build
+          pip3 install --break-system-packages meson || pip3 install meson
+          meson --version
+
+      # ============ 构建（DEPLOY=0 只构建，产物在 $HOME/dxvk-build/out） ============
+      - name: 🎮 Build DXVK
+        run: |
+          chmod +x dxvk/build-dxvk.sh
+          DXVK_VERSION=${{ github.event.inputs.dxvk_version }} \
+          DEPLOY=0 \
+          WORK="$HOME/dxvk-build" \
+          ./dxvk/build-dxvk.sh
+
+      - name: 🔍 Verify output
+        run: |
+          out="$HOME/dxvk-build/out/dxvk-${{ github.event.inputs.dxvk_version }}"
+          ls -lh "$out"
+          test -f "$out/x64/d3d11.dll" || { echo "✗ 缺 x64/d3d11.dll"; exit 1; }
+          test -f "$out/x86/d3d11.dll" || { echo "✗ 缺 x86/d3d11.dll"; exit 1; }
+          echo "✓ DXVK x64/x86 DLL 齐备"
+
+      - name: 📤 Upload DXVK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-${{ github.event.inputs.dxvk_version }}-${{ github.run_number }}
+          path: /home/runner/dxvk-build/out/dxvk-*/
+          if-no-files-found: error
+          retention-days: 30

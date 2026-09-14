@@ -1,0 +1,12 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# linbox-dac-unreg — 还原图形驱动为 x11
+for prefix in "${WINEPREFIX:-$HOME/.wine}"; do
+    [ -d "$prefix" ] || continue
+    if command -v wine >/dev/null 2>&1; then
+        wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d x11 /f
+    elif [ -f "$prefix/user.reg" ]; then
+        sed -i '/^\[Software\\\\Wine\\\\Drivers\]/,/^\[/ s/^"Graphics"="dac"/"Graphics"="x11"/' \
+            "$prefix/user.reg"
+    fi
+    echo "[linbox-dac-unreg] $prefix → Graphics=x11"
+done

@@ -1,0 +1,20 @@
+MODULE    = winedac.drv
+UNIXLIB   = winedac.so
+IMPORTS   = user32 gdi32 win32u
+UNIX_LIBS = -lwin32u $(PTHREAD_LIBS) -lm
+UNIX_CFLAGS = $(LINBOX_DAC_CFLAGS)
+
+SOURCES = \
+	dac.h \
+	dacdrv.h \
+	dllmain.c \
+	init.c \
+	keyboard.c \
+	platform.c \
+	protocol.c \
+	version.rc \
+	vulkan.c \
+	window.c \
+	winedac_dll.h \
+	unixlib.h \
+	winedac.drv.spec

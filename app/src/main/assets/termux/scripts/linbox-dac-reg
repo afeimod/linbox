@@ -1,0 +1,61 @@
+#!/data/data/com.linbox/files/usr/bin/sh
+# ============================================================
+# linbox-dac-reg — 注册 winedac.drv 为 wine 图形驱动
+# 用法: linbox-dac-reg [宽] [高]   （宽高供 winboot 前缀初始化提示，可选）
+# ============================================================
+# 机制：wine 按 HKCU\Software\Wine\Drivers 的 "Graphics" 值选择驱动，
+# 值为 "dac" 时加载 winedac.drv（与 x11→winex11.drv 同机制）。
+# 直接改 user.reg 无需启动 wine，幂等安全。
+# ============================================================
+
+WINEPREFIXES="${WINEPREFIX:-$HOME/.wine}"
+
+reg_file() {
+    # 定位 user.reg（各 prefix 布局兼容）
+    echo "$1/system.reg"  # 注册在 system.reg 与 user.reg 均可，HKCU 写 user.reg
+}
+
+for prefix in "$WINEPREFIXES"; do
+    [ -d "$prefix" ] || continue
+    USER_REG="$prefix/user.reg"
+    [ -f "$USER_REG" ] || continue
+
+    # 幂等移除旧值后写入
+    sed -i '/^\[Software\\\\Wine\\\\Drivers\]/,/^\[/ { /^"Graphics"=/d; }' "$USER_REG" 2>/dev/null
+
+    if grep -q '^\[Software\\\\Wine\\\\Drivers\]' "$USER_REG"; then
+        # 键已存在：在该键段落内追加
+        awk -v ins='"Graphics"="dac"' '
+            $0 ~ /^\[Software\\\\Wine\\\\Drivers\]/ { print; inkey=1; getline_nl=1; next }
+            inkey && /^\[/ { print "[Software\\\\Wine\\\\DriversXXX_PLACEHOLDER]"; inkey=0 }
+            { print }
+        ' "$USER_REG" > "$USER_REG.tmp" 2>/dev/null || {
+            echo "[linbox-dac-reg] awk 处理失败，回退追加方式" >&2
+        }
+    fi
+
+    # 简化实现：直接以 wine reg 写（若 wine 可用），否则 user.reg 追加
+    if command -v wine >/dev/null 2>&1 || command -v wine64 >/dev/null 2>&1; then
+        if command -v grun >/dev/null 2>&1 && [ "$LINBOX_DAC_USE_GRUN" = "1" ]; then
+            grun wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d dac /f
+        else
+            wine reg add "HKCU\\Software\\Wine\\Drivers" /v Graphics /t REG_SZ /d dac /f
+        fi
+        echo "[linbox-dac-reg] 已通过 wine reg 设置 Graphics=dac (prefix: $prefix)"
+        exit 0
+    fi
+
+    # wine 不可用：user.reg 文本追加（wineboot 下次启动生效）
+    if ! grep -q '^\[Software\\\\Wine\\\\Drivers\]' "$USER_REG"; then
+        printf '\n[Software\\Wine\\Drivers]\n"Graphics"="dac"\n' >> "$USER_REG"
+        echo "[linbox-dac-reg] 已写入 $USER_REG (Graphics=dac)"
+    else
+        # 键已存在 → sed 追加值行
+        sed -i '/^\[Software\\\\Wine\\\\Drivers\]/{n;a\
+"Graphics"="dac"
+}' "$USER_REG"
+        echo "[linbox-dac-reg] 已更新 $USER_REG (Graphics=dac)"
+    fi
+done
+
+echo "[linbox-dac-reg] 完成"
