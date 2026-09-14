@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.AttributeSet
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -1141,9 +1142,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
  * - 落点在手柄 UI 内（[GamepadController.isOverPadUi]：元素 ∪ 迷你工具条）
  *   = 手柄指针 → 手柄流（gamepadHost 自收，摇杆/按键/工具条自理）
  * - 否则 = 屏幕指针 → 屏幕流（[LorieView.dispatchTouchEvent] 直达桥）
- * 两条流同时活跃时用 [MotionEvent.split] 逐流拆分派发（系统级子事件拆分，
- * 自动重映射 action：新指落在另一流时本流子事件自动降级 MOVE），与按下
- * 顺序完全无关。抬起（POINTER_UP/UP/CANCEL）按抬起指针的归属精确派发到
+ * 两条流同时活跃时逐流拆分派发（splitFor：MotionEvent.split(int) 在公开
+ * SDK 不可见，按其内部语义手写等价实现 —— 自动重映射 action：新指落在
+ * 另一流时本流子事件自动降级 MOVE），与按下顺序完全无关。抬起（POINTER_UP/UP/CANCEL）按抬起指针的归属精确派发到
  * 所在流的宿主，双宿主各自收尾自己的手势。桥侧 filterPadPointers 保留为
  * 兜底：手柄关闭/命中区未布局的直通路径、以及宿主不可用的退路中，手柄
  * 指针漏进 LorieView 时仍被剥离（v2.31 语义不变）。
@@ -1270,8 +1271,8 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
                 else super.dispatchTouchEvent(event)
             else -> {
                 // 混合流（按住手柄同时滑动屏幕）：逐流拆分派发。
-                // MotionEvent.split 自动处理 action 重映射：如"手柄先按、
-                // 屏幕后按"时手柄流的子事件由 POINTER_DOWN 降级 MOVE、
+                // splitFor（手写 split 等价）处理 action 重映射：如"手柄先
+                // 按、屏幕后按"时手柄流的子事件由 POINTER_DOWN 降级 MOVE、
                 // 屏幕流保持 POINTER_DOWN —— 两流各自为完整手势。
                 var handled = false
                 splitFor(event, padIds)?.let { sub ->
@@ -1307,14 +1308,51 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
         if (si >= 0) screenIds.removeAt(si)
     }
 
+    // ---- 子事件拆分（MotionEvent.split 语义的手写等价实现）----
+    // MotionEvent.split(int) 在公开 SDK 不可见（CI compileReleaseKotlin
+    // "Unresolved reference" 实证），按 Android 内部 split 逻辑等价复刻：
+    // 提取保留指针子集（保持事件内相对顺序）+ POINTER_DOWN/UP 的 action
+    // 重映射 —— 关联指针在保留集则保持动作并重映射 actionIndex，否则
+    // 降级 MOVE；DOWN/UP/CANCEL 原样保留（调用点仅 MOVE/POINTER_DOWN/
+    // POINTER_UP 到此）。属性/坐标数组全复用，零每事件分配。
+
+    /** 子事件属性数组（dispatchTouchEvent 仅 UI 线程访问，无需同步） */
+    private val splitProps = Array(10) { MotionEvent.PointerProperties() }
+
+    /** 子事件坐标数组 */
+    private val splitCoords = Array(10) { MotionEvent.PointerCoords() }
+
+    /** 保留指针的原始索引暂存（与 splitProps/splitCoords 一一对应） */
+    private val splitIdx = IntArray(10)
+
     /** 构造只保留 ids 中指针的子事件；ids 与事件无交集时返回 null */
     private fun splitFor(event: MotionEvent, ids: List<Int>): MotionEvent? {
-        var bitset = 0
+        var count = 0
+        var actionPos = -1
+        val aIdx = event.actionIndex
         for (i in 0 until event.pointerCount) {
-            val id = event.getPointerId(i)
-            if (ids.contains(id)) bitset = bitset or (1 shl id)
+            if (!ids.contains(event.getPointerId(i))) continue
+            if (count >= splitIdx.size) break
+            if (i == aIdx) actionPos = count
+            splitIdx[count++] = i
         }
-        if (bitset == 0) return null
-        return event.split(bitset)
+        if (count == 0) return null
+
+        var action = event.actionMasked
+        if (action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_POINTER_UP) {
+            action = if (actionPos >= 0)
+                action or (actionPos shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+            else MotionEvent.ACTION_MOVE
+        }
+        for (j in 0 until count) {
+            event.getPointerProperties(splitIdx[j], splitProps[j])
+            event.getPointerCoords(splitIdx[j], splitCoords[j])
+        }
+        return MotionEvent.obtain(
+            event.downTime, event.eventTime, action, count,
+            splitProps, splitCoords, event.metaState, event.buttonState,
+            event.xPrecision, event.yPrecision, event.deviceId, event.edgeFlags,
+            event.source, event.flags
+        )
     }
 }
