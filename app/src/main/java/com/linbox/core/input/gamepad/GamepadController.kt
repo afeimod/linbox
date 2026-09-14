@@ -428,14 +428,20 @@ object GamepadController {
      * v2.33：X11 路由的左/中/右键改由 pressMouseButton/releaseMouseButton
      * 状态对账（本函数仅保留滚轮即时派发与浏览器 WebView 路径），
      * 避免"按下即发出 press+release"双事件被 X 侧按钮状态机丢弃的风险。
+     * v2.33.1：X11 滚轮路由入队桥的输入线程（与触摸/按键 FIFO 保序，
+     * 消除主线程 socket 直写 —— 滑屏掉帧的次要阻塞源）。
      */
     fun dispatchMouse(mouseCode: Int) {
         val wv = targetWebView?.get()
         if (wv == null) {
             // X11 路由：滚轮即时派发（按键类改走 v2.33 状态对账）
             when (mouseCode) {
-                PadAction.MOUSE_SCROLL_UP -> com.termux.x11.X11InputHub.forwardWheel(-120f)
-                PadAction.MOUSE_SCROLL_DOWN -> com.termux.x11.X11InputHub.forwardWheel(120f)
+                PadAction.MOUSE_SCROLL_UP -> com.linbox.apps.x11.SmartTouchBridge.postX11Input {
+                    com.termux.x11.X11InputHub.forwardWheel(-120f)
+                }
+                PadAction.MOUSE_SCROLL_DOWN -> com.linbox.apps.x11.SmartTouchBridge.postX11Input {
+                    com.termux.x11.X11InputHub.forwardWheel(120f)
+                }
             }
             return
         }
@@ -496,11 +502,14 @@ object GamepadController {
     // ============================================================
 
     // ---- v2.33 鼠标键状态对账（press/hold/release）----
-    // 旧实现：按下瞬间同步发 press+release（瞬时 click）—— 两次直写间
-    // 无任何状态记录，一旦 X 侧按钮状态异常（重复按下被 dix 丢弃）
-    // 点击就永久失灵且无自愈路径。改为与键盘同款的按下/抬起对账：
-    // 点按=完整点击，按住=持续按下（FPS 开火），且 X11InputHub 通道
-    // 语义与 SmartTouchBridge.sendButton 完全同参。
+    // 旧实现：按下瞬间同步发 press+release（无状态记录，X 侧状态异常即永久失灵且无自愈）
+    // → 改为与键盘同款对账：pressMouseButton/releaseMouseButton
+    // （pressedMouseButtons 集合，防重复按下/多余 UP），点按=完整点击、
+    // 按住=持续按下（FPS 开火新能力）；releaseAllKeys 集成
+    // releaseAllMouseButtons；dispatchMouse X11 分支仅保留滚轮即时派发，
+    // WebView 路径保持原 JS 语义。
+    // v2.33.1：X11 按键路由入队桥的输入线程（与触摸/按键 FIFO 保序，
+    // X 输入 socket 单写者模型；无桥时同步执行原路径）。
     private val pressedMouseButtons = HashSet<Int>()
 
     /** PadAction 鼠标键码 → InputStub 按钮码；非按键类返回 null（滚轮） */
@@ -516,7 +525,9 @@ object GamepadController {
         val btn = mouseStubButton(actionCode) ?: return false
         if (targetWebView?.get() != null) return false // 浏览器目标保持原 JS 路径
         if (!pressedMouseButtons.add(actionCode)) return true // 已按下：防重复
-        com.termux.x11.X11InputHub.forwardMouseButton(btn, true)
+        com.linbox.apps.x11.SmartTouchBridge.postX11Input {
+            com.termux.x11.X11InputHub.forwardMouseButton(btn, true)
+        }
         return true
     }
 
@@ -524,7 +535,9 @@ object GamepadController {
     fun releaseMouseButton(actionCode: Int) {
         val btn = mouseStubButton(actionCode) ?: return
         if (!pressedMouseButtons.remove(actionCode)) return
-        com.termux.x11.X11InputHub.forwardMouseButton(btn, false)
+        com.linbox.apps.x11.SmartTouchBridge.postX11Input {
+            com.termux.x11.X11InputHub.forwardMouseButton(btn, false)
+        }
     }
 
     /** 一键释放全部按下的鼠标键（隐藏手柄/离开界面/打开设置时调用） */

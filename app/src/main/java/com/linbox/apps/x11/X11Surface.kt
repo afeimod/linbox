@@ -560,6 +560,20 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             val p = LoriePreferences.prefs ?: return
             activeBridge?.reloadTouchPrefs(p)
         }
+
+        /**
+         * v2.33.1：桥外输入注入（虚拟手柄鼠标键/滚轮等）统一投递到桥的
+         * 专用输入线程 —— 与触摸/按键/滚轮 FIFO 保序，且 X 输入 socket
+         * 回到"单写者"模型（此前手柄键主线程直写、桥内 motion 后台写，
+         * 两个线程并发写同一 socket：wine 满载时主线程写被缓冲顶住的
+         * 概率与触摸流量成正比，是滑屏掉帧的次要阻塞源）。
+         * 无活跃桥（终端/浏览器界面）时同步执行原路径（无 X11 目标时
+         * X11InputHub 内部安全返回 false，行为与旧版一致）。
+         */
+        fun postX11Input(block: () -> Unit) {
+            val b = activeBridge
+            if (b != null) b.postSend(block) else block()
+        }
     }
 
     // 触摸偏好（termux-x11：touchMode / scaleTouchpad / tapToMove）
@@ -610,6 +624,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var downAt = 0L
     private var moved = false
     private var curX = 0f; private var curY = 0f
+    // v2.33.1：本手势 tap 落点（X 坐标）—— 按下与释放共用同一条 absolute
+    // 坐标（释放零位移）；双击吸附记录同一落点（吸附语义对齐按下瞬间）
+    private var tapX = 0f; private var tapY = 0f
 
     // 双指
     private var twoStartAt = 0L
@@ -638,6 +655,33 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private val flushHandler = Handler(flushThread.looper)
     private val flushRunnable = Runnable { flushPendingMoves() }
 
+    /**
+     * v2.33.1（滑屏掉帧根修 —— 主线程解耦）：所有 X 输入 socket 写统一
+     * 投递到专用输入线程（与 motion 冲刷同线程 FIFO 保序）。
+     *
+     * 背景：v2.30.1 起三轮"事件量"优化（合并器/快照/清理风暴根治）均未
+     * 消除滑屏掉帧 —— 证明瓶颈不是事件量，而是阻塞源：手势边界冲刷
+     * （flushPendingMoves/flushDirectMoves 的同步调用）、tap 按键、双指
+     * 滚轮、TouchEnd 收尾全部在主线程直写 X socket。sendMouseEvent/
+     * sendTouchEvent 是 @FastNative 的 socket 直写 —— wine/桌面满载时
+     * X server 输入线程消费变慢，socket 缓冲顶住后主线程 write 阻塞，
+     * Choreographer 跳帧 = 掉帧（用户场景："只要滑动屏幕就严重掉帧"）。
+     *
+     * 修复后主线程触摸路径 100% 零 socket I/O：DOWN/UP/MOVE/滚轮/触摸
+     * 边界只入队（Handler.post 微秒级），真实写全部发生在输入线程；
+     * FIFO 顺序保证按下→移动→抬起时序与主线程手势时序一致（LorieView
+     * native 侧线程安全，单写者模型下无并发问题）。输入线程被 X server
+     * 短暂拖慢时事件排队但不丢（总量守恒），UI 帧率与 X 负载彻底解耦。
+     */
+    private fun postSend(block: () -> Unit) {
+        flushHandler.post(block)
+    }
+
+    /** v2.33.1：主线程手势收尾改为异步冲刷（FIFO 保证先于后续按钮释放执行） */
+    private fun postFlushMoves() {
+        flushHandler.post { flushPendingMoves() }
+    }
+
     private fun accumulateMove(dx: Float, dy: Float) {
         if (dx == 0f && dy == 0f) return
         synchronized(pendLock) {
@@ -650,7 +694,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         }
     }
 
-    /** 后台线程周期调用；主线程手势结束时也同步调用（保证移动→抬键时序）。 */
+    /** 输入线程执行（冲刷定时器/手势收尾的异步冲刷任务）；排空增量总量精确守恒。 */
     private fun flushPendingMoves() {
         flushHandler.removeCallbacks(flushRunnable)
         flushPending = false
@@ -705,11 +749,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         dtFlushPending = false
         // v2.33：分离前补发孤儿按钮释放 + 冲掉可能遗留的 X 侧活跃触摸
         //（下一会话重建桥时 healOrphanButtons 会再次自愈，双保险）
+        // v2.33.1：入队输入线程（FIFO 在任何排队中的旧事件之后收尾）
         if (LorieView.connected()) {
-            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
-            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
-            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
-            closeAllTouches()
+            postSend {
+                view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
+                view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
+                view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
+                for (id in 0..9) view.sendTouchEvent(XI_TOUCH_END, id, 0, 0)
+            }
         }
         trackedPadIds.clear()
         view.removeOnLayoutChangeListener(viewWinPosWatcher)
@@ -864,13 +911,23 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     }
 
     private fun sendMoveX(x: Int, y: Int) {
-        view.sendMouseEvent(x.toFloat(), y.toFloat(), InputStub.BUTTON_UNDEFINED, false, false)
+        // v2.33.1：入队输入线程（绝对定位 motion，主线程零 socket I/O）
+        val xf = x.toFloat()
+        val yf = y.toFloat()
+        postSend {
+            if (LorieView.connected())
+                view.sendMouseEvent(xf, yf, InputStub.BUTTON_UNDEFINED, false, false)
+        }
     }
 
     private fun sendButton(button: Int, down: Boolean) {
         // (0,0)+relative = 纯按键事件（在当前指针位置按下/抬起），
         // 与 InputDeviceManager 的注入路径完全一致。
-        view.sendMouseEvent(0f, 0f, button, down, true)
+        // v2.33.1：入队输入线程（与 motion 冲刷 FIFO 保序，主线程零阻塞）
+        postSend {
+            if (LorieView.connected())
+                view.sendMouseEvent(0f, 0f, button, down, true)
+        }
     }
 
     // ---- v2.33 点击可靠性自愈（用户实测 v2.32.2：左右键/点击全失灵）----
@@ -899,9 +956,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         if (!LorieView.connected()) return
         healDone = true
         diagHeals++
-        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
-        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
-        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
+        // v2.33.1：入队输入线程（FIFO 先于本手势的按下事件执行）
+        postSend {
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
+        }
     }
 
     /** 新手势起点归位悬挂按压：卡键自愈 + 重复按下防抖（X 侧会被丢弃的按下不再发出） */
@@ -920,8 +980,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
     /** 冲掉 0..9 号触摸的 X 侧活跃状态（解除触摸仿真按钮 1 的永久卡按） */
     private fun closeAllTouches() {
-        if (!LorieView.connected()) return
-        for (id in 0..9) view.sendTouchEvent(XI_TOUCH_END, id, 0, 0)
+        // v2.33.1：入队输入线程（与后续触摸事件 FIFO 保序）
+        postSend {
+            if (LorieView.connected()) {
+                for (id in 0..9) view.sendTouchEvent(XI_TOUCH_END, id, 0, 0)
+            }
+        }
     }
 
     /** 输入诊断文本（X11 设置面板"输入诊断"只读展示） */
@@ -996,8 +1060,21 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 moved = false
                 diagDowns++
                 val p = snapPoint(downX, downY)
-                sendMoveX(p[0].toInt(), p[1].toInt())
-                sendButton(InputStub.BUTTON_LEFT, true)
+                // v2.33.1（tap 失灵根修）：定位 + 左键按下合并为单条
+                // absolute 按钮消息（对齐上游 TouchInputHandler simulated
+                // touchscreen 同款 sendMouseEvent(x, y, LEFT, true, false)）。
+                // 旧实现"absolute 移动（BUTTON_UNDEFINED）+ (0,0) relative
+                // 按钮"是混合序列 —— 手柄鼠标键（纯 relative 按钮）与滑屏
+                // （纯 relative 移动）均正常、唯独 tap 失灵（用户实测），
+                // 病灶即此混合序列；上游单消息语义经全球 wine 用户验证。
+                // 局部 val 捕获快照（post 执行时 tapX/tapY 已可被新手势改写）。
+                val px = p[0]
+                val py = p[1]
+                tapX = px; tapY = py
+                postSend {
+                    if (LorieView.connected())
+                        view.sendMouseEvent(px, py, InputStub.BUTTON_LEFT, true, false)
+                }
                 pressedLeft = true
             }
 
@@ -1005,7 +1082,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 if (mode == Mode.ONE && event.pointerCount >= 2) {
                     mode = Mode.TWO
                     // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
-                    flushPendingMoves()
+                    // v2.33.1：冲刷异步化（FIFO 先于后续事件）
+                    postFlushMoves()
                     twoStartAt = android.os.SystemClock.uptimeMillis()
                     twoMoved = false
                     scrollAccum = 0f
@@ -1027,9 +1105,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                         // 强拽到指尖位置 → 游戏读到巨大跳变（视角猛转）；指针被
                         // clamp 在屏幕边缘后不再变化（视角卡死"固定视角"）。
                         // 相对增量不受 warp 影响：桌面拖拽路径与手指一致，
-                        // 游戏视角真实旋转。按下瞬间仍绝对定位到指尖
-                        // （模拟触摸语义不变）；超出手抖阈值后先补齐
-                        // 按下点→当前点的首段增量，再逐帧跟随。
+                        // 游戏视角真实旋转。按下瞬间已随单消息 absolute 定位
+                        // 到指尖；超出手抖阈值后逐帧跟随。
                         // v2.30.1：改为累加进合并器，16ms 节流冲刷 —— 事件量
                         // 减半以上，消除 wine 游戏滑动掉帧；总量精确守恒。
                         if (!moved) {
@@ -1052,7 +1129,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                             scrollAccum += dy
                             if (kotlin.math.abs(scrollAccum) >= wheelStep) {
                                 val steps = (scrollAccum / wheelStep).toInt()
-                                view.sendMouseWheelEvent(0f, steps * wheelStep)
+                                // v2.33.1：滚轮入队输入线程（主线程零 socket I/O）
+                                val delta = steps * wheelStep
+                                postSend {
+                                    if (LorieView.connected())
+                                        view.sendMouseWheelEvent(0f, delta)
+                                }
                                 scrollAccum -= steps * wheelStep
                             }
                         }
@@ -1064,11 +1146,17 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             MotionEvent.ACTION_POINTER_UP -> {
                 if (mode == Mode.TWO) {
                     // 双指轻点（未滑动、时间短）→ 右键单击
+                    // v2.33.1：同样改单条 absolute 按钮消息（与单指 tap 同语义）
                     if (!twoMoved && android.os.SystemClock.uptimeMillis() - twoStartAt < 320L) {
                         val p = toXpx(curX, curY)
-                        sendMoveX(p[0].toInt(), p[1].toInt())
-                        sendButton(InputStub.BUTTON_RIGHT, true)
-                        sendButton(InputStub.BUTTON_RIGHT, false)
+                        val px = p[0]
+                        val py = p[1]
+                        postSend {
+                            if (LorieView.connected()) {
+                                view.sendMouseEvent(px, py, InputStub.BUTTON_RIGHT, true, false)
+                                view.sendMouseEvent(px, py, InputStub.BUTTON_RIGHT, false, false)
+                            }
+                        }
                     }
                     mode = Mode.TWO_DONE
                 }
@@ -1076,19 +1164,32 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
             MotionEvent.ACTION_UP -> {
                 // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）再抬键
+                // v2.33.1：冲刷异步化（FIFO 保证先于按钮释放写入 X）
                 diagUps++
                 if (pressedLeft) {
-                    flushPendingMoves()
-                    sendButton(InputStub.BUTTON_LEFT, false)
+                    postFlushMoves()
+                    if (!moved && mode == Mode.ONE) {
+                        // tap 释放：absolute 同位置（与按下点一致，零位移、零 warp）
+                        // 局部 val 快照（与按下消息同规则：post 执行时读快照）
+                        val rx = tapX
+                        val ry = tapY
+                        postSend {
+                            if (LorieView.connected())
+                                view.sendMouseEvent(rx, ry, InputStub.BUTTON_LEFT, false, false)
+                        }
+                    } else {
+                        // 拖拽/双指后释放：当前指针位置抬键（relative 0,0，
+                        // 不回 warp —— 拖拽中游戏 warp 循环不受扰动）
+                        sendButton(InputStub.BUTTON_LEFT, false)
+                    }
                     pressedLeft = false
                 }
                 if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (!moved && now - downAt <= tapMaxMs) {
                         diagTaps++
-                        // 完整轻点 → 记录落点（X 坐标）供双击吸附
-                        val p = snapPoint(downX, downY)
-                        lastTapX = p[0]; lastTapY = p[1]; lastTapAt = now
+                        // 完整轻点 → 记录落点（X 坐标）供双击吸附（同按下瞬间落点）
+                        lastTapX = tapX; lastTapY = tapY; lastTapAt = now
                     } else {
                         lastTapAt = 0L
                     }
@@ -1100,6 +1201,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
                 dropPendingMoves()
                 if (pressedLeft) {
+                    // CANCEL：当前位置抬键（不 warp；tap 未发生不产生点击）
                     sendButton(InputStub.BUTTON_LEFT, false)
                     pressedLeft = false
                 }
@@ -1153,12 +1255,31 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     }
 
     /**
+     * v2.33.1：direct 模式触摸序列边界（DOWN/POINTER_DOWN/POINTER_UP/
+     * UP/CANCEL）入队输入线程发送。系统 MotionEvent 在 dispatch 返回后
+     * 会被 ViewRootImpl 回收复用，不能跨线程持有 —— obtain 一份副本入队，
+     * 输入线程用完回收（每手势 2~3 次小分配，远低于优化前逐 MOVE 直发的
+     * 开销；MOVE 走既有零分配快照合并器不受影响）。
+     */
+    private fun postTouchEvent(event: MotionEvent) {
+        val copy = MotionEvent.obtain(event)
+        postSend {
+            try {
+                if (LorieView.connected()) keySender.sendTouchEvent(copy, renderData)
+            } finally {
+                copy.recycle()
+            }
+        }
+    }
+
+    /**
      * 模式 3 —— 直接触摸（termux-x11 "Direct touch"）：
      * 原始多点触摸不经手势转换，按 XI2 Touch 事件直注 X（坐标经
      * renderData 视图→X 屏幕变换）—— 触摸类游戏/应用获得真实多点触摸，
      * X server 同时向老程序模拟鼠标（xinput 保真，等效上游 NullInputStrategy）。
      * v2.32.2：MOVE 经快照合并器 16ms 节流（滑屏掉帧修复）；序列边界
-     * （DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL）保持即时直发。
+     * （DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL）入队输入线程异步发送
+     * （v2.33.1：主线程零 socket I/O，FIFO 保序）。
      */
     private fun onTouchDirect(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -1171,7 +1292,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                     dtDeviceId = event.deviceId
                     dtSource = event.source
                 }
-                keySender.sendTouchEvent(event, renderData)
+                // v2.33.1：入队输入线程（主线程零 socket I/O）
+                postTouchEvent(event)
             }
             MotionEvent.ACTION_MOVE -> {
                 // 快照更新（零 JNI）：按 pointerId 槽位覆盖最新属性/坐标
@@ -1211,12 +1333,15 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                         dtCount--
                     }
                 }
-                keySender.sendTouchEvent(event, renderData)
+                // v2.33.1：入队输入线程（FIFO 先于该指 TouchEnd 语义保留：
+                // 子事件原样发送，X 侧按 actionIndex 结束对应指）
+                postTouchEvent(event)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // UP 前先冲刷最新位置（不丢拖拽尾段）；CANCEL 只清态
                 diagUps++
-                if (event.actionMasked == MotionEvent.ACTION_UP) flushDirectMoves()
+                // v2.33.1：冲刷异步化（FIFO 先于本 UP 入队发送）
+                if (event.actionMasked == MotionEvent.ACTION_UP) postSend { flushDirectMoves() }
                 flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
                 var leftover = 0
                 synchronized(dtLock) {
@@ -1227,13 +1352,19 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                     leftover = dtCount
                     dtCount = 0; dtDirty = false
                 }
-                keySender.sendTouchEvent(event, renderData)
+                postTouchEvent(event)
                 // 原始 UP/CANCEL 已按 actionIndex 结束对应指；其余槽位 +
                 // 重复的抬起指补发 TouchEnd（X 侧丢弃未激活的 TouchEnd，
                 // 零副作用）—— 残留触摸的仿真按钮 1 会永久卡按，点击全失灵
-                for (i in 0 until leftover) view.sendTouchEvent(XI_TOUCH_END, dtCloseIds[i], 0, 0)
+                // v2.33.1：TouchEnd 收尾入队（FIFO 在本 UP 之后执行）
+                for (i in 0 until leftover) {
+                    val id = dtCloseIds[i]
+                    postSend {
+                        if (LorieView.connected()) view.sendTouchEvent(XI_TOUCH_END, id, 0, 0)
+                    }
+                }
             }
-            else -> keySender.sendTouchEvent(event, renderData) // POINTER_DOWN 等
+            else -> postTouchEvent(event) // POINTER_DOWN 等
         }
         return true
     }
@@ -1262,7 +1393,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 if (mode == Mode.ONE && event.pointerCount >= 2) {
                     mode = Mode.TWO
                     // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
-                    flushPendingMoves()
+                    // v2.33.1：冲刷异步化（FIFO 先于后续事件）
+                    postFlushMoves()
                     twoStartAt = android.os.SystemClock.uptimeMillis()
                     twoMoved = false
                     scrollAccum = 0f
@@ -1311,7 +1443,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                             scrollAccum += dy
                             if (kotlin.math.abs(scrollAccum) >= wheelStep) {
                                 val steps = (scrollAccum / wheelStep).toInt()
-                                view.sendMouseWheelEvent(0f, steps * wheelStep)
+                                // v2.33.1：滚轮入队输入线程（主线程零 socket I/O）
+                                val delta = steps * wheelStep
+                                postSend {
+                                    if (LorieView.connected())
+                                        view.sendMouseWheelEvent(0f, delta)
+                                }
                                 scrollAccum -= steps * wheelStep
                             }
                         }
@@ -1333,8 +1470,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
             MotionEvent.ACTION_UP -> {
                 // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）
+                // v2.33.1：冲刷异步化（FIFO 先于 tap 抬键写入 X）
                 diagUps++
-                if (moved) flushPendingMoves()
+                if (moved) postFlushMoves()
                 if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (!moved && now - downAt <= tapMaxMs) {
