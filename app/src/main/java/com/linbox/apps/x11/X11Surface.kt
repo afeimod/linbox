@@ -351,6 +351,16 @@ fun X11Screen() {
                     // 判定可用性 —— 未布局完成时自动退回直通（旧路径兜底），
                     // 无需在此跟踪命中状态。
                     root.padSplitActive = gamepadEnabled
+                    // v2.32.2：桥侧剥离随分流激活而直通（记账职责移交容器，
+                    // 防双层记账时序差吞 UP —— 详见 SmartTouchBridge.splitActive）
+                    touchBridge?.splitActive = gamepadEnabled
+                    // v2.32.2：手柄关闭即清命中矩形 —— gamepadHost 仅 GONE
+                    // 不销毁组合（onDispose 不触发），残留矩形会让兜底剥离
+                    // 路径把撞上旧布局位置的屏幕 tap 误吞（点击失灵来源之一）
+                    if (!gamepadEnabled) {
+                        GamepadController.clearElementHits()
+                        GamepadController.clearToolbarHit()
+                    }
                     gamepadHostRef?.visibility =
                         if (gamepadEnabled) View.VISIBLE else View.GONE
                 }
@@ -681,6 +691,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     /** 桥与视图分离（离开 X11 界面）时清理手势痕迹与悬挂冲刷。 */
     fun onDetached() {
         dropPendingMoves()
+        synchronized(dtLock) { dtCount = 0; dtDirty = false }
+        flushHandler.removeCallbacks(dtFlushRunnable)
+        dtFlushPending = false
         trackedPadIds.clear()
         view.removeOnLayoutChangeListener(viewWinPosWatcher)
     }
@@ -691,7 +704,21 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
      * 直通）；否则构造只含受跟踪指针的子集事件（action 相应重映射：
      * 桥内首指的按下降级为 DOWN、手柄指针的按下/抬起降级为 MOVE）。
      */
+    // v2.32.2：分流激活标志（X11Screen update 块与容器 padSplitActive
+    // 同源同步）。激活期间容器已把屏幕流剥成纯屏幕指针、并按流视角
+    // 归一了 DOWN/UP —— 本层 trackedPadIds 记账与之双层重复，且存在
+    // 记账时序差：POINTER_UP 时记账被掏空，随后同指的系统级 UP 到达
+    // 时 hadTracked=false 被吞 → 状态机收不到 UP（左键卡按/tap 检测
+    // 不触发，用户实测“点击屏幕失灵”）。激活期间恒等直通零开销；
+    // 记账剥离仅保留为容器直通路径（手柄未开/命中区未布局窗口）兜底。
+    @Volatile var splitActive = false
+
+    /** 桥侧剥离入口；分流激活且有命中矩形时直通（与容器第 4 守卫条件
+     *  精确对齐：无矩形的未布局窗口内仍走记账兜底，手柄指针不漏状态机） */
     private fun filterPadPointers(event: MotionEvent): MotionEvent? {
+        if (splitActive &&
+            (GamepadController.hasElementHits() || GamepadController.hasToolbarHit())
+        ) return event
         if (!GamepadController.hasElementHits()) {
             trackedPadIds.clear()
             return event
@@ -749,8 +776,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                // keep 计算需要抬起前的 tracked 集合，清空推迟到子集构建后
-                if (hadTracked) forward = action
+                // v2.32.2：恒转发（原 hadTracked=false 时吞掉）。记账在
+                // POINTER_UP 时已被掏空，同指随后的系统级 UP 必然
+                // hadTracked=false —— 吞掉会让手势状态机收不到 UP
+                // （左键卡按/tap 检测不触发）。状态机在 IDLE 下收到
+                // 多余 UP/CANCEL 仅归位状态，无副作用。
+                forward = action
         }
 
         if (forward < 0) {
@@ -981,14 +1012,117 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         return true
     }
 
+    // ---- v2.32.2 直接触摸（TOUCH_DIRECT）MOVE 合并器 ----
+    // 原实现每 MOVE 事件逐指针直发 XI_TouchUpdate（120~240Hz 触摸下
+    // 事件洪泛，X server 输入线程被逐事件唤醒，wine 满载时直接抢占
+    // 渲染时间片 → 滑屏掉帧）。改为“最新全量快照 + 16ms 节流”：MOVE
+    // 只更新快照（零 JNI），后台线程按最小间隔把快照构造成一条
+    // ACTION_MOVE 直发（触摸屏语义：中间采样可丢，只消费最新位置，
+    // 绝对坐标快照天然幂等）。DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL
+    // 是 touch 序列边界，必须即时直发不可合并。快照由 dtLock 保护
+    // （主线程手势收尾与冲刷线程并发排水，与相对合并器同款模式）。
+    private val dtLock = Any()
+    private val dtIds = IntArray(10)
+    private val dtProps = Array(10) { MotionEvent.PointerProperties() }
+    private val dtCoords = Array(10) { MotionEvent.PointerCoords() }
+    private var dtCount = 0
+    private var dtDirty = false
+    private var dtDownTime = 0L
+    private var dtDeviceId = 0
+    private var dtSource = 0
+    @Volatile private var dtFlushPending = false
+    private val dtFlushRunnable = Runnable { flushDirectMoves() }
+
+    private fun flushDirectMoves() {
+        flushHandler.removeCallbacks(dtFlushRunnable)
+        dtFlushPending = false
+        var snap: MotionEvent? = null
+        synchronized(dtLock) {
+            if (!dtDirty || dtCount == 0) return
+            dtDirty = false
+            snap = MotionEvent.obtain(
+                dtDownTime, android.os.SystemClock.uptimeMillis(),
+                MotionEvent.ACTION_MOVE, dtCount, dtProps, dtCoords,
+                0, 0, 1f, 1f, dtDeviceId, 0, dtSource, 0
+            )
+        }
+        try {
+            if (LorieView.connected()) keySender.sendTouchEvent(snap!!, renderData)
+        } finally {
+            snap!!.recycle()
+        }
+    }
+
     /**
      * 模式 3 —— 直接触摸（termux-x11 "Direct touch"）：
      * 原始多点触摸不经手势转换，按 XI2 Touch 事件直注 X（坐标经
      * renderData 视图→X 屏幕变换）—— 触摸类游戏/应用获得真实多点触摸，
      * X server 同时向老程序模拟鼠标（xinput 保真，等效上游 NullInputStrategy）。
+     * v2.32.2：MOVE 经快照合并器 16ms 节流（滑屏掉帧修复）；序列边界
+     * （DOWN/POINTER_DOWN/POINTER_UP/UP/CANCEL）保持即时直发。
      */
     private fun onTouchDirect(event: MotionEvent): Boolean {
-        keySender.sendTouchEvent(event, renderData)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // 新手势起点：重置快照并记录构造参数（downTime/deviceId/source）
+                flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
+                synchronized(dtLock) {
+                    dtCount = 0; dtDirty = false
+                    dtDownTime = event.downTime
+                    dtDeviceId = event.deviceId
+                    dtSource = event.source
+                }
+                keySender.sendTouchEvent(event, renderData)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                // 快照更新（零 JNI）：按 pointerId 槽位覆盖最新属性/坐标
+                synchronized(dtLock) {
+                    val n = event.pointerCount.coerceAtMost(dtIds.size)
+                    for (i in 0 until n) {
+                        val id = event.getPointerId(i)
+                        var slot = dtIds.indexOf(id)
+                        if (slot < 0 || slot >= dtCount) {
+                            if (dtCount >= dtIds.size) continue
+                            slot = dtCount++
+                            dtIds[slot] = id
+                        }
+                        event.getPointerProperties(i, dtProps[slot])
+                        event.getPointerCoords(i, dtCoords[slot])
+                    }
+                    dtDirty = true
+                }
+                if (!dtFlushPending) {
+                    dtFlushPending = true
+                    flushHandler.postDelayed(dtFlushRunnable, MOTION_FLUSH_INTERVAL_MS)
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // 该指 touch 序列结束：丢弃未冲刷快照（可能含已抬指旧
+                // 坐标）并把该指移出快照槽（交换压缩），再直发 TouchEnd
+                flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
+                synchronized(dtLock) {
+                    dtDirty = false
+                    val si = dtIds.indexOf(event.getPointerId(event.actionIndex))
+                    if (si >= 0 && si < dtCount) {
+                        for (j in si until dtCount - 1) {
+                            dtIds[j] = dtIds[j + 1]
+                            val tp = dtProps[j]; dtProps[j] = dtProps[j + 1]; dtProps[j + 1] = tp
+                            val tc = dtCoords[j]; dtCoords[j] = dtCoords[j + 1]; dtCoords[j + 1] = tc
+                        }
+                        dtCount--
+                    }
+                }
+                keySender.sendTouchEvent(event, renderData)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // UP 前先冲刷最新位置（不丢拖拽尾段）；CANCEL 只清态
+                if (event.actionMasked == MotionEvent.ACTION_UP) flushDirectMoves()
+                flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
+                synchronized(dtLock) { dtCount = 0; dtDirty = false }
+                keySender.sendTouchEvent(event, renderData)
+            }
+            else -> keySender.sendTouchEvent(event, renderData) // POINTER_DOWN 等
+        }
         return true
     }
 
@@ -1343,6 +1477,17 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
             action = if (actionPos >= 0)
                 action or (actionPos shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
             else MotionEvent.ACTION_MOVE
+        }
+        // v2.32.2 流视角 action 归一化：分流后每条流都是宿主眼中的"完整
+        // 手势"——流内第一指按下即 DOWN、最后一指抬起即 UP。手柄按住时
+        // 屏幕流首个事件原生是 POINTER_DOWN：状态机（Mode.ONE 只在 DOWN
+        // 建立）全程忽略 → tap/按键失灵；末指抬起原生是 POINTER_UP：UP
+        // 检测不触发 → 左键卡按。子集只剩一根指针时按单指手势归一，
+        // 多指流（双指滚轮/按钮组合）保持原生 POINTER_ 语义。
+        if (count == 1) {
+            val masked = action and MotionEvent.ACTION_MASK
+            if (masked == MotionEvent.ACTION_POINTER_DOWN) action = MotionEvent.ACTION_DOWN
+            else if (masked == MotionEvent.ACTION_POINTER_UP) action = MotionEvent.ACTION_UP
         }
         for (j in 0 until count) {
             event.getPointerProperties(splitIdx[j], splitProps[j])
