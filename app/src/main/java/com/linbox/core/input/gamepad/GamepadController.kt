@@ -585,4 +585,46 @@ object GamepadController {
         }
         return false
     }
+
+    // ============================================================
+    // v2.32：X11 触摸分流 —— 手柄 UI 命中区（元素 + 迷你工具条）
+    // ============================================================
+    // 背景：X11 侧手柄 UI 移入 LorieView 容器内的独立 Compose 宿主后，
+    // 由 X11TouchSplitLayout 在 View 层按"落点是否在手柄 UI 内"逐指分流：
+    // 手柄指针 → 手柄宿主（Compose），屏幕指针 → LorieView（SmartTouchBridge）。
+    // 判定区 = 元素命中矩形（elementHitRects）∪ 迷你工具条（⚙✎✕）。
+    // 工具条必须并入判定：它不在 elementHitRects 里，若被分到屏幕流，
+    // ⚙✎✕ 按钮在 X11 下会点不到（指针被路由去了 LorieView）。
+
+    /** 迷你工具条命中矩形（窗口坐标 px [l,t,r,b]；仅 UI 线程读写） */
+    private val toolbarHitRect = FloatArray(4)
+    private var hasToolbarHitRect = false
+
+    /** 迷你工具条布局后登记命中矩形（GamepadOverlayContent 调用） */
+    fun registerToolbarHit(l: Float, t: Float, r: Float, b: Float) {
+        toolbarHitRect[0] = l; toolbarHitRect[1] = t
+        toolbarHitRect[2] = r; toolbarHitRect[3] = b
+        hasToolbarHitRect = true
+    }
+
+    /** 手柄隐藏/离开组合时清空工具条命中（对齐 clearElementHits 生命周期） */
+    fun clearToolbarHit() {
+        hasToolbarHitRect = false
+    }
+
+    /** 是否有工具条命中矩形 */
+    fun hasToolbarHit(): Boolean = hasToolbarHitRect
+
+    /**
+     * X11 触摸分流的手柄侧命中判定：窗口坐标 (x,y) 落在任一手柄元素
+     * 或迷你工具条内 = 手柄指针（进手柄宿主），否则 = 屏幕指针（进桥）。
+     */
+    fun isOverPadUi(x: Float, y: Float): Boolean {
+        if (isOverPadElement(x, y)) return true
+        if (hasToolbarHitRect &&
+            x >= toolbarHitRect[0] - HIT_MARGIN_PX && x <= toolbarHitRect[2] + HIT_MARGIN_PX &&
+            y >= toolbarHitRect[1] - HIT_MARGIN_PX && y <= toolbarHitRect[3] + HIT_MARGIN_PX
+        ) return true
+        return false
+    }
 }

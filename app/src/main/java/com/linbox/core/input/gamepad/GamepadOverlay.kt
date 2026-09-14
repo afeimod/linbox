@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.linbox.LinBoxApp
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.boundsInWindowCompat
+import com.linbox.core.shell.ShellController
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.cos
@@ -56,9 +57,30 @@ import kotlin.math.sin
  * - 编辑模式：元素可拖动重新布局（松手持久化），显示删除角标
  * - 迷你工具条：⚙ 设置 / ✎ 编辑 / ✕ 隐藏
  * - 多点触控：每个元素独立 pointerInput，摇杆+按钮可同时操作
+ *
+ * v2.32：X11 界面的手柄改由 X11TouchSplitLayout 容器内的独立 Compose
+ * 宿主（ComposeView）渲染 —— View 层逐指分流，手柄指针与屏幕指针
+ * 从事件源头分离，本层（LinBoxShell 顶层覆盖）在 X11 模式下不再渲染，
+ * 消除"手柄先按下时 Compose 命中路径锁定手柄分支、屏幕指针到不了
+ * LorieView"的机制性冲突。终端/设置页仍由本层渲染（WebView 兜底）。
  */
 @Composable
 fun GamepadOverlay() {
+    val app = LinBoxApp.get()
+    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
+    // v2.32：X11 界面由 X11TouchSplitLayout 内的 Compose 宿主渲染，本层跳过
+    if (!gamepadEnabled || ShellController.screen == ShellController.Screen.X11) return
+    GamepadOverlayContent()
+}
+
+/**
+ * 手柄覆盖层主体（v2.32 自 GamepadOverlay 拆出，两处复用）：
+ * - LinBoxShell 顶层覆盖（终端/设置页）
+ * - X11TouchSplitLayout 内 ComposeView 宿主（X11 界面，配合 View 层分流）
+ * 副作用（布局加载/隐藏时释放按键+命中矩形）随本组合创建与销毁。
+ */
+@Composable
+fun GamepadOverlayContent() {
     val app = LinBoxApp.get()
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     if (!gamepadEnabled) return
@@ -72,10 +94,12 @@ fun GamepadOverlay() {
     // v2.15.3：手柄隐藏/离开组合时释放全部按下的键（防联键：不留任何"按着"的键）
     // v2.16.4：同时清空元素命中矩形（防陈旧矩形令浏览器侧误剥离正常触摸）
     // v2.20：同时注销工具条直通区
+    // v2.32：同时清空工具条命中矩形（X11 分流判定区随组合销毁）
     DisposableEffect(gamepadEnabled) {
         onDispose {
             GamepadController.releaseAllKeys()
             GamepadController.clearElementHits()
+            GamepadController.clearToolbarHit()
             TrackpadRouter.registerPassthrough("gpToolbar", null)
         }
     }
@@ -155,8 +179,12 @@ fun GamepadOverlay() {
                 .align(Alignment.TopEnd)
                 .padding(top = 12.dp, end = 12.dp)
                 // v2.20：工具条登记为触控板直通区（真实手指可直接点 ⚙ ✎ ✕）
+                // v2.32：同时登记为 X11 触摸分流的手柄侧命中区（⚙✎✕ 落点
+                // 归手柄流，否则工具条指针被路由去 LorieView 点不到）
                 .onGloballyPositioned {
-                    TrackpadRouter.registerPassthrough("gpToolbar", it.boundsInWindowCompat())
+                    val b = it.boundsInWindowCompat()
+                    TrackpadRouter.registerPassthrough("gpToolbar", b)
+                    GamepadController.registerToolbarHit(b.left, b.top, b.right, b.bottom)
                 }
         )
     }

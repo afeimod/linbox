@@ -128,8 +128,8 @@ android {
         // ============================================================
         // v2.22.2 内置 X11 桌面（版本号随功能递增）
         targetSdk = 28
-        versionCode = 55
-        versionName = "2.31.0"
+        versionCode = 56
+        versionName = "2.32.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

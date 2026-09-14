@@ -10,6 +10,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.Display
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
@@ -24,15 +25,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.core.input.gamepad.GamepadController
+import com.linbox.core.input.gamepad.GamepadOverlayContent
 import com.linbox.core.shell.ShellController
 import com.linbox.LinBoxApp
 import com.termux.x11.LoriePreferences
@@ -98,6 +105,11 @@ fun X11Screen() {
     // 智能鼠标桥与手柄层（随 LorieView 实例创建，见 factory）
     var touchBridge by remember { mutableStateOf<SmartTouchBridge?>(null) }
 
+    // v2.32：手柄 Compose 宿主引用（onDispose 时销毁组合防泄漏）+
+    // LocalLifecycleOwner（factory 非 Composable 作用域内预取）
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var gamepadHostRef by remember { mutableStateOf<ComposeView?>(null) }
+
     // 连接建立即应用分辨率协议文件（兜底时序：glibc-runner 写文件可能
     // 早于/晚于窗口打开；FileObserver 只覆盖窗口已打开的情况）。
     LaunchedEffect(connState) {
@@ -130,6 +142,10 @@ fun X11Screen() {
             SmartTouchBridge.activeBridge = null
             // v2.31：桥分离时清理悬挂冲刷与受跟踪指针（防迟到事件误发）
             touchBridge?.onDetached()
+            // v2.32：手柄 Compose 宿主组合显式销毁（AndroidView 内嵌
+            // ComposeView 的组合不随 View detach 自动释放，防泄漏）
+            gamepadHostRef?.disposeComposition()
+            gamepadHostRef = null
             // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
             X11WindowController.detachView(userClosed = true)
@@ -240,11 +256,16 @@ fun X11Screen() {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    // 根容器：LorieView 铺满窗口（native 跟随窗口 / exact+stretch
+                    // 根容器：v2.32 起为触摸分流容器（X11TouchSplitLayout）——
+                    // 手柄显示时逐指分流：手柄指针 → 手柄宿主（gamepadHost），
+                    // 屏幕指针 → LorieView 直达桥，与按下顺序无关（View 层
+                    // 硬分离，不再依赖 Compose 命中路径锁定顺序）；手柄未
+                    // 显示时零开销直通。
+                    // LorieView 铺满窗口（native 跟随窗口 / exact+stretch
                     // 拉伸铺满，均无黑边）。
                     // v2.22.5 fix12：Gravity.CENTER → FILL —— 画面靠左上锚定
                     // （用户反馈"黑边没有靠左"）；FILL = TOP|START|BOTTOM|END。
-                    val root = FrameLayout(ctx)
+                    val root = X11TouchSplitLayout(ctx)
 
                     val lv = LorieView(ctx)
                     root.addView(lv, FrameLayout.LayoutParams(
@@ -252,6 +273,33 @@ fun X11Screen() {
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         Gravity.FILL
                     ))
+
+                    // v2.32：手柄 Compose 宿主（GamepadOverlayContent 渲染于
+                    // LorieView 同层 Z 顶）。View 层分流的手柄侧接收者：摇杆/
+                    // 十字键/按钮/工具条的事件经 split 子事件直达此树，不受
+                    // Compose 主树命中竞争影响。嵌入 ComposeView 需显式挂
+                    // lifecycle/registry owner（Activity 同时实现两者）。
+                    val gamepadHost = ComposeView(ctx).apply {
+                        setViewTreeLifecycleOwner(lifecycleOwner)
+                        (lifecycleOwner as? SavedStateRegistryOwner)?.let {
+                            setViewTreeSavedStateRegistryOwner(it)
+                        }
+                        setContent { GamepadOverlayContent() }
+                    }
+                    root.addView(gamepadHost, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        Gravity.FILL
+                    ))
+                    gamepadHost.visibility = View.GONE
+                    gamepadHostRef = gamepadHost
+
+                    // 分流接线：屏幕子事件直达 LorieView（桥），手柄命中区
+                    // 判定复用 GamepadController（元素 ∪ 工具条，窗口坐标）
+                    root.screenRouter = { ev -> lv.dispatchTouchEvent(ev) }
+                    root.padHitTest = { x, y -> GamepadController.isOverPadUi(x, y) }
+                    root.padHost = gamepadHost
+                    root.padSplitActive = false // update 块按手柄开关驱动
 
                     val bridge = SmartTouchBridge(ctx, lv)
                     // v2.25：同步"首选扫描码"偏好（设置面板切换后面板关闭时机再同步）
@@ -295,6 +343,15 @@ fun X11Screen() {
 
                     X11WindowController.connectLorieView(lv)
                     root
+                },
+                update = { root ->
+                    // v2.32：手柄开关 → 分流激活 + 宿主可见性。命中矩形由
+                    // 元素布局后登记（onGloballyPositioned），分流器内部实时
+                    // 判定可用性 —— 未布局完成时自动退回直通（旧路径兜底），
+                    // 无需在此跟踪命中状态。
+                    root.padSplitActive = gamepadEnabled
+                    gamepadHostRef?.visibility =
+                        if (gamepadEnabled) View.VISIBLE else View.GONE
                 }
             )
 
@@ -612,11 +669,19 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private val stripCoords = Array(10) { MotionEvent.PointerCoords() }
     private val stripIdx = IntArray(10)
     private val viewWinPos = IntArray(2) // LorieView 相对窗口原点偏移（视图坐标→窗口坐标）
+    // v2.32：偏移缓存 —— v2.31 起每个事件都调 getLocationInWindow（遍历
+    // 视图树 + 拿布局锁），120Hz 触摸下有可测开销。布局位置不变期间直接
+    // 复用缓存；位置变化（旋转/布局）由监听器置脏。
+    @Volatile private var viewWinPosDirty = true
+    private val viewWinPosWatcher = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        viewWinPosDirty = true
+    }.also { view.addOnLayoutChangeListener(it) }
 
     /** 桥与视图分离（离开 X11 界面）时清理手势痕迹与悬挂冲刷。 */
     fun onDetached() {
         dropPendingMoves()
         trackedPadIds.clear()
+        view.removeOnLayoutChangeListener(viewWinPosWatcher)
     }
 
     /**
@@ -637,8 +702,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         var includeActionPointer = false // POINTER_UP 子集需包含抬起指针（Android 语义）
 
         // 视图坐标→窗口坐标（命中矩形登记的是 positionInWindow 窗口坐标；
-        // LorieView 全屏铺满时偏移为 0，非铺满布局下也能正确对齐）
-        view.getLocationInWindow(viewWinPos)
+        // LorieView 全屏铺满时偏移为 0，非铺满布局下也能正确对齐）。
+        // v2.32：偏移走缓存（布局不变期间零查询），位置变化时监听器置脏。
+        if (viewWinPosDirty) {
+            view.getLocationInWindow(viewWinPos)
+            viewWinPosDirty = false
+        }
         val winX = viewWinPos[0].toFloat()
         val winY = viewWinPos[1].toFloat()
 
@@ -1052,5 +1121,200 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     /** v2.25：同步 termux-x11 "首选扫描码"偏好到按键发送器（即时生效）。 */
     fun setPreferScancodes(v: Boolean) {
         keySender.preferScancodes = v
+    }
+}
+
+/**
+ * v2.32：X11 触摸分流容器 —— View 层逐指分流（虚拟手柄 ↔ 屏幕滑动/视角
+ * 旋转共存的机制性根治）。
+ *
+ * 机制背景：v2.32 以前手柄 UI 在 Compose 顶层覆盖（LinBoxShell），X11 下
+ * 依赖"手柄元素不消费 → 指针漏进 LorieView interop → 桥内剥离"实现共存。
+ * 该路径依赖 Compose 命中路径恰好锁定在 LorieView 分支：屏幕先按下时正常
+ * （桥剥离手柄指针）；**手柄先按下时命中路径锁定手柄分支，之后任何屏幕
+ * 指针（ACTION_POINTER_DOWN）都到不了 LorieView** → 按住手柄/摇杆时无法
+ * 滑动屏幕转视角（用户实测：先滑屏再点手柄可以、先点手柄再滑屏不行、
+ * 松开同时按不行 —— 与"第一指 DOWN 决定手势流归属"的行为逐字吻合）。
+ *
+ * 本容器把手柄 UI（ComposeView 宿主）与 LorieView 放进同一 FrameLayout，
+ * 在 dispatchTouchEvent 入口按每个指针的落点分类记账：
+ * - 落点在手柄 UI 内（[GamepadController.isOverPadUi]：元素 ∪ 迷你工具条）
+ *   = 手柄指针 → 手柄流（gamepadHost 自收，摇杆/按键/工具条自理）
+ * - 否则 = 屏幕指针 → 屏幕流（[LorieView.dispatchTouchEvent] 直达桥）
+ * 两条流同时活跃时用 [MotionEvent.split] 逐流拆分派发（系统级子事件拆分，
+ * 自动重映射 action：新指落在另一流时本流子事件自动降级 MOVE），与按下
+ * 顺序完全无关。抬起（POINTER_UP/UP/CANCEL）按抬起指针的归属精确派发到
+ * 所在流的宿主，双宿主各自收尾自己的手势。桥侧 filterPadPointers 保留为
+ * 兜底：手柄关闭/命中区未布局的直通路径、以及宿主不可用的退路中，手柄
+ * 指针漏进 LorieView 时仍被剥离（v2.31 语义不变）。
+ *
+ * 性能：手柄未显示（padSplitActive=false 或命中区未布局）→ super 直通零
+ * 开销；纯屏幕流直达 LorieView（不经手柄 Compose 树的命中/派发链，主
+ * Compose 树也不再包含手柄节点）；纯手柄流直达手柄宿主、不经桥的手势
+ * 状态机；仅混合流（按住手柄同时滑动屏幕）产生两次 split 拷贝（对齐
+ * Android 系统内部 split-motion 机制的开销量级）。
+ */
+internal class X11TouchSplitLayout @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : FrameLayout(context, attrs, defStyleAttr) {
+
+    /** 分流激活（手柄开关；X11Screen 的 AndroidView.update 块驱动） */
+    var padSplitActive: Boolean = false
+
+    /** 屏幕指针路由：→ LorieView.dispatchTouchEvent（→ SmartTouchBridge.onTouch） */
+    var screenRouter: ((MotionEvent) -> Boolean)? = null
+
+    /** 手柄侧命中判定（窗口坐标 → GamepadController.isOverPadUi） */
+    var padHitTest: ((Float, Float) -> Boolean)? = null
+
+    /** 手柄宿主（ComposeView；手柄流的接收者，factory 接线） */
+    var padHost: View? = null
+
+    /** 本容器相对窗口原点偏移（X11 全屏布局恒 0；位置变化时重算缓存） */
+    private var winOffX = 0f
+    private var winOffY = 0f
+
+    /** 手柄流指针 id 记账（仅 UI 线程；indexOf+removeAt 规避 remove 重载歧义） */
+    private val padIds = ArrayList<Int>(4)
+
+    /** 屏幕流指针 id 记账（仅 UI 线程） */
+    private val screenIds = ArrayList<Int>(4)
+
+    init {
+        // 容器在窗口内的位置变化（旋转/布局）时重算偏移缓存
+        addOnLayoutChangeListener { _, l, t, _, oldL, oldT, _, _, _ ->
+            if (l != oldL || t != oldT) {
+                val loc = IntArray(2)
+                getLocationInWindow(loc)
+                winOffX = loc[0].toFloat()
+                winOffY = loc[1].toFloat()
+            }
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val router = screenRouter
+        val hitTest = padHitTest
+        val host = padHost
+        val hostLive = host != null && host.visibility == View.VISIBLE
+        if (!padSplitActive || router == null || hitTest == null ||
+            (!GamepadController.hasElementHits() && !GamepadController.hasToolbarHit())
+        ) {
+            // 手柄未显示/未布局完成：零开销直通（行为与旧版完全一致）
+            return super.dispatchTouchEvent(event)
+        }
+
+        // ---- 逐指记账：DOWN 落点定流，此后该指针保持其流直到抬起 ----
+        //（中途滑过手柄区/屏幕区不改流 —— 手势语义稳定，对齐 v2.31 跟踪规则）
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                padIds.clear()
+                screenIds.clear()
+                classify(event, 0, hitTest)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> classify(event, event.actionIndex, hitTest)
+            MotionEvent.ACTION_POINTER_UP -> {
+                // 抬起指所在流的宿主必须收到本 POINTER_UP（结束该指手势）。
+                // 关键顺序：先按"记账仍含抬起指"的集合拆分派发（split 保留
+                // POINTER_UP 语义），再移除记账 —— 若先移除再派发，屏幕流
+                // 子事件会被 split 降级 MOVE，双指滚轮状态机（Mode.TWO 等
+                // POINTER_UP 收尾）会卡住；手柄侧则收不到按钮抬起（卡键）。
+                val liftedId = event.getPointerId(event.actionIndex)
+                val fromPad = padIds.contains(liftedId)
+                val fromScreen = screenIds.contains(liftedId)
+                if (fromScreen) {
+                    splitFor(event, screenIds)?.let { sub ->
+                        router.invoke(sub)
+                        sub.recycle()
+                    }
+                }
+                if (fromPad && hostLive) {
+                    splitFor(event, padIds)?.let { sub ->
+                        host!!.dispatchTouchEvent(sub)
+                        sub.recycle()
+                    }
+                }
+                removePointer(liftedId)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // UP/CANCEL 双宿主收尾：手柄侧按 pointer id 结束手势（摇杆
+                // finally 释放方向/按钮补发释放），屏幕侧由 filterPadPointers
+                // 剥成纯屏幕流收尾。清空记账前先取归属，按实际参与过的流
+                // 精确双派（完整原事件，各宿主自己匹配/剥离指针）。
+                val hadPad = padIds.isNotEmpty()
+                val hadScreen = screenIds.isNotEmpty()
+                padIds.clear()
+                screenIds.clear()
+                if (hadPad && hostLive) host!!.dispatchTouchEvent(event)
+                if (hadScreen) router.invoke(event)
+                return true
+            }
+        }
+        // 安全阀：异常流（极端时序漏收 UP）防记账错乱
+        if (padIds.size > 8 || screenIds.size > 8) {
+            padIds.clear()
+            screenIds.clear()
+        }
+
+        return when {
+            padIds.isEmpty() ->
+                // 纯屏幕流：直达 LorieView（绕过手柄树，零 Compose 开销）
+                router.invoke(event)
+            screenIds.isEmpty() ->
+                // 纯手柄流：直达手柄宿主（摇杆/按键/工具条自理；不经桥，
+                // 零剥离开销。宿主不可用时退回 FrameLayout 正常分发）
+                if (hostLive) host!!.dispatchTouchEvent(event)
+                else super.dispatchTouchEvent(event)
+            else -> {
+                // 混合流（按住手柄同时滑动屏幕）：逐流拆分派发。
+                // MotionEvent.split 自动处理 action 重映射：如"手柄先按、
+                // 屏幕后按"时手柄流的子事件由 POINTER_DOWN 降级 MOVE、
+                // 屏幕流保持 POINTER_DOWN —— 两流各自为完整手势。
+                var handled = false
+                splitFor(event, padIds)?.let { sub ->
+                    if (hostLive) handled = host!!.dispatchTouchEvent(sub)
+                    sub.recycle()
+                }
+                splitFor(event, screenIds)?.let { sub ->
+                    handled = router.invoke(sub) || handled
+                    sub.recycle()
+                }
+                handled
+            }
+        }
+    }
+
+    /** 新指针分类入流：落点在手柄 UI 内（含容器→窗口偏移）= 手柄流 */
+    private fun classify(event: MotionEvent, idx: Int, hitTest: (Float, Float) -> Boolean) {
+        val id = event.getPointerId(idx)
+        if (hitTest(event.getX(idx) + winOffX, event.getY(idx) + winOffY)) {
+            padIds.add(id)
+        } else {
+            screenIds.add(id)
+        }
+    }
+
+    private fun removePointer(id: Int) {
+        val pi = padIds.indexOf(id)
+        if (pi >= 0) {
+            padIds.removeAt(pi)
+            return
+        }
+        val si = screenIds.indexOf(id)
+        if (si >= 0) screenIds.removeAt(si)
+    }
+
+    /** 构造只保留 ids 中指针的子事件；ids 与事件无交集时返回 null */
+    private fun splitFor(event: MotionEvent, ids: List<Int>): MotionEvent? {
+        var bitset = 0
+        for (i in 0 until event.pointerCount) {
+            val id = event.getPointerId(i)
+            if (ids.contains(id)) bitset = bitset or (1 shl id)
+        }
+        if (bitset == 0) return null
+        return event.split(bitset)
     }
 }
