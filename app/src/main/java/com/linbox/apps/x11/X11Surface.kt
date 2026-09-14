@@ -538,6 +538,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
          */
         private const val MOTION_FLUSH_INTERVAL_MS = 16L
 
+        /** XI_TouchEnd（对齐 InputEventSender 私有常量，公开 SDK 无此符号） */
+        private const val XI_TOUCH_END = 20
+
         /**
          * v2.31：相对增量冲刷专用线程 —— sendMouseEvent 是 @FastNative
          * 的 socket 直写，wine 游戏打满 CPU 时 X server 输入线程消费变慢，
@@ -559,7 +562,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         }
     }
 
-    // ---- 触摸偏好（termux-x11：touchMode / scaleTouchpad / tapToMove） ----
+    // 触摸偏好（termux-x11：touchMode / scaleTouchpad / tapToMove）
     private var touchMode = TOUCH_SIMULATED
     private var scaleTouchpad = true
     private var tapToMove = false
@@ -578,6 +581,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
             if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
             mode = Mode.IDLE
+            // v2.33：冲掉直接触摸可能遗留的 X 侧活跃触摸（0..9）——否则触摸
+            // 仿真按钮 1 永久卡按，此后一切左键按下被 dix 丢弃（点击全失灵）；
+            // 未激活的 TouchEnd 在 X 侧被丢弃，零副作用。
+            closeAllTouches()
+            synchronized(dtLock) { dtCount = 0; dtDirty = false }
+            flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
             // v2.30.1：切换方式时丢弃未冲刷的相对增量，防止旧模式残余在新模式生效
             dropPendingMoves()
         }
@@ -694,6 +703,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         synchronized(dtLock) { dtCount = 0; dtDirty = false }
         flushHandler.removeCallbacks(dtFlushRunnable)
         dtFlushPending = false
+        // v2.33：分离前补发孤儿按钮释放 + 冲掉可能遗留的 X 侧活跃触摸
+        //（下一会话重建桥时 healOrphanButtons 会再次自愈，双保险）
+        if (LorieView.connected()) {
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
+            view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
+            closeAllTouches()
+        }
         trackedPadIds.clear()
         view.removeOnLayoutChangeListener(viewWinPosWatcher)
     }
@@ -856,6 +873,79 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         view.sendMouseEvent(0f, 0f, button, down, true)
     }
 
+    // ---- v2.33 点击可靠性自愈（用户实测 v2.32.2：左右键/点击全失灵）----
+    // 病灶模型：X 侧 lorieMouse/lalieTouch 按钮状态一旦卡在"按下"
+    //（直接触摸遗留活跃触摸的仿真按钮、任一层丢失的 UP、分流漏记账），
+    // dix 对重复 ButtonPress 直接丢弃、孤儿 ButtonRelease 直接丢弃
+    // —— 此后一切左键/右键（触摸点击与手柄鼠标键同路）全部失灵，
+    // 而相对运动不受影响（滑动照常、视角照转），与用户症状逐字吻合。
+    // 自愈三件套全部基于"未按下的释放被 dix 安全丢弃"这一语义，零副作用：
+    // 1) 首次输入前补发 1/2/3 键孤儿释放（healOrphanButtons）
+    // 2) 新手势 DOWN 前强制归位桥内悬挂按压（resyncStuckPress）
+    // 3) 切换触摸方式时补发 XI_TouchEnd(0..9) 冲掉直接触摸遗留的
+    //    活跃触摸（closeAllTouches，解除触摸仿真按钮的永久卡按）
+
+    // 诊断计数（X11 设置面板"输入诊断"只读展示；UI 线程专用）
+    var diagDowns = 0; private set
+    var diagUps = 0; private set
+    var diagResyncs = 0; private set
+    var diagTaps = 0; private set
+    var diagHeals = 0; private set
+
+    /** 首次输入前的孤儿按钮释放（healDone 后零开销） */
+    private var healDone = false
+    private fun healOrphanButtons() {
+        if (healDone) return
+        if (!LorieView.connected()) return
+        healDone = true
+        diagHeals++
+        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_LEFT, false, true)
+        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_MIDDLE, false, true)
+        view.sendMouseEvent(0f, 0f, InputStub.BUTTON_RIGHT, false, true)
+    }
+
+    /** 新手势起点归位悬挂按压：卡键自愈 + 重复按下防抖（X 侧会被丢弃的按下不再发出） */
+    private fun resyncStuckPress() {
+        if (pressedLeft) {
+            sendButton(InputStub.BUTTON_LEFT, false)
+            pressedLeft = false
+            diagResyncs++
+        }
+        if (padPressed) {
+            sendButton(InputStub.BUTTON_LEFT, false)
+            padPressed = false
+            diagResyncs++
+        }
+    }
+
+    /** 冲掉 0..9 号触摸的 X 侧活跃状态（解除触摸仿真按钮 1 的永久卡按） */
+    private fun closeAllTouches() {
+        if (!LorieView.connected()) return
+        for (id in 0..9) view.sendTouchEvent(XI_TOUCH_END, id, 0, 0)
+    }
+
+    /** 输入诊断文本（X11 设置面板"输入诊断"只读展示） */
+    fun diagText(): String = buildString {
+        append("触摸方式=")
+        append(
+            when (touchMode) {
+                TOUCH_TRACKPAD -> "触控板"
+                TOUCH_DIRECT -> "直接触摸"
+                else -> "模拟触摸"
+            }
+        )
+        append("  X连接="); append(if (LorieView.connected()) "是" else "否")
+        append('\n')
+        append("DOWN="); append(diagDowns)
+        append("  UP="); append(diagUps)
+        append("  轻点="); append(diagTaps)
+        append('\n')
+        append("卡键归位="); append(diagResyncs)
+        append("  自愈="); append(diagHeals)
+        append("  桥按压态: 左键="); append(if (pressedLeft) "按下" else "释放")
+        append(" 轻点拖拽="); append(if (padPressed) "按下" else "释放")
+    }
+
     /** 双击吸附：若处于双击窗口内且落点接近上次轻点，返回上次落点。 */
     private fun snapPoint(vx: Float, vy: Float): FloatArray {
         val now = android.os.SystemClock.uptimeMillis()
@@ -874,6 +964,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
     fun onTouch(event: MotionEvent): Boolean {
         if (!LorieView.connected() || screenW <= 0 || screenH <= 0) return true
+        // v2.33：首次输入前补发孤儿按钮释放（卡键自愈；未卡则被 dix 丢弃）
+        healOrphanButtons()
         // v2.31：剥离手柄元素指针（手柄未显示时零开销直通）
         val ev = filterPadPointers(event) ?: return true
         try {
@@ -895,11 +987,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private fun onTouchSimulated(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // v2.33：新手势起点归位悬挂按压（丢失 UP 的卡键自愈）
+                resyncStuckPress()
                 mode = Mode.ONE
                 downX = event.x; downY = event.y
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
                 moved = false
+                diagDowns++
                 val p = snapPoint(downX, downY)
                 sendMoveX(p[0].toInt(), p[1].toInt())
                 sendButton(InputStub.BUTTON_LEFT, true)
@@ -981,6 +1076,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
             MotionEvent.ACTION_UP -> {
                 // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）再抬键
+                diagUps++
                 if (pressedLeft) {
                     flushPendingMoves()
                     sendButton(InputStub.BUTTON_LEFT, false)
@@ -989,6 +1085,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (!moved && now - downAt <= tapMaxMs) {
+                        diagTaps++
                         // 完整轻点 → 记录落点（X 坐标）供双击吸附
                         val p = snapPoint(downX, downY)
                         lastTapX = p[0]; lastTapY = p[1]; lastTapAt = now
@@ -1025,6 +1122,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private val dtIds = IntArray(10)
     private val dtProps = Array(10) { MotionEvent.PointerProperties() }
     private val dtCoords = Array(10) { MotionEvent.PointerCoords() }
+    /** UP/CANCEL 收尾用的残留槽位快照（锁内拷贝、锁外发 TouchEnd） */
+    private val dtCloseIds = IntArray(10)
     private var dtCount = 0
     private var dtDirty = false
     private var dtDownTime = 0L
@@ -1116,10 +1215,23 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 // UP 前先冲刷最新位置（不丢拖拽尾段）；CANCEL 只清态
+                diagUps++
                 if (event.actionMasked == MotionEvent.ACTION_UP) flushDirectMoves()
                 flushHandler.removeCallbacks(dtFlushRunnable); dtFlushPending = false
-                synchronized(dtLock) { dtCount = 0; dtDirty = false }
+                var leftover = 0
+                synchronized(dtLock) {
+                    // v2.33：残留触摸槽位记入 leftover（多指异常直发 UP 时，
+                    // 其余手指的 X 侧触摸不能悬挂 —— 悬挂触摸的仿真按钮 1
+                    // 会永久卡按，此后一切左键点击全失灵）
+                    for (i in 0 until dtCount) dtCloseIds[i] = dtIds[i]
+                    leftover = dtCount
+                    dtCount = 0; dtDirty = false
+                }
                 keySender.sendTouchEvent(event, renderData)
+                // 原始 UP/CANCEL 已按 actionIndex 结束对应指；其余槽位 +
+                // 重复的抬起指补发 TouchEnd（X 侧丢弃未激活的 TouchEnd，
+                // 零副作用）—— 残留触摸的仿真按钮 1 会永久卡按，点击全失灵
+                for (i in 0 until leftover) view.sendTouchEvent(XI_TOUCH_END, dtCloseIds[i], 0, 0)
             }
             else -> keySender.sendTouchEvent(event, renderData) // POINTER_DOWN 等
         }
@@ -1136,11 +1248,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private fun onTouchTrackpad(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // v2.33：新手势起点归位悬挂按压（丢失 UP 的卡键自愈）
+                resyncStuckPress()
                 mode = Mode.ONE
                 downX = event.x; downY = event.y
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
                 moved = false
+                diagDowns++
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -1218,6 +1333,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
             MotionEvent.ACTION_UP -> {
                 // v2.30.1：手势结束先冲刷残余增量（不丢拖拽尾段）
+                diagUps++
                 if (moved) flushPendingMoves()
                 if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
@@ -1359,6 +1475,13 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
                 val liftedId = event.getPointerId(event.actionIndex)
                 val fromPad = padIds.contains(liftedId)
                 val fromScreen = screenIds.contains(liftedId)
+                // v2.33：漏记账不吞 —— 分流中途激活（手势已开始才开手柄）
+                // 等时序下抬起指可能不在任何流里，交回正常分发兜底，
+                // 严防任何事件被容器静默丢弃（吞 UP = 卡键/点击失灵）。
+                if (!fromPad && !fromScreen) {
+                    removePointer(liftedId)
+                    return super.dispatchTouchEvent(event)
+                }
                 if (fromScreen) {
                     splitFor(event, screenIds)?.let { sub ->
                         router.invoke(sub)
@@ -1383,6 +1506,8 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
                 val hadScreen = screenIds.isNotEmpty()
                 padIds.clear()
                 screenIds.clear()
+                // v2.33：两侧均无记账（中途激活/漏记账）→ 正常分发兜底不吞
+                if (!hadPad && !hadScreen) return super.dispatchTouchEvent(event)
                 if (hadPad && hostLive) host!!.dispatchTouchEvent(event)
                 if (hadScreen) router.invoke(event)
                 return true
@@ -1395,6 +1520,10 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
         }
 
         return when {
+            padIds.isEmpty() && screenIds.isEmpty() ->
+                // v2.33：记账空（异常时序被安全阀清空等）→ 交回正常分发，
+                // 不得静默丢弃任何事件（吞事件 = 点击/抬起失灵）
+                super.dispatchTouchEvent(event)
             padIds.isEmpty() ->
                 // 纯屏幕流：直达 LorieView（绕过手柄树，零 Compose 开销）
                 router.invoke(event)

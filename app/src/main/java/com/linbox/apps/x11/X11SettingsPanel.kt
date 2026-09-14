@@ -496,6 +496,19 @@ fun X11SettingsDialog() {
                     )
                 }
 
+                // ---- v2.33 输入诊断（只读；点击失灵时截图反馈用） ----
+                val diagSnapshot = remember(touchMode) { SmartTouchBridge.activeBridge?.diagText() }
+                if (diagSnapshot != null) {
+                    Text("输入诊断", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = labelColor)
+                    Text(
+                        text = diagSnapshot,
+                        fontSize = 9.sp,
+                        color = hintColor,
+                        lineHeight = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
                 HorizontalDivider(color = dividerColor)
 
                 // ================= 剪贴板 =================

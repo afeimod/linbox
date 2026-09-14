@@ -108,6 +108,15 @@ fun X11GlassFab(
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragging by remember { mutableStateOf(false) }
 
+    // v2.33：触摸方式快捷循环（模拟→触控板→直触）—— 点击失灵时可
+    // 一键切换方式当场验证/解锁；切换经 applyTouchPrefs 即时下发
+    // （v2.33 桥会同时冲掉直接触摸遗留的 X 侧活跃触摸）
+    var touchModeState by remember {
+        mutableStateOf(
+            com.termux.x11.LoriePreferences.prefs?.touchMode?.get()?.toIntOrNull() ?: 2
+        )
+    }
+
     val fabSizePx = with(density) { 54.dp.toPx() }
     val itemHPx = with(density) { 38.dp.toPx() }
     val gapPx = with(density) { 6.dp.toPx() }
@@ -131,11 +140,24 @@ fun X11GlassFab(
     }
 
     val items = remember(
-        gamepadEnabled, fullscreen,
+        gamepadEnabled, fullscreen, touchModeState,
         onToggleFullscreen, onOpenSettings, onBackToTerminal
     ) {
         listOf(
             X11FabItem("键盘", "⌨") { toggleX11Ime(context) },
+            // v2.33：触摸方式一键循环（显示当前方式；点击切换全部输入行为）
+            X11FabItem(
+                "触摸方式",
+                when (touchModeState) { 1 -> "板"; 3 -> "直"; else -> "模" }
+            ) {
+                val lp = com.termux.x11.LoriePreferences.prefs
+                if (lp != null) {
+                    val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
+                    touchModeState = next
+                    lp.touchMode.put(next.toString())
+                    SmartTouchBridge.applyTouchPrefs()
+                }
+            },
             X11FabItem("游戏全屏", "FS") { X11InputHub.sendAltEnter() },
             X11FabItem("虚拟手柄", "柄", active = gamepadEnabled,
                 onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },

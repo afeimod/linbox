@@ -93,6 +93,12 @@ public final class InputEventSender {
     }
 
     final boolean[] pointers = new boolean[10];
+    /** LinBox v2.33：曾发送过 TouchBegin 的指针（清理循环只收真实按过的指针）。
+     *  上游清理循环对 0..9 全部未在当前事件中的 id 补发 TouchEnd —— 单指
+     *  滑动时每个冲刷周期产生 9 个垃圾事件（62.5Hz 冲刷下 ≈560 事件/秒）
+     *  灌进 X 输入线程，直触模式下白白抖动渲染时间片。限定范围后
+     *  保留"安卓偶尔不发 POINTER_UP 导致指针卡按"的防护语义不变。 */
+    private final boolean[] everDown = new boolean[10];
     /**
      * Extracts the touch point data from a MotionEvent, converts each point into a marshallable
      * object and passes the set of points to the JNI layer to be transmitted to the remote host.
@@ -117,13 +123,17 @@ public final class InputEventSender {
                 int x = clamp((int) (event.getX(p) * renderData.scale.x), 0, renderData.screenWidth);
                 int y = clamp((int) (event.getY(p) * renderData.scale.y), 0, renderData.screenHeight);
                 pointers[event.getPointerId(p)] = true;
+                everDown[event.getPointerId(p)] = true;
                 mInjector.sendTouchEvent(XI_TouchUpdate, event.getPointerId(p), x, y);
             }
 
             // Sometimes Android does not send ACTION_POINTER_UP/ACTION_UP so some pointers are "stuck" in pressed state.
+            // LinBox v2.33：只收曾按下过的指针（未按过的 id 不再发垃圾 TouchEnd）。
             for (int p = 0; p < 10; p++) {
-                if (!pointers[p])
+                if (!pointers[p] && everDown[p]) {
+                    everDown[p] = false;
                     mInjector.sendTouchEvent(XI_TouchEnd, p, 0, 0);
+                }
             }
         } else {
             // For all other events, we only want to grab the current/active pointer.  The event
@@ -134,8 +144,11 @@ public final class InputEventSender {
             int x =  clamp((int) (event.getX(activePointerIndex) * renderData.scale.x), 0, renderData.screenWidth);
             int y =  clamp((int) (event.getY(activePointerIndex) * renderData.scale.y), 0, renderData.screenHeight);
             int a = (action == MotionEvent.ACTION_DOWN || action == ACTION_POINTER_DOWN) ? XI_TouchBegin : XI_TouchEnd;
-            if (a == XI_TouchEnd)
+            if (a == XI_TouchBegin) everDown[id] = true;
+            if (a == XI_TouchEnd) {
+                everDown[id] = false;
                 mInjector.sendTouchEvent(XI_TouchUpdate, id, x, y);
+            }
             mInjector.sendTouchEvent(a, id, x, y);
         }
     }

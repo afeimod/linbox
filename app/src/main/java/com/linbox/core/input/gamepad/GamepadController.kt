@@ -415,8 +415,9 @@ object GamepadController {
     }
 
     /** 一键抬起全部按下的键（隐藏手柄 / 进编辑模式 / 打开设置 / 切换标签时调用，
-     * 杜绝"松开后还在一直输出"） */
+     * 杜绝"松开后还在一直输出"）v2.33：含鼠标键（press/hold/release 对账态） */
     fun releaseAllKeys() {
+        releaseAllMouseButtons()
         if (keyRefCounts.isEmpty()) return
         keyRefCounts.keys.toList().forEach { releaseKey(it) }
     }
@@ -424,30 +425,15 @@ object GamepadController {
     /**
      * 派发鼠标动作。v2.22.3 fix11b：优先在虚拟鼠标指针位置（浏览器），
      * 无浏览器目标时把左/右/中键与滚轮直注 X11（X 指针当前位置）。
+     * v2.33：X11 路由的左/中/右键改由 pressMouseButton/releaseMouseButton
+     * 状态对账（本函数仅保留滚轮即时派发与浏览器 WebView 路径），
+     * 避免"按下即发出 press+release"双事件被 X 侧按钮状态机丢弃的风险。
      */
     fun dispatchMouse(mouseCode: Int) {
         val wv = targetWebView?.get()
         if (wv == null) {
-            // X11 路由：真实鼠标 down→up 序列 / 滚轮（与 SmartTouchBridge 同参）
+            // X11 路由：滚轮即时派发（按键类改走 v2.33 状态对账）
             when (mouseCode) {
-                PadAction.MOUSE_LEFT -> {
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_LEFT, true)
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_LEFT, false)
-                }
-                PadAction.MOUSE_RIGHT -> {
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_RIGHT, true)
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_RIGHT, false)
-                }
-                PadAction.MOUSE_MIDDLE -> {
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_MIDDLE, true)
-                    com.termux.x11.X11InputHub.forwardMouseButton(
-                        com.termux.x11.input.InputStub.BUTTON_MIDDLE, false)
-                }
                 PadAction.MOUSE_SCROLL_UP -> com.termux.x11.X11InputHub.forwardWheel(-120f)
                 PadAction.MOUSE_SCROLL_DOWN -> com.termux.x11.X11InputHub.forwardWheel(120f)
             }
@@ -509,15 +495,59 @@ object GamepadController {
     // 触发入口（覆盖层调用）
     // ============================================================
 
+    // ---- v2.33 鼠标键状态对账（press/hold/release）----
+    // 旧实现：按下瞬间同步发 press+release（瞬时 click）—— 两次直写间
+    // 无任何状态记录，一旦 X 侧按钮状态异常（重复按下被 dix 丢弃）
+    // 点击就永久失灵且无自愈路径。改为与键盘同款的按下/抬起对账：
+    // 点按=完整点击，按住=持续按下（FPS 开火），且 X11InputHub 通道
+    // 语义与 SmartTouchBridge.sendButton 完全同参。
+    private val pressedMouseButtons = HashSet<Int>()
+
+    /** PadAction 鼠标键码 → InputStub 按钮码；非按键类返回 null（滚轮） */
+    private fun mouseStubButton(actionCode: Int): Int? = when (actionCode) {
+        PadAction.MOUSE_LEFT -> com.termux.x11.input.InputStub.BUTTON_LEFT
+        PadAction.MOUSE_RIGHT -> com.termux.x11.input.InputStub.BUTTON_RIGHT
+        PadAction.MOUSE_MIDDLE -> com.termux.x11.input.InputStub.BUTTON_MIDDLE
+        else -> null
+    }
+
+    /** 按下鼠标键（X11 路由；返回 false = 非按键类或 WebView 路径） */
+    fun pressMouseButton(actionCode: Int): Boolean {
+        val btn = mouseStubButton(actionCode) ?: return false
+        if (targetWebView?.get() != null) return false // 浏览器目标保持原 JS 路径
+        if (!pressedMouseButtons.add(actionCode)) return true // 已按下：防重复
+        com.termux.x11.X11InputHub.forwardMouseButton(btn, true)
+        return true
+    }
+
+    /** 抬起鼠标键（与 pressMouseButton 配对；多余 UP 忽略防联键） */
+    fun releaseMouseButton(actionCode: Int) {
+        val btn = mouseStubButton(actionCode) ?: return
+        if (!pressedMouseButtons.remove(actionCode)) return
+        com.termux.x11.X11InputHub.forwardMouseButton(btn, false)
+    }
+
+    /** 一键释放全部按下的鼠标键（隐藏手柄/离开界面/打开设置时调用） */
+    fun releaseAllMouseButtons() {
+        if (pressedMouseButtons.isEmpty()) return
+        pressedMouseButtons.toList().forEach { releaseMouseButton(it) }
+    }
+
     /** 按钮按下 */
     fun onButtonPress(element: PadElement) {
-        if (element.action.kind == "mouse") dispatchMouse(element.action.keyCode)
-        else pressKey(element.action.keyCode)
+        if (element.action.kind == "mouse") {
+            // v2.33：左/中/右键状态对账按下（按住=持续按下）；滚轮即时派发
+            if (!pressMouseButton(element.action.keyCode)) dispatchMouse(element.action.keyCode)
+        } else pressKey(element.action.keyCode)
     }
 
     /** 按钮抬起 */
     fun onButtonRelease(element: PadElement) {
-        if (element.action.kind == "mouse") return  // 鼠标点击在按下时一次性完成
+        if (element.action.kind == "mouse") {
+            // v2.33：按键类配对抬起（补发释放防卡键）；滚轮为空操作
+            releaseMouseButton(element.action.keyCode)
+            return
+        }
         releaseKey(element.action.keyCode)
     }
 
