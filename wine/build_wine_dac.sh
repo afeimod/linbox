@@ -114,27 +114,49 @@ if [ "$TARGET" = "x86_64-linux" ]; then
     make -C wine install
 
 elif [ "$TARGET" = "aarch64-glibc" ]; then
-    # aarch64 glibc 交叉构建（grun 直接跑 arm64 wine；PE 经 wow64 → 需
-    # 先本机构建 host tools，再以 --with-wine-tools 交叉）。
+    # aarch64 glibc 构建（grun 直接跑 arm64 wine 本机侧；PE 侧 i386/x86_64
+    # 走 mingw new WoW64 —— 设备端 x86 PE 指令由 box64 转译）。
     OUT="wine-dac-${WINE_VERSION}-aarch64"
-    if [ ! -d "$BUILD_DIR/tools" ]; then
-        echo ">> 构建 host tools（本机 gcc）..."
-        mkdir -p "$BUILD_DIR/tools" && cd "$BUILD_DIR/tools"
-        "$BUILD_DIR/wine/configure" $CONFIGURE_OPTS \
-            && make -j"$JOBS" __tooldeps__ libs/wine
-        cd "$BUILD_DIR"
+    if [ "$(uname -m)" = "aarch64" ]; then
+        # ---- arm64 主机原生构建（GitHub ubuntu-24.04-arm runner / 本机）----
+        # 本机 gcc 即 aarch64 目标编译器，无需任何交叉工具链；
+        # PE 侧 i386/x86_64 由 mingw 提供（arm64 仓库同样有这两个 target）。
+        echo ">> arm64 主机原生构建（无需交叉工具链）"
+        ( cd wine && ./configure --prefix="$BUILD_DIR/out/$OUT" \
+            --enable-archs=i386,x86_64 $CONFIGURE_OPTS )
+        make -C wine -j"$JOBS"
+        make -C wine install
+    else
+        # ---- x86_64 主机交叉构建（需完整 aarch64 交叉工具链 + arm64 侧
+        # freetype/fontconfig 等开发库；CI 请改用 ubuntu-24.04-arm runner，
+        # workflow 已按 TARGET 自动路由，此处仅保留给本地已配好交叉环境的场景）。
+        if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+            echo "✗ aarch64-glibc 目标在 x86_64 主机上需要 aarch64 交叉工具链：" >&2
+            echo "    gcc-aarch64-linux-gnu / g++-aarch64-linux-gnu / arm64 侧 freetype 等开发库" >&2
+            echo "  推荐（零交叉配置）：GitHub Actions 选 TARGET=aarch64-glibc ——" >&2
+            echo "    workflow 会自动路由到 ubuntu-24.04-arm runner 原生构建（本机 gcc 即目标编译器）" >&2
+            echo "  或改用 TARGET=x86_64-linux（产物经设备端 box64/grun 运行）" >&2
+            exit 1
+        fi
+        if [ ! -d "$BUILD_DIR/tools" ]; then
+            echo ">> 构建 host tools（本机 gcc）..."
+            mkdir -p "$BUILD_DIR/tools" && cd "$BUILD_DIR/tools"
+            "$BUILD_DIR/wine/configure" $CONFIGURE_OPTS \
+                && make -j"$JOBS" __tooldeps__ libs/wine
+            cd "$BUILD_DIR"
+        fi
+        mkdir -p "$BUILD_DIR/build-aarch64" && cd "$BUILD_DIR/build-aarch64"
+        CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+        CFLAGS="-O3 -fomit-frame-pointer" CXXFLAGS="-O3 -fomit-frame-pointer" \
+        CROSSCC=x86_64-w64-mingw32-gcc \
+        "$BUILD_DIR/wine/configure" \
+            --with-wine-tools="$BUILD_DIR/tools" \
+            --enable-archs=i386,x86_64 \
+            --prefix="$BUILD_DIR/out/$OUT" \
+            $CONFIGURE_OPTS
+        make -j"$JOBS"
+        make install
     fi
-    mkdir -p "$BUILD_DIR/build-aarch64" && cd "$BUILD_DIR/build-aarch64"
-    CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
-    CFLAGS="-O3 -fomit-frame-pointer" CXXFLAGS="-O3 -fomit-frame-pointer" \
-    CROSSCC=x86_64-w64-mingw32-gcc \
-    "$BUILD_DIR/wine/configure" \
-        --with-wine-tools="$BUILD_DIR/tools" \
-        --enable-archs=i386,x86_64 \
-        --prefix="$BUILD_DIR/out/$OUT" \
-        $CONFIGURE_OPTS
-    make -j"$JOBS"
-    make install
 else
     echo "未知 TARGET=$TARGET（支持 x86_64-linux | aarch64-glibc）"; exit 1
 fi

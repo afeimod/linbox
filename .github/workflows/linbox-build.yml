@@ -225,7 +225,11 @@ jobs:
   wine:
     name: Wine 9.2 + winedac.drv
     if: github.event.inputs.component == 'wine' || github.event.inputs.component == 'all'
-    runs-on: ubuntu-24.04
+    # aarch64-glibc 目标 → 免费的 ubuntu-24.04-arm runner 原生构建
+    #（x86_64 runner 上没有 aarch64 交叉工具链，configure 必报
+    #  "C compiler cannot create executables" 退出 77）；
+    # x86_64-linux 目标 → 常规 ubuntu-24.04。
+    runs-on: ${{ (github.event.inputs.wine_target || 'x86_64-linux') == 'aarch64-glibc' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 180
 
     steps:
@@ -242,13 +246,25 @@ jobs:
       - name: 📦 Install build dependencies
         run: |
           sudo apt update
-          sudo apt install -y --fix-broken \
-            build-essential gcc-multilib g++-multilib \
-            mingw-w64 \
-            flex bison \
-            libfreetype-dev libfontconfig1-dev \
-            libvulkan-dev \
-            autoconf gettext perl wget xz-utils pkg-config
+          if [ "$(uname -m)" = "aarch64" ]; then
+            # arm64 runner 原生构建 aarch64-glibc：无 multilib（x86 专属），
+            # 其余依赖同名同版本；mingw-w64 在 arm64 仓库同样提供
+            # x86_64/i686 交叉编译器（new WoW64 的 PE 侧用）。
+            sudo apt install -y --fix-broken \
+              build-essential mingw-w64 \
+              flex bison \
+              libfreetype-dev libfontconfig1-dev \
+              libvulkan-dev \
+              autoconf gettext perl wget xz-utils pkg-config
+          else
+            sudo apt install -y --fix-broken \
+              build-essential gcc-multilib g++-multilib \
+              mingw-w64 \
+              flex bison \
+              libfreetype-dev libfontconfig1-dev \
+              libvulkan-dev \
+              autoconf gettext perl wget xz-utils pkg-config
+          fi
           which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
 
       - name: 🍷 Build Wine + winedac.drv

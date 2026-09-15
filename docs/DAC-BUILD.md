@@ -76,8 +76,10 @@ TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
 ### 手动编译（调试用）
 
 ```bash
-$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang \
-    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.c \
+# 桥源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 含 C++ 签名，
+# 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰
+$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ \
+    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.cpp \
     -llog -landroid -lEGL -lGLESv2
 $NDK/.../aarch64-linux-android26-clang -O2 -o libdac_allocd.so dac_allocd.c \
     -landroid -llog
