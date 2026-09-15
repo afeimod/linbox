@@ -1,6 +1,6 @@
 #!/data/data/com.linbox/files/usr/bin/sh
 # ============================================================
-# linbox-dac-doctor — DAC/显示栈 逐项体检 (v1.5, POSIX sh)
+# linbox-dac-doctor — DAC/显示栈 逐项体检 (v1.3, POSIX sh)
 # ============================================================
 P="${PREFIX:-/data/data/com.linbox/files/usr}"
 G=1
@@ -33,6 +33,21 @@ if [ -n "$WINE_REAL" ]; then
     fi
 fi
 
+# 3.5 wine 架构（x86_64 构建在 arm64 上必须 box64/grun 转译）
+if [ -n "$WINE_REAL" ]; then
+    if file "$WINE_REAL" 2>/dev/null | grep -qiE 'x86-64|x86_64'; then
+        if command -v box64 >/dev/null 2>&1; then
+            ok "Wine 架构" "x86_64 构建（box64 已装，经转译运行）"
+        elif command -v grun >/dev/null 2>&1; then
+            warn "Wine 架构" "x86_64 构建，有 grun 但缺 box64（pkg install box64）"
+        else
+            bad "Wine 架构" "x86_64 构建且无 box64/grun —— 无法执行；推荐 Actions 重建 wine_target=aarch64-glibc"
+        fi
+    else
+        ok "Wine 架构" "aarch64 原生构建（grun 直接跑，无需 box64）"
+    fi
+fi
+
 # 4. winedac.drv（决定 DAC 原生栈是否可用）
 DAC_DRV=0
 if [ -n "$WINE_ROOT" ]; then
@@ -41,24 +56,18 @@ if [ -n "$WINE_ROOT" ]; then
             ok "winedac.drv" "驱动已安装 → DAC 原生路径可用"; DAC_DRV=1; break
         fi
     done
-    [ "$DAC_DRV" = 1 ] || warn "winedac.drv" "未安装 → 部署 wine-dac tarball 启用 DAC 独立显示器（Actions 组件选 wine）"
+    [ "$DAC_DRV" = 1 ] || warn "winedac.drv" "未安装 → DAC 原生路径不可用（wine-dac tarball），走 X11/VNC 即可"
 fi
 
-# 5. 显示栈可用性（自带 X11 环境：DISPLAY 已设 / 本机 socket / 内置 :13 一律算可用）
-if [ -n "$DISPLAY" ]; then
-    ok "X11 环境" "DISPLAY=$DISPLAY（已有 X server，wine 直接复用）"
-elif [ -d /tmp/.X11-unix ] && ls /tmp/.X11-unix 2>/dev/null | grep -q '^X'; then
-    ok "X11 环境" "检测到本机 X server socket（export DISPLAY=:<编号> 即可复用）"
-elif [ -d "$P/tmp/.X11-unix" ] && ls "$P/tmp/.X11-unix" 2>/dev/null | grep -q '^X'; then
-    ok "X11 环境" "检测到 LinBox 内置 X server socket（:13 链路）"
-elif command -v termux-x11 >/dev/null 2>&1; then
+# 5. 显示栈可用性（重点新增）
+if command -v termux-x11 >/dev/null 2>&1; then
     if pm path com.termux.x11 >/dev/null 2>&1; then
-        ok "X11 显示栈" "termux-x11 + 伴侣 App 齐备（新起 :0 兜底）"
+        ok "X11 显示栈" "termux-x11 + 伴侣 App 齐备（推荐）"
     else
-        warn "X11 显示栈" "缺 Termux:X11 伴侣 App（github.com/termux/termux-x11/releases）"
+        warn "X11 显示栈" "客户端已装，缺 Termux:X11 伴侣 App（github.com/termux/termux-x11/releases）"
     fi
 else
-    warn "X11 环境" "未检测到（不影响 DAC 路径）"
+    warn "X11 显示栈" "未安装（一键安装: linbox-dac setup-x11）"
 fi
 if command -v Xvnc >/dev/null 2>&1; then
     ok "VNC 显示栈" "Xvnc 可用（127.0.0.1:5901）"

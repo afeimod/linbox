@@ -162,11 +162,6 @@ struct dac_input_key
 #define DAC_DESKTOP_MAX_SLOTS 3
 #define DAC_MAX_DMABUF_PLANES 4
 
-/* C++ 编译时保持 C 链接（JNI 运行时按未修饰名查找 Java_* 符号） */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* ------- JNI 桥接口（由 DacView / DacApp 调用） ------- */
 /*
  * nativeConnect(surface, socketPath) → backend
@@ -194,9 +189,5 @@ Java_com_linbox_apps_dac_DacNative_nativeSendKey( JNIEnv *env, jclass clazz,
 JNIEXPORT void JNICALL
 Java_com_linbox_apps_dac_DacNative_nativeSetTitleSink( JNIEnv *env, jclass clazz,
                                                        jobject sink );
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
 
 #endif /* LINBOX_DAC_BRIDGE_H */
