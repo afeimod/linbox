@@ -72,14 +72,15 @@ TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
 ### 手动编译（调试用）
 
 ```bash
-$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang \
-    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.c \
+$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ \
+    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.cpp \
     -llog -landroid -lEGL -lGLESv2
 $NDK/.../aarch64-linux-android26-clang -O2 -o libdac_allocd.so dac_allocd.c \
     -landroid -llog
 ```
 
-> 桥以 API 29 编译（ASurfaceControl 直链）；API 26–28 设备上加载失败时
+> 桥为 .cpp（clang++）：NDK r26 surface_control.h 含 C++ 签名且无
+> __cplusplus 分流，必须按 C++ 编译。桥以 API 29 编译（ASurfaceControl 直链）；API 26–28 设备上加载失败时
 > `DacNative.available` 自动禁用 DAC，不影响 App 其他功能。
 
 ## 3. Vulkan ICD（DXVK GPU 路径）

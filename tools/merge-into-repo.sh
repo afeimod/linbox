@@ -141,6 +141,9 @@ cat > "$P2" <<'KTS'
 // ============================================================
 // LinBox DAC —— 原生桥编译（tools/merge-into-repo.sh 幂等追加块）
 // 与上方 linbox-reprefix 同风格：Gradle Exec 调 NDK clang 逐 ABI 编译。
+// ⚠️ bridge 源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 内
+// setGeometry/setBuffer 等签名含 C++ 引用/默认参数且无 __cplusplus 分流，
+// 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰。
 //   liblinbox_dac_bridge.so  JNI 桥（app 进程内：SF 直合/AHB Canvas/dmabuf EGL）
 //   libdac_allocd.so         AHB 侧车守护进程（可执行伪装 so，由
 //                            TermuxBootstrapInstaller 拷到 $PREFIX/bin/dac_allocd）
@@ -180,20 +183,19 @@ afterEvaluate {
         val outAllocd = File(outDir, "libdac_allocd.so")
         val bridgeTask = tasks.register<Exec>("buildDacBridge$abiName") {
             group = "build"
-            inputs.file(File(dacSource, "linbox_dac_bridge.c"))
+            inputs.file(File(dacSource, "linbox_dac_bridge.cpp"))
             outputs.file(outBridge)
             doFirst {
                 outDir.mkdirs()
-                val clang = File(clangBin, "${triple}$dacApiBridge-clang")
-                if (!clang.exists()) throw GradleException("找不到 NDK clang：${clang.absolutePath}")
+                val clang = File(clangBin, "${triple}$dacApiBridge-clang++")
+                if (!clang.exists()) throw GradleException("找不到 NDK clang++：${clang.absolutePath}")
             }
             commandLine(
-                File(clangBin, "${triple}$dacApiBridge-clang").absolutePath,
+                File(clangBin, "${triple}$dacApiBridge-clang++").absolutePath,
                 "-shared", "-fPIC", "-O2", "-Wall", "-Wno-unused-parameter",
                 "-o", outBridge.absolutePath,
-                File(dacSource, "linbox_dac_bridge.c").absolutePath,
-                "-llog", "-landroid", "-lEGL", "-lGLESv2",
-                "-Wl,--no-version-descriptors"
+                File(dacSource, "linbox_dac_bridge.cpp").absolutePath,
+                "-llog", "-landroid", "-lEGL", "-lGLESv2"
             )
         }
         val allocdTask = tasks.register<Exec>("buildDacAllocd$abiName") {
@@ -210,8 +212,7 @@ afterEvaluate {
                 "-O2", "-Wall", "-Wno-unused-parameter",
                 "-o", outAllocd.absolutePath,
                 File(dacSource, "dac_allocd.c").absolutePath,
-                "-landroid", "-llog",
-                "-Wl,--no-version-descriptors"
+                "-landroid", "-llog"
             )
         }
         buildDacAll.configure { dependsOn(bridgeTask, allocdTask) }
@@ -270,7 +271,7 @@ cat > "$P5" <<'KTS'
 android {
     packaging {
         jniLibs {
-            keepDebugSymbols.add("**/liblinbox_dac_*.so")
+            keepDebugSymbols.add("**/liblinbox_dac*.so")
         }
     }
 }
@@ -334,7 +335,7 @@ if [ $SAME_REPO = 1 ]; then
     echo "   （若本次有补丁注入，请提交 Manifest/gradle/LinBoxApp/BootstrapInstaller 的改动）"
 fi
 echo " 1. 提交推送（DAC 自此成为项目源码的一部分，此后任何构建自动包含）："
-echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.7' && git push"
+echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.8' && git push"
 echo " 2. 构建（三选一，产物相同，无需再跑本脚本）："
 echo "      - 本地：Android Studio Run / ./gradlew assembleRelease"
 echo "      - 你已有的 CI：什么都不用改（DAC 挂在 preBuild，正常构建即含）"
