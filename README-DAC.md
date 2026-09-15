@@ -40,13 +40,13 @@ Wine 桌面 UI（GDI 窗口/菜单/对话框）同样直通：每窗口 CPU 位�
 
 ```bash
 # 1. 解压本包，把源码并入 linbox 仓库（幂等，可重复执行）
-unzip linbox-dac-source-v1.6.zip -d dac && cd dac
+unzip linbox-dac-source-v1.7.zip -d dac && cd dac
 ./tools/merge-into-repo.sh /path/to/linbox     # --dry-run 可先预览
 #   ※ 若源码已直接提交进仓库（tools/ 就在仓库内），在仓库根跑：
 #     ./tools/merge-into-repo.sh .
 #     脚本会识别「源码包=仓库本身」，跳过复制，只校验/注入宿主文件补丁
 # 2. 提交推送 —— 从此 DAC 就是项目源码的一部分
-cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.6" && git push
+cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.7" && git push
 # 3. 正常构建即可（三选一，产物相同）：
 #    ① 本地：Android Studio Run / ./gradlew assembleRelease
 #    ② 你已有的 CI：什么都不用改

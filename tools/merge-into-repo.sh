@@ -285,7 +285,10 @@ tasks.register("copyDacDisplayScripts") {
         dacAbis.keys.map { dacOut.get().dir(it).asFile }.forEach { d ->
             d.mkdirs()
             dacScriptDir.listFiles()?.filter { it.name.startsWith("linbox-dac") }?.forEach { f ->
-                java.io.File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
+                // 注意：这里不能用全限定 java.io.File —— Kotlin DSL 脚本里
+                // 该写法会被隐式接收者遮蔽（Unresolved reference: io）。
+                // File 由 Kotlin 默认导入（java.io.*）解析，无遮蔽问题。
+                File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
             }
         }
     }
@@ -331,7 +334,7 @@ if [ $SAME_REPO = 1 ]; then
     echo "   （若本次有补丁注入，请提交 Manifest/gradle/LinBoxApp/BootstrapInstaller 的改动）"
 fi
 echo " 1. 提交推送（DAC 自此成为项目源码的一部分，此后任何构建自动包含）："
-echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.6' && git push"
+echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.7' && git push"
 echo " 2. 构建（三选一，产物相同，无需再跑本脚本）："
 echo "      - 本地：Android Studio Run / ./gradlew assembleRelease"
 echo "      - 你已有的 CI：什么都不用改（DAC 挂在 preBuild，正常构建即含）"
