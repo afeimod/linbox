@@ -8,6 +8,8 @@
 #
 # 行为：
 #   1) 复制纯新增文件（DAC cpp/Kotlin/脚本/wine 驱动/构建脚本/docs/workflows）
+#      ※ 源码包与目标仓库为同一目录时（脚本已随仓库分发，CI 内 ./tools/merge-into-repo.sh .）
+#        整体跳过复制 —— DAC 已在项目内，只做下面的补丁校验
 #   2) 幂等补丁六个宿主文件（已注入则自动跳过）：
 #      - app/src/main/AndroidManifest.xml            注册 DacReceiver
 #      - app/build.gradle.kts                        追加 DAC 原生编译块 + 脚本分发块
@@ -17,10 +19,18 @@
 # ============================================================
 set -e
 
-SRC="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"   # 本包根
+SRC="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd -P)"   # 本包根（物理路径）
 DRY=0
 if [ "$1" = "--dry-run" ]; then DRY=1; shift; fi
 REPO="${1:-$(cd "$SRC/.." && pwd)}"
+[ -d "$REPO" ] || { echo "✗ 目标仓库目录不存在：$REPO"; exit 1; }
+REPO="$(cd "$REPO" && pwd -P)"   # 规范化：兼容 "."、相对路径与符号链接
+
+# 源码包即仓库本身（脚本已随仓库提交、CI 内以 "." 指向自身）：
+# 此时所有"新增文件"都已在位，复制阶段整体跳过，避免 cp 自我复制报
+# "are the same file" 而中断。补丁阶段照常执行（幂等）。
+SAME_REPO=0
+if [ "$SRC" = "$REPO" ]; then SAME_REPO=1; fi
 
 echo "源码包: $SRC"
 echo "目标仓库: $REPO"
@@ -28,12 +38,19 @@ echo "目标仓库: $REPO"
 [ $DRY = 1 ] && echo "（dry-run 模式）"
 
 # ------------------------------------------------------------
-# 1) 纯新增文件
+# 1) 纯新增文件（源码包 = 仓库本身时整体跳过）
 # ------------------------------------------------------------
+if [ $SAME_REPO = 1 ]; then
+    echo ">> 源码包与目标仓库为同一目录：DAC 已在项目内，跳过文件复制"
+else
 echo ">> 复制新增文件 ..."
 copy_tree() {  # copy_tree <src-rel> <dst-rel>
     local s="$SRC/$1" d="$REPO/$2"
     [ -e "$s" ] || { echo "  ⚠ 缺少 $1（跳过）"; return; }
+    # 目录级同位防护：即使 SRC≠REPO，单个子树也可能指向同一位置
+    if [ -d "$d" ] && [ "$(cd "$s" && pwd -P)" = "$(cd "$d" && pwd -P)" ]; then
+        echo "  = $2/（同一目录，跳过）"; return
+    fi
     if [ $DRY = 0 ]; then mkdir -p "$d"; cp -r "$s"/. "$d"/; fi
     echo "  - $2/"
 }
@@ -46,12 +63,22 @@ copy_tree "mesa"                                    "mesa"
 copy_tree "docs"                                    "docs"
 copy_tree ".github/workflows"                       ".github/workflows"
 if [ -f "$SRC/README-DAC.md" ]; then
-    [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
-    echo "  - README-DAC.md"
+    if [ "$SRC/README-DAC.md" -ef "$REPO/README-DAC.md" ]; then
+        echo "  = README-DAC.md（同一文件，跳过）"
+    else
+        [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
+        echo "  - README-DAC.md"
+    fi
 fi
 if [ $DRY = 0 ]; then
-    mkdir -p "$REPO/tools" && cp "$SRC/tools/merge-into-repo.sh" "$REPO/tools/" || true
+    mkdir -p "$REPO/tools"
+    if [ "$SRC/tools/merge-into-repo.sh" -ef "$REPO/tools/merge-into-repo.sh" ]; then
+        echo "  = tools/merge-into-repo.sh（同一文件，跳过）"
+    else
+        cp "$SRC/tools/merge-into-repo.sh" "$REPO/tools/" || true
+    fi
 fi
+fi   # end SAME_REPO
 
 # ------------------------------------------------------------
 # 2) 幂等补丁
@@ -299,8 +326,12 @@ echo ""
 echo "============================================================"
 echo " 集成完成（dry-run=$DRY）。下一步："
 echo "============================================================"
+if [ $SAME_REPO = 1 ]; then
+    echo " · 源码包即仓库本身：本次未复制文件，仅校验/注入了宿主文件补丁"
+    echo "   （若本次有补丁注入，请提交 Manifest/gradle/LinBoxApp/BootstrapInstaller 的改动）"
+fi
 echo " 1. 提交推送（DAC 自此成为项目源码的一部分，此后任何构建自动包含）："
-echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.5' && git push"
+echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.6' && git push"
 echo " 2. 构建（三选一，产物相同，无需再跑本脚本）："
 echo "      - 本地：Android Studio Run / ./gradlew assembleRelease"
 echo "      - 你已有的 CI：什么都不用改（DAC 挂在 preBuild，正常构建即含）"

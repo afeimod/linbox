@@ -40,10 +40,13 @@ Wine 桌面 UI（GDI 窗口/菜单/对话框）同样直通：每窗口 CPU 位�
 
 ```bash
 # 1. 解压本包，把源码并入 linbox 仓库（幂等，可重复执行）
-unzip linbox-dac-source-v1.5.zip -d dac && cd dac
+unzip linbox-dac-source-v1.6.zip -d dac && cd dac
 ./tools/merge-into-repo.sh /path/to/linbox     # --dry-run 可先预览
+#   ※ 若源码已直接提交进仓库（tools/ 就在仓库内），在仓库根跑：
+#     ./tools/merge-into-repo.sh .
+#     脚本会识别「源码包=仓库本身」，跳过复制，只校验/注入宿主文件补丁
 # 2. 提交推送 —— 从此 DAC 就是项目源码的一部分
-cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.5" && git push
+cd /path/to/linbox && git add -A && git commit -m "LinBox DAC v1.6" && git push
 # 3. 正常构建即可（三选一，产物相同）：
 #    ① 本地：Android Studio Run / ./gradlew assembleRelease
 #    ② 你已有的 CI：什么都不用改
@@ -86,7 +89,7 @@ linbox-dac setup-x11              # 自检：已有环境直接通过，不会�
 | `mesa/build-turnip-android.sh` | platforms=android 的 Turnip（AHB Vulkan ICD）构建脚本 |
 | `dxvk/build-dxvk.sh` | DXVK 构建 + prefix 部署（无需打补丁） |
 | `.github/workflows/linbox-build.yml` | 唯一构建入口（push 自动出 APK；wine/dxvk/turnip 为可选组件） |
-| `tools/merge-into-repo.sh` | 幂等集成脚本（复制文件 + 补丁 Manifest/Gradle/LinBoxApp/Installer） |
+| `tools/merge-into-repo.sh` | 幂等集成脚本（复制文件 + 补丁 Manifest/Gradle/LinBoxApp/Installer；源码包=仓库时自动跳过复制） |
 | `docs/` | 架构 / 协议 / 构建文档 |
 
 ## 关键设计决策
