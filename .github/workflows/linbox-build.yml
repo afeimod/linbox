@@ -38,9 +38,9 @@ on:
         default: "9.2"
         type: string
       apply_linbox_patches:
-        description: "Wine：应用 LinBox path/ 补丁（esync/mfplat）"
+        description: "Wine：应用 path/ 散装补丁（多为残片，默认关闭；staging 补丁走上游）"
         required: false
-        default: true
+        default: false
         type: boolean
       wine_target:
         description: "Wine 构建目标"
@@ -321,9 +321,13 @@ jobs:
         run: |
           out="$HOME/dxvk-build/out/dxvk-$DXVK_VERSION"
           ls -lh "$out"
-          test -f "$out/x64/d3d11.dll" || { echo "✗ 缺 x64/d3d11.dll"; exit 1; }
-          test -f "$out/x86/d3d11.dll" || { echo "✗ 缺 x86/d3d11.dll"; exit 1; }
-          echo "✓ DXVK x64/x86 DLL 齐备"
+          # build-dxvk.sh 已把 package-release.sh 的 32 位目录 x32 统一改名为 x86
+          for arch in x64 x86; do
+            for dll in d3d9 d3d10core d3d11 dxgi; do
+              test -f "$out/$arch/$dll.dll" || { echo "✗ 缺 $arch/$dll.dll"; exit 1; }
+            done
+          done
+          echo "✓ DXVK x64/x86 核心 DLL 齐备（d3d9/d3d10core/d3d11/dxgi）"
 
       - name: 📤 Upload DXVK
         uses: actions/upload-artifact@v4
@@ -348,7 +352,7 @@ jobs:
 
       - name: ⚙️ Normalize inputs
         run: |
-          echo "MESA_VERSION=${{ github.event.inputs.mesa_version || '24.0.9' }}" >> "$GITHUB_ENV"
+          echo "MESA_VERSION=${{ github.event.inputs.mesa_version || '24.2.1' }}" >> "$GITHUB_ENV"
           echo "TURNIP_API=${{ github.event.inputs.api_level || '29' }}" >> "$GITHUB_ENV"
 
       - name: ☕ Set up JDK 17

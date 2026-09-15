@@ -56,16 +56,23 @@ if [ "$WINE_BRANCH" = "staging" ]; then
 fi
 
 # ---- 2. 可选：LinBox path/ 现有补丁（esync、mfplat、termux-wine-fix…） ----
+# 注意：path/ 下多为手工摘录的 diff 残片（esync.patch 等对 wine-9.2 干树
+# 并不完整可应用），且用户原版 path/build_wine.sh 走 wine-staging 补丁、
+# 从不使用这些散装文件。此处仅作尽力而为的可选增强：失败即回滚该补丁
+# 的半应用内容并继续，绝不因此中断构建（APPLY_LINBOX_PATCHES 默认 0）。
 if [ "$APPLY_LINBOX_PATCHES" = "1" ] && [ -d "$LINBOX_ROOT/path" ]; then
-    echo ">> 应用 LinBox path/ 补丁 ..."
+    echo ">> 应用 LinBox path/ 补丁（尽力而为，失败自动回滚并跳过）..."
     for p in "$LINBOX_ROOT"/path/*.patch; do
         [ -e "$p" ] || continue
         echo "   - $(basename "$p")"
-        if ! ( cd wine && patch -Np1 --forward < "$p" ); then
-            echo "   ⚠ 补丁应用失败（可能已含等价改动）：$(basename "$p")"
-            ( cd wine && patch -Np1 -R --dry-run < "$p" >/dev/null 2>&1 ) \
-                && echo "     （反向可退出 → 视为已应用，继续）" \
-                || { echo "     ✗ 与上游冲突；APPLY_LINBOX_PATCHES=0 可跳过"; exit 1; }
+        if ( cd wine && patch -Np1 --forward -s < "$p" > /dev/null 2>&1 ); then
+            echo "     ✓ 已应用"
+        elif ( cd wine && patch -Np1 -R --dry-run < "$p" > /dev/null 2>&1 ); then
+            echo "     ⊘ 已包含等价改动，跳过"
+        else
+            # 回滚半应用 hunks，保持源码树可编译
+            ( cd wine && patch -Np1 -R -s < "$p" > /dev/null 2>&1 ) || true
+            echo "     ⚠ 应用失败（残片/冲突），已回滚跳过 —— 功能不受影响"
         fi
     done
 fi

@@ -8,8 +8,6 @@
 #
 # 行为：
 #   1) 复制纯新增文件（DAC cpp/Kotlin/脚本/wine 驱动/构建脚本/docs/workflows）
-#      ※ 源码包与目标仓库为同一目录时（脚本已随仓库分发，CI 内 ./tools/merge-into-repo.sh .）
-#        整体跳过复制 —— DAC 已在项目内，只做下面的补丁校验
 #   2) 幂等补丁六个宿主文件（已注入则自动跳过）：
 #      - app/src/main/AndroidManifest.xml            注册 DacReceiver
 #      - app/build.gradle.kts                        追加 DAC 原生编译块 + 脚本分发块
@@ -19,18 +17,10 @@
 # ============================================================
 set -e
 
-SRC="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd -P)"   # 本包根（物理路径）
+SRC="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"   # 本包根
 DRY=0
 if [ "$1" = "--dry-run" ]; then DRY=1; shift; fi
 REPO="${1:-$(cd "$SRC/.." && pwd)}"
-[ -d "$REPO" ] || { echo "✗ 目标仓库目录不存在：$REPO"; exit 1; }
-REPO="$(cd "$REPO" && pwd -P)"   # 规范化：兼容 "."、相对路径与符号链接
-
-# 源码包即仓库本身（脚本已随仓库提交、CI 内以 "." 指向自身）：
-# 此时所有"新增文件"都已在位，复制阶段整体跳过，避免 cp 自我复制报
-# "are the same file" 而中断。补丁阶段照常执行（幂等）。
-SAME_REPO=0
-if [ "$SRC" = "$REPO" ]; then SAME_REPO=1; fi
 
 echo "源码包: $SRC"
 echo "目标仓库: $REPO"
@@ -38,19 +28,12 @@ echo "目标仓库: $REPO"
 [ $DRY = 1 ] && echo "（dry-run 模式）"
 
 # ------------------------------------------------------------
-# 1) 纯新增文件（源码包 = 仓库本身时整体跳过）
+# 1) 纯新增文件
 # ------------------------------------------------------------
-if [ $SAME_REPO = 1 ]; then
-    echo ">> 源码包与目标仓库为同一目录：DAC 已在项目内，跳过文件复制"
-else
 echo ">> 复制新增文件 ..."
 copy_tree() {  # copy_tree <src-rel> <dst-rel>
     local s="$SRC/$1" d="$REPO/$2"
     [ -e "$s" ] || { echo "  ⚠ 缺少 $1（跳过）"; return; }
-    # 目录级同位防护：即使 SRC≠REPO，单个子树也可能指向同一位置
-    if [ -d "$d" ] && [ "$(cd "$s" && pwd -P)" = "$(cd "$d" && pwd -P)" ]; then
-        echo "  = $2/（同一目录，跳过）"; return
-    fi
     if [ $DRY = 0 ]; then mkdir -p "$d"; cp -r "$s"/. "$d"/; fi
     echo "  - $2/"
 }
@@ -63,22 +46,12 @@ copy_tree "mesa"                                    "mesa"
 copy_tree "docs"                                    "docs"
 copy_tree ".github/workflows"                       ".github/workflows"
 if [ -f "$SRC/README-DAC.md" ]; then
-    if [ "$SRC/README-DAC.md" -ef "$REPO/README-DAC.md" ]; then
-        echo "  = README-DAC.md（同一文件，跳过）"
-    else
-        [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
-        echo "  - README-DAC.md"
-    fi
+    [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
+    echo "  - README-DAC.md"
 fi
 if [ $DRY = 0 ]; then
-    mkdir -p "$REPO/tools"
-    if [ "$SRC/tools/merge-into-repo.sh" -ef "$REPO/tools/merge-into-repo.sh" ]; then
-        echo "  = tools/merge-into-repo.sh（同一文件，跳过）"
-    else
-        cp "$SRC/tools/merge-into-repo.sh" "$REPO/tools/" || true
-    fi
+    mkdir -p "$REPO/tools" && cp "$SRC/tools/merge-into-repo.sh" "$REPO/tools/" || true
 fi
-fi   # end SAME_REPO
 
 # ------------------------------------------------------------
 # 2) 幂等补丁
@@ -141,9 +114,6 @@ cat > "$P2" <<'KTS'
 // ============================================================
 // LinBox DAC —— 原生桥编译（tools/merge-into-repo.sh 幂等追加块）
 // 与上方 linbox-reprefix 同风格：Gradle Exec 调 NDK clang 逐 ABI 编译。
-// ⚠️ bridge 源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 内
-// setGeometry/setBuffer 等签名含 C++ 引用/默认参数且无 __cplusplus 分流，
-// 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰。
 //   liblinbox_dac_bridge.so  JNI 桥（app 进程内：SF 直合/AHB Canvas/dmabuf EGL）
 //   libdac_allocd.so         AHB 侧车守护进程（可执行伪装 so，由
 //                            TermuxBootstrapInstaller 拷到 $PREFIX/bin/dac_allocd）
@@ -183,19 +153,20 @@ afterEvaluate {
         val outAllocd = File(outDir, "libdac_allocd.so")
         val bridgeTask = tasks.register<Exec>("buildDacBridge$abiName") {
             group = "build"
-            inputs.file(File(dacSource, "linbox_dac_bridge.cpp"))
+            inputs.file(File(dacSource, "linbox_dac_bridge.c"))
             outputs.file(outBridge)
             doFirst {
                 outDir.mkdirs()
-                val clang = File(clangBin, "${triple}$dacApiBridge-clang++")
-                if (!clang.exists()) throw GradleException("找不到 NDK clang++：${clang.absolutePath}")
+                val clang = File(clangBin, "${triple}$dacApiBridge-clang")
+                if (!clang.exists()) throw GradleException("找不到 NDK clang：${clang.absolutePath}")
             }
             commandLine(
-                File(clangBin, "${triple}$dacApiBridge-clang++").absolutePath,
+                File(clangBin, "${triple}$dacApiBridge-clang").absolutePath,
                 "-shared", "-fPIC", "-O2", "-Wall", "-Wno-unused-parameter",
                 "-o", outBridge.absolutePath,
-                File(dacSource, "linbox_dac_bridge.cpp").absolutePath,
-                "-llog", "-landroid", "-lEGL", "-lGLESv2"
+                File(dacSource, "linbox_dac_bridge.c").absolutePath,
+                "-llog", "-landroid", "-lEGL", "-lGLESv2",
+                "-Wl,--no-version-descriptors"
             )
         }
         val allocdTask = tasks.register<Exec>("buildDacAllocd$abiName") {
@@ -212,7 +183,8 @@ afterEvaluate {
                 "-O2", "-Wall", "-Wno-unused-parameter",
                 "-o", outAllocd.absolutePath,
                 File(dacSource, "dac_allocd.c").absolutePath,
-                "-landroid", "-llog"
+                "-landroid", "-llog",
+                "-Wl,--no-version-descriptors"
             )
         }
         buildDacAll.configure { dependsOn(bridgeTask, allocdTask) }
@@ -271,7 +243,7 @@ cat > "$P5" <<'KTS'
 android {
     packaging {
         jniLibs {
-            keepDebugSymbols.add("**/liblinbox_dac*.so")
+            keepDebugSymbols.add("**/liblinbox_dac_*.so")
         }
     }
 }
@@ -286,10 +258,7 @@ tasks.register("copyDacDisplayScripts") {
         dacAbis.keys.map { dacOut.get().dir(it).asFile }.forEach { d ->
             d.mkdirs()
             dacScriptDir.listFiles()?.filter { it.name.startsWith("linbox-dac") }?.forEach { f ->
-                // 注意：这里不能用全限定 java.io.File —— Kotlin DSL 脚本里
-                // 该写法会被隐式接收者遮蔽（Unresolved reference: io）。
-                // File 由 Kotlin 默认导入（java.io.*）解析，无遮蔽问题。
-                File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
+                java.io.File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
             }
         }
     }
@@ -330,20 +299,16 @@ echo ""
 echo "============================================================"
 echo " 集成完成（dry-run=$DRY）。下一步："
 echo "============================================================"
-if [ $SAME_REPO = 1 ]; then
-    echo " · 源码包即仓库本身：本次未复制文件，仅校验/注入了宿主文件补丁"
-    echo "   （若本次有补丁注入，请提交 Manifest/gradle/LinBoxApp/BootstrapInstaller 的改动）"
-fi
-echo " 1. 提交推送（DAC 自此成为项目源码的一部分，此后任何构建自动包含）："
-echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.8' && git push"
-echo " 2. 构建（三选一，产物相同，无需再跑本脚本）："
-echo "      - 本地：Android Studio Run / ./gradlew assembleRelease"
-echo "      - 你已有的 CI：什么都不用改（DAC 挂在 preBuild，正常构建即含）"
-echo "      - 仓库 Actions「LinBox 构建（含 DAC 集成）」：push 自动出 APK；"
-echo "        也可手动选组件 wine / dxvk / turnip / all 构建配套产物"
-echo " 3. 真机：安装 APK → 终端部署 wine-dac tarball →"
-echo "      linbox-dac game.exe    # auto：winedac.drv 已装走 DAC 独立显示器，"
-echo "                             #        否则复用已有 X11（DISPLAY/内置 :13/termux-x11）"
+echo " 1. 提交推送："
+echo "      cd $REPO && git add -A && git commit -m 'LinBox DAC v1.3' && git push"
+echo " 2. GitHub Actions 手动运行："
+echo "      - LinBox DAC APK                → 集成 DAC 的 LinBox APK"
+echo "      - LinBox DAC Wine (winedac.drv) → wine-dac tarball"
+echo "      - LinBox DAC DXVK               → d3d→Vulkan DLL"
+echo "      - LinBox DAC Turnip ICD         → Adreno AHB ICD"
+echo " 3. 真机验证：安装 APK → 终端内部署 wine-dac tarball →"
+echo "      linbox-dac setup-x11   # X11 路径（当前推荐，即装即显）"
+echo "      linbox-dac game.exe    # auto：未部署 winedac.drv 走 x11，已部署走 DAC 直合"
 echo "      linbox-dac doctor      # 逐项体检"
 echo " 详细文档：README-DAC.md / docs/DAC-BUILD.md"
 echo "============================================================"
