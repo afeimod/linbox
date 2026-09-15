@@ -6,6 +6,9 @@
 #   ./merge-into-repo.sh [linbox 仓库路径]     # 默认 ../（本包解压在仓库同级）
 #   ./merge-into-repo.sh --dry-run [仓库路径]  # 只打印将做的变更
 #
+# 同目录自动检测：若源码包与目标仓库是同一目录（包已并入仓库、脚本
+# 位于 <仓库>/tools/ 下直接运行），自动跳过复制阶段，仅执行幂等补丁。
+#
 # 行为：
 #   1) 复制纯新增文件（DAC cpp/Kotlin/脚本/wine 驱动/构建脚本/docs/workflows）
 #   2) 幂等补丁六个宿主文件（已注入则自动跳过）：
@@ -22,8 +25,15 @@ DRY=0
 if [ "$1" = "--dry-run" ]; then DRY=1; shift; fi
 REPO="${1:-$(cd "$SRC/.." && pwd)}"
 
+# 归一化真实路径（穿透符号链接），同一目录时禁止自拷贝
+SRC=$(readlink -f "$SRC")
+REPO=$(readlink -f "$REPO")
+SAME_DIR=0
+[ "$SRC" = "$REPO" ] && SAME_DIR=1
+
 echo "源码包: $SRC"
 echo "目标仓库: $REPO"
+[ $SAME_DIR = 1 ] && echo "= 源码包与目标仓库为同一目录（包已在仓库内）——跳过复制，仅做幂等补丁"
 [ -f "$REPO/app/build.gradle.kts" ] || { echo "✗ 目标不是 linbox 仓库（缺 app/build.gradle.kts）"; exit 1; }
 [ $DRY = 1 ] && echo "（dry-run 模式）"
 
@@ -34,6 +44,7 @@ echo ">> 复制新增文件 ..."
 copy_tree() {  # copy_tree <src-rel> <dst-rel>
     local s="$SRC/$1" d="$REPO/$2"
     [ -e "$s" ] || { echo "  ⚠ 缺少 $1（跳过）"; return; }
+    if [ $SAME_DIR = 1 ]; then echo "  = $2/（同目录已就位）"; return; fi
     if [ $DRY = 0 ]; then mkdir -p "$d"; cp -r "$s"/. "$d"/; fi
     echo "  - $2/"
 }
@@ -46,10 +57,14 @@ copy_tree "mesa"                                    "mesa"
 copy_tree "docs"                                    "docs"
 copy_tree ".github/workflows"                       ".github/workflows"
 if [ -f "$SRC/README-DAC.md" ]; then
-    [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
-    echo "  - README-DAC.md"
+    if [ $SAME_DIR = 1 ]; then
+        echo "  = README-DAC.md（同目录已就位）"
+    else
+        [ $DRY = 0 ] && cp "$SRC/README-DAC.md" "$REPO/README-DAC.md"
+        echo "  - README-DAC.md"
+    fi
 fi
-if [ $DRY = 0 ]; then
+if [ $DRY = 0 ] && [ $SAME_DIR = 0 ]; then
     mkdir -p "$REPO/tools" && cp "$SRC/tools/merge-into-repo.sh" "$REPO/tools/" || true
 fi
 

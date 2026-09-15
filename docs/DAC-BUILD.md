@@ -51,6 +51,10 @@ TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
 ./tools/merge-into-repo.sh /path/to/linbox      # --dry-run 先预览变更
 ```
 
+> 包已整体并入仓库时（脚本位于 `<仓库>/tools/` 下），在仓库根直接
+> `./tools/merge-into-repo.sh .` 亦可：脚本检测到源码包与目标为同一目录，
+> 自动跳过复制阶段、仅执行幂等补丁（不会 cp 自拷贝报错）。
+
 脚本自动完成：
 1. 复制新增文件：`app/src/main/cpp/dac/`、`apps/dac/` Kotlin、
    `assets/termux/scripts/linbox-dac*`、`wine/`、`dxvk/`、`mesa/`、
