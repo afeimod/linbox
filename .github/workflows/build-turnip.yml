@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       mesa_version:
-        description: "Mesa 版本"
+        description: "Mesa 版本（turnip AHB 需 ≥24.2）"
         required: true
-        default: "24.0.9"
+        default: "24.2.1"
         type: string
       api_level:
         description: "Android API 级别（AHB≥26，KGSL 建议 29）"
@@ -52,7 +52,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y python3 python3-pip
-          pip3 install --break-system-packages meson ninja || pip3 install meson ninja
+          pip3 install --break-system-packages meson ninja mako || pip3 install meson ninja mako
           meson --version && ninja --version
 
       # ============ 构建（mesa/build-turnip-android.sh：meson cross + ninja） ============

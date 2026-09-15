@@ -23,11 +23,11 @@
                                   │ 帧 + fd(SCM_RIGHTS)
 ┌───────────────────────── LinBox App 进程（com.linbox）─────────────────────────┐
 │                                 ▼                                              │
-│                linbox_dac_bridge.cpp（JNI，DacView 的 Surface）                  │
+│                linbox_dac_bridge.c（JNI，DacView 的 Surface）                   │
 │                  ├ AHardwareBuffer_recvHandleFromUnixSocket 导入               │
 │                  ├ ASurfaceControl_createFromWindow(SurfaceView)               │
 │                  ├ ASurfaceTransaction.setBuffer(ahb, acquireFence)            │
-│                  │     + setDamageRegion / setGeometry(定位+缩放) / setZ        │
+│                  │     + setDamageRegion / setPosition / setMatrix / setZ      │
 │                  └ OnComplete → release fence → 回执 wine（槽位复用背压）        │
 │                                 ▼                                              │
 │                    ★ SurfaceFlinger 直接合成 ★                                  │

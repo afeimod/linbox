@@ -1,25 +1,23 @@
 #!/data/data/com.linbox/files/usr/bin/sh
 # ============================================================
-# LinBox DAC — Wine 显示启动器 (v1.5, 严格 POSIX sh)
+# LinBox DAC — Wine 显示启动器 (v1.3, 严格 POSIX sh)
 # ============================================================
-# 显示栈（auto 模式按环境自动选择，优先级从高到低）：
-#   1) dac : winedac.drv → LinBox 独立显示器（SurfaceFlinger 直合，零 X11；
-#            需 wine-dac tarball + 含 DAC 模块的 APK）
-#   2) x11 : 复用已有 X 环境 —— 已设 DISPLAY 直接用；LinBox 内置 X
-#            （lorie/Xwayland，默认 :13）自动探测；都无且有 termux-x11 才新起 :0
-#   3) vnc : Xvnc 无头 X + VNC 客户端（兜底）
+# 三级显示栈，auto 模式自动回退（按已部署情况）：
+#   1) dac : winedac.drv 原生直合（零 X11；需 wine-dac tarball + DAC APK）
+#   2) x11 : termux-x11（社区验证的标准路径，当前推荐）
+#   3) vnc : tigervnc 无头 X + VNC 客户端（兜底）
 #
 # 用法：
 #   linbox-dac doctor                 逐项体检（含各显示栈可用性）
-#   linbox-dac setup-x11              X11 环境自检（已有环境直接通过，不装任何东西）
+#   linbox-dac setup-x11              一键安装 X11 显示栈
 #   linbox-dac reg | unreg | stop     注册表 / 停止
 #   linbox-dac [-s WxH] [--display MODE] 程序.exe [参数...]
-#       MODE = auto | dac | x11 | vnc （默认 auto）
+#       MODE = auto | x11 | dac | vnc （默认 auto）
 #
 # 示例：
-#   linbox-dac /sdcard/Game/game.exe          # 自动选择（DAC 独立显示器优先）
+#   linbox-dac /sdcard/Game/game.exe          # 自动选择显示栈
 #   linbox-dac -s 1280x720 notepad.exe        # 指定虚拟桌面分辨率
-#   linbox-dac --display dac game.exe         # 强制 DAC 独立显示器
+#   linbox-dac --display x11 game.exe         # 强制走 X11（当前最稳）
 # ============================================================
 
 PREFIX_DIR="${PREFIX:-/data/data/com.linbox/files/usr}"
@@ -37,44 +35,25 @@ die() { err "$*"; printf '[linbox-dac] 完整日志: %s\n' "$LOG" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# 探测本机已有 X server socket（参数如 :13；POSIX 下不使用 local）
-x11_sock() {
-    _xn="${1#*:}"
-    for _xd in /tmp/.X11-unix "$PREFIX_DIR/tmp/.X11-unix"; do
-        [ -S "$_xd/X$_xn" ] && return 0
-    done
-    return 1
-}
-
 # ---------------- 子命令直通 ----------------
 case "${1:-}" in
     doctor) exec "$PREFIX_DIR/bin/linbox-dac-doctor" ;;
     stop)   exec "$PREFIX_DIR/bin/linbox-dac-stop" ;;
     unreg)  exec "$PREFIX_DIR/bin/linbox-dac-unreg" ;;
     setup-x11)
-        # 先探测已有环境：自带 X11 的情况（已设 DISPLAY / 本机 X socket /
-        # termux-x11 命令）一律直接通过，不下载不安装
-        if [ -n "${DISPLAY:-}" ]; then
-            log "已检测到 X 环境 (DISPLAY=$DISPLAY) —— 无需安装，直接: linbox-dac 程序.exe"
-            exit 0
-        fi
-        for _xd in /tmp/.X11-unix "$PREFIX_DIR/tmp/.X11-unix"; do
-            if [ -d "$_xd" ] && ls "$_xd" 2>/dev/null | grep -q '^X'; then
-                log "检测到已有 X server ($_xd) —— export DISPLAY=:<对应编号> 即可复用，无需安装"
-                exit 0
-            fi
-        done
-        if have termux-x11; then
-            log "termux-x11 命令已就绪 —— 直接: linbox-dac --display x11 程序.exe"
-            pm path com.termux.x11 >/dev/null 2>&1 || \
-                log "（若无画面再装伴侣 App: github.com/termux/termux-x11/releases）"
-            exit 0
-        fi
-        log "未检测到任何 X11 环境，才需要安装 termux-x11 组件..."
+        log "安装 X11 显示栈（termux-x11）..."
         have pkg || die "pkg 不可用（bootstrap 未就绪？）"
         pkg install -y x11-repo 2>&1 | tail -n 2
         pkg install -y termux-x11-nightly 2>&1 | tail -n 2
-        log "完成。运行: linbox-dac --display x11 程序.exe"
+        if pm path com.termux.x11 >/dev/null 2>&1; then
+            log "伴侣 App 已安装 (com.termux.x11) ✓"
+        else
+            log "还差最后一步 —— 安装 Termux:X11 伴侣 App："
+            log "  1) 手机浏览器打开: github.com/termux/termux-x11/releases"
+            log "  2) 下载 app-debug-arm64-v8a.zip（按设备架构），解压安装其中的 APK"
+            log "  3) 安装后无需打开，linbox-dac 会自动唤起"
+        fi
+        log "完成后运行: linbox-dac --display x11 程序.exe"
         exit 0 ;;
 esac
 
@@ -140,36 +119,20 @@ run_wine() {
 }
 
 # ---------------- 显示栈解析 ----------------
-X_REUSE=0
-LINBOX_X_DISPLAY="${LINBOX_X_DISPLAY:-:13}"   # LinBox 内置 X（lorie/Xwayland 链路）
-
 if [ "$MODE" = auto ]; then
     if [ "$DAC_DRV" = 1 ]; then
         MODE=dac
-    elif [ -n "${DISPLAY:-}" ]; then
-        MODE=x11; X_REUSE=1; export DISPLAY   # 环境里已有 X server：直接复用
-    elif x11_sock "$LINBOX_X_DISPLAY"; then
-        MODE=x11; X_REUSE=1; export DISPLAY="$LINBOX_X_DISPLAY"
     elif have termux-x11; then
-        MODE=x11                               # 都没有才新起 termux-x11 :0
+        MODE=x11
     elif have Xvnc || have vncserver; then
         MODE=vnc
     else
-        err "没有可用的显示栈。按优先级："
+        err "没有可用的显示栈。三条路径任选其一："
         printf '%s\n' \
-            "  [独立显示器] DAC: 部署 wine-dac tarball（含 winedac.drv）→ 自动直合到 LinBox 窗口" \
-            "  [复用已有]  X11: 打开 LinBox 内置 X（或 export DISPLAY=:N 指向已有 server）" \
-            "  [兜底]     VNC: pkg install tigervnc + 任意 VNC 客户端连 127.0.0.1:5901"
+            "  [推荐] X11:  运行 linbox-dac setup-x11 一键安装" \
+            "  [原生] DAC:  部署 wine-dac tarball（含 winedac.drv）后自动启用" \
+            "  [兜底] VNC:  pkg install tigervnc，并用任意 VNC 客户端连 127.0.0.1:5901"
         exit 1
-    fi
-elif [ "$MODE" = x11 ]; then
-    # 强制 x11 时同样优先复用已有 server
-    if [ -n "${DISPLAY:-}" ]; then
-        X_REUSE=1; export DISPLAY
-    elif x11_sock "$LINBOX_X_DISPLAY"; then
-        X_REUSE=1; export DISPLAY="$LINBOX_X_DISPLAY"
-    elif ! have termux-x11; then
-        die "--display x11 但未检测到已有 X server（DISPLAY 未设）—— 打开 LinBox 内置 X，或部署 wine-dac tarball 走 DAC 独立显示器"
     fi
 fi
 log "显示栈: $MODE (虚拟桌面 ${DESKTOP_W}x${DESKTOP_H})"
@@ -217,46 +180,39 @@ if [ "$MODE" = dac ]; then
 fi
 
 # ============================================================
-# 路径 2: X11 —— 优先复用已有 X 环境（DISPLAY / LinBox 内置 :13），
-#          只有两者皆无时才新起 termux-x11 :0
+# 路径 2: termux-x11（社区验证标准路径）
 # ============================================================
 if [ "$MODE" = x11 ]; then
+    have termux-x11 || die "termux-x11 未安装 —— 运行 linbox-dac setup-x11 一键安装"
+    pm path com.termux.x11 >/dev/null 2>&1 || \
+        log "警告: 未检测到 Termux:X11 伴侣 App（com.termux.x11）。"
+    log "  若无显示，请安装: https://github.com/termux/termux-x11/releases (X11 APK)"
+
     # 确保 Graphics 驱动不是 dac（未部署 winedac.drv 时会启动失败）
     "$PREFIX_DIR/bin/linbox-dac-unreg" >/dev/null 2>&1 || true
 
-    if [ "$X_REUSE" = 1 ]; then
-        export DISPLAY
-        log "1/5 复用已有 X server (DISPLAY=$DISPLAY，不新起进程)"
-    else
-        pm path com.termux.x11 >/dev/null 2>&1 || \
-            log "提示: 未检测到 Termux:X11 伴侣 App（若无画面: github.com/termux/termux-x11/releases）"
-        log "1/5 启动 termux-x11 X server (:0)..."
-        export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$PREFIX_DIR/tmp}"
-        mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
-        termux-x11 :0 >>"$LOG" 2>&1 &
-        XPID=$!
+    log "1/5 启动 termux-x11 X server (:0)..."
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$PREFIX_DIR/tmp}"
+    mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    termux-x11 :0 >>"$LOG" 2>&1 &
+    XPID=$!
 
-        i=0
-        while [ "$i" -lt 6 ]; do
-            kill -0 "$XPID" 2>/dev/null || break
-            sleep 1; i=$((i+1))
-        done
-        kill -0 "$XPID" 2>/dev/null \
-            || die "termux-x11 启动失败 —— 日志: $LOG"
+    i=0
+    while [ "$i" -lt 6 ]; do
+        kill -0 "$XPID" 2>/dev/null || break
+        sleep 1; i=$((i+1))
+    done
+    kill -0 "$XPID" 2>/dev/null \
+        || die "termux-x11 启动失败 —— 伴侣 App 未安装？见 github.com/termux/termux-x11/releases；日志: $LOG"
 
-        log "2/5 X server 运行中 (pid=$XPID)"
-        export DISPLAY="${DISPLAY:-:0}"
-    fi
+    log "2/5 X server 运行中 (pid=$XPID)"
+    export DISPLAY="${DISPLAY:-:0}"
     export WINEDEBUG="${WINEDEBUG:-fixme-all}"
     log "3/5 启动 wine (${DESKTOP_W}x${DESKTOP_H} 虚拟桌面 → X11 → 屏幕)..."
     run_wine explorer /desktop=linbox,"${DESKTOP_W}x${DESKTOP_H}" "$@"
     RC=$?
     log "4/5 wine 退出 (rc=$RC)"
-    if [ "$X_REUSE" = 1 ]; then
-        log "5/5 画面在既有 X 显示 $DISPLAY（LinBox 内置 X11/LorieView 或已设 DISPLAY）"
-    else
-        log "5/5 X server 仍在后台（切回 Termux:X11 App 查看画面；关闭运行: kill $XPID）"
-    fi
+    log "5/5 X server 仍在后台（切回 Termux:X11 App 查看画面；关闭运行: kill $XPID）"
     exit "$RC"
 fi
 

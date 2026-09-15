@@ -3,20 +3,37 @@
 # build-turnip-android.sh — 构建 platforms=android 的 Mesa Turnip（Adreno）
 # ============================================================
 # 目标：提供 VK_ANDROID_external_memory_android_hardware_buffer 能力的
-# Vulkan ICD（DAC 的 DXVK → AHB 路径依赖它）。Termux 官方 mesa 的
-# turnip 构建面向 xcb/wayland，缺 AHB 扩展；本脚本启用 android 平台 +
-# KGSL 后端（免 libdrm/免 root，直接 ioctl GPU）。
+# Vulkan ICD（DAC 的 DXVK → AHB 路径依赖它）。
+#
+# ⚠ 版本要求：turnip 的 AHB 支持自 mesa 24.2 起才有
+#   （24.0/24.1 的 tu_android.cc 只有 gralloc 导入路径，无 AHB 扩展），
+#   因此默认 MESA_VERSION=24.2.1；低于 24.2 构建成功也用不了 DAC。
+#
+# 关键配置（均对 mesa-24.2.1 真实 meson_options.txt 核实过）：
+#   -Dplatforms=android            启用 VK_KHR_android_surface / AHB WSI
+#   -Dplatform-sdk-version=$API    Android 平台 API 级别
+#   -Dandroid-stub=true            NDK 交叉必需：避免 pkg-config 查
+#                                  cutils/hardware/sync（NDK 没有），
+#                                  改用 mesa 自带 src/android_stub
+#   -Dfreedreno-kmds=kgsl          KGSL 内核后端（Android 免 libdrm/免 root）
+#                                  默认 msm 需要 libdrm → 交叉环境必挂
+#   -Dvulkan-drivers=freedreno     turnip
+#   -Dgallium-drivers=             不构建 GL（DAC 只走 Vulkan）
+#   -Dxmlconfig=disabled           免 expat（NDK 无此库）
+#
+# ⚠ 无 -Dgallium-vulkan-layers 选项（mesa 从无此选项，正确名称是
+#   vulkan-layers 且默认即空 —— 传了必报 Unknown option）
 #
 # 环境：Linux x86_64 主机 + Android NDK r26+（NDK 环境变量），需要
-#   meson / ninja（pip install meson ninja）。
+#   meson / ninja / python3-mako（pip install meson ninja mako）。
 # 产物：libvulkan_freedreno.so + freedreno_icd.aarch64.json
 #
 # 用法：
-#   MESA_VERSION=24.0.9 NDK=/opt/ndk ./build-turnip-android.sh
+#   MESA_VERSION=24.2.1 NDK=/opt/ndk ./build-turnip-android.sh
 # ============================================================
 set -e
 
-MESA_VERSION="${MESA_VERSION:-24.0.9}"
+MESA_VERSION="${MESA_VERSION:-24.2.1}"
 WORK="${WORK:-$HOME/mesa-build}"
 NDK="${NDK:-$ANDROID_NDK_HOME}"
 API="${API:-29}"          # AHB NDK API 需要 ≥26；KGSL 后端建议 29
@@ -28,6 +45,12 @@ HOST_TAG="${HOST_TAG:-linux-x86_64}"
 
 CLANG="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 mkdir -p "$WORK" && cd "$WORK"
+
+# mesa 的 meson 构建硬性要求 python mako（缺了 setup 期直接报错）
+python3 -c 'import mako' 2>/dev/null || {
+    echo ">> 安装 python mako ..."
+    pip3 install --break-system-packages mako 2>/dev/null || pip3 install mako
+}
 
 [ -d mesa ] || {
     wget -q "https://archive.mesa3d.org/mesa-${MESA_VERSION}.tar.xz"
@@ -52,20 +75,16 @@ endian = 'little'
 EOF
 
 # ---- 配置：android 平台 + turnip（vulkan 驱动即 freedreno/turnip） ----
-# 关键选项：
-#   -Dplatforms=android            启用 VK_KHR_android_surface / AHB WSI
-#   -Dplatform-sdk-version=$API    Android 平台 API 级别
-#   -Dvulkan-drivers=freedreno     turnip（KGSL 后端，无 libdrm 依赖）
-#   -Dgallium-drivers=             不构建 GL（DAC 只走 Vulkan）
-#   -Dxmlconfig=disabled           免 expat（NDK 无此库）
+# 所有选项名均对 mesa-24.2.1 meson_options.txt 核实
 rm -rf build-aarch64
 meson setup build-aarch64 mesa \
     --cross-file cross.txt \
     -Dplatforms=android \
     -Dplatform-sdk-version="$API" \
+    -Dandroid-stub=true \
+    -Dfreedreno-kmds=kgsl \
     -Dgallium-drivers= \
     -Dvulkan-drivers=freedreno \
-    -Dgallium-vulkan-layers= \
     -Dbuild-tests=false \
     -Dglx=disabled \
     -Dgbm=disabled \

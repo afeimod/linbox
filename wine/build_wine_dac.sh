@@ -88,10 +88,21 @@ CONFIGURE_OPTS="
 "
 
 if [ "$TARGET" = "x86_64-linux" ]; then
-    # 原生 x86_64 构建：unix 侧 x86_64 + PE 侧 i386/x86_64（gcc-multilib）
+    # 原生 x86_64 构建：unix 侧 x86_64 + PE 侧 i386/x86_64（新 WoW64 模式）
     # 设备端经 box64（x86_64 模拟）运行，AHB 走 dac_allocd 侧车。
+    #
+    # ⚠ 必须传 --enable-archs=i386,x86_64：wine 在 x86_64 主机上默认走
+    #   32 位 unix 构建（configure 里 CC -m32 + PKG_CONFIG_LIBDIR 指向
+    #   i386 目录），需要 freetype 等所有 :i386 多架构开发库 —— CI 只有
+    #   amd64 库，必挂 "FreeType development files not found"。
+    #   传了 --enable-archs 后 configure.ac 的 -m32 分支被跳过
+    #   （host_cpu=x86_64），unix 侧 64 位，PE 侧 i386/x86_64 全走
+    #   mingw，无需任何 :i386 库；且产出真正的 bin/wine 加载器
+    #   （--enable-win64 只会得到 bin/wine64），32 位 Windows 程序
+    #   经 WoW64 也能跑。
     OUT="wine-dac-${WINE_VERSION}-x86_64"
-    ( cd wine && ./configure --prefix="$BUILD_DIR/out/$OUT" $CONFIGURE_OPTS )
+    ( cd wine && ./configure --prefix="$BUILD_DIR/out/$OUT" \
+        --enable-archs=i386,x86_64 $CONFIGURE_OPTS )
     make -C wine -j"$JOBS"
     make -C wine install
 

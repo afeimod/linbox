@@ -28,6 +28,12 @@ fi
 cd dxvk
 git checkout "v${DXVK_VERSION}"
 
+# DXVK 2.x 的 Vulkan-Headers / SPIRV-Headers / mingw-directx-headers /
+# libdisplay-info（windows 分支）均为 git 子模块，普通 clone 不会拉取；
+# 缺了它们 meson 配置期必报 Missing Vulkan-Headers / Missing SPIRV-Headers
+# （对应 dxvk meson.build 的 fs.is_dir('include/vulkan/include') 检查）
+git submodule update --init --recursive
+
 # package-release.sh <release-dir-name> <output-dir> [--no-package]
 # 注意：第一个参数是产物目录名（非 git ref —— ref 已由上面 checkout）
 ./package-release.sh "${DXVK_VERSION}" "$WORK/out" --no-package
