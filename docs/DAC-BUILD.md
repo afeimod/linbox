@@ -36,11 +36,21 @@ pkg install clang meson
 # winedac.drv 无需任何修改 —— 它只依赖 win32u/user32 内部接口 + dlopen
 ```
 
-### 1c. glibc 变体（glibc-runner）
+### 1c. glibc 变体（v1.11 自举 tarball，推荐）
 
 ```bash
-TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
-# 产物 wine-dac-amd64/ 整树拷入 LinBox 终端，grun 运行
+# x86_64（跑普通 Windows 程序，设备端经 box64 转译）：
+TARGET=x86_64-linux ./wine/build_wine_dac.sh
+# aarch64（原生 ARM64 ELF；注意无法运行 x86/x86_64 PE，CI 走 arm runner）：
+TARGET=aarch64-glibc ./wine/build_wine_dac.sh
+
+# 产物 wine-dac-9.2-<target>.tar.xz 已完成设备端自举改造：
+#   sysroot/lib = glibc 依赖闭包（含动态 loader）
+#   bin/wine 等 = 自举 wrapper（x86_64→box64 / aarch64→自带 loader），
+#                 wine 主入口自动拉起 DAC 显示器与 dac_allocd
+# 部署后在 LinBox 终端直接执行，无需 grun/grun 手工包装：
+tar -xJf wine-dac-9.2-x86_64.tar.xz -C $HOME
+$HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 ```
 
 ## 2. 集成进 LinBox APK（tools/merge-into-repo.sh，推荐）

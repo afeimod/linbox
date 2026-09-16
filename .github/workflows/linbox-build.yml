@@ -43,7 +43,7 @@ on:
         default: false
         type: boolean
       wine_target:
-        description: "Wine 构建目标"
+        description: "Wine 构建目标（跑普通 Windows 程序必须选 x86_64-linux；aarch64-glibc 无 x86 模拟，仅 ARM64 PE 实验用）"
         required: false
         type: choice
         default: "x86_64-linux"
@@ -278,8 +278,12 @@ jobs:
           ls -lh "$HOME/build_wine_dac/dist/"
           tb=$(ls "$HOME/build_wine_dac/dist/"*.tar.xz | head -1)
           echo "tarball: $tb"
-          tar -tJf "$tb" | grep -E "bin/wine$|winedac.so" && \
-            echo "✓ winedac.so 已包含" || { echo "✗ 缺 winedac.so"; exit 1; }
+          # 设备端自举结构：bin/wine(wrapper) + bin/wine.real(真身) +
+          # sysroot/lib 动态 loader + winedac.so，四者缺一不可
+          for pat in "bin/wine$" "bin/wine\.real$" "sysroot/lib/ld-linux" "winedac\.so"; do
+            tar -tJf "$tb" | grep -qE "$pat" || { echo "✗ tarball 缺 $pat"; exit 1; }
+          done
+          echo "✓ 自举 tarball 结构完整（wrapper + wine.real + sysroot + winedac.so）——安卓真机可直接执行"
 
       - name: 📤 Upload Wine-DAC tarball
         uses: actions/upload-artifact@v4
@@ -300,6 +304,7 @@ jobs:
           echo "| Wine | $WINE_VERSION |" >> $GITHUB_STEP_SUMMARY
           echo "| Target | $WINE_TARGET |" >> $GITHUB_STEP_SUMMARY
           echo "| path/ patches | $APPLY_PATCHES |" >> $GITHUB_STEP_SUMMARY
+          echo "| 设备端自举 | wrapper + sysroot（x86_64=box64 转译 / aarch64=自带 ld-linux） |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================

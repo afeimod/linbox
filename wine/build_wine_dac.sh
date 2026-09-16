@@ -14,6 +14,20 @@
 #   模式下走 dac_allocd 侧车（arm64 bionic，由 APK 安装到 $PREFIX/bin），
 #   CPU 位图槽位经 fd mmap 直接写入 —— 因此默认构建 TARGET=x86_64-linux。
 #
+#   ⚠ TARGET=aarch64-glibc 产出的 arm64 本机 wine 经 glibc loader 即可
+#     运行，但 wine 9.2 没有内置 x86 CPU 模拟（ntdll 无 box64/FEX 支持），
+#     该目标无法运行 x86/x86_64 PE 程序（游戏/explorer/taskmgr 全是 x86）。
+#     要在设备上跑 Windows 程序，请用默认 TARGET=x86_64-linux（box64
+#     整进程转译）—— aarch64 目标仅供 ARM64 PE 特殊场景 / 未来接入
+#     Hangover 类模拟层。
+#
+#   设备端自举（v1.11）：安卓上裸 glibc ELF 无法直接 exec ——
+#     x86_64 构建报 "Exec format error"，aarch64 构建报
+#     "required file not found"（缺 /lib/ld-linux-aarch64.so.1）。
+#     因此 tarball 自带：① sysroot/lib（全部 unix ELF 的 ldd glibc 闭包，
+#     含 ld-linux，Mobox 同款）；② bin/wine|wineserver|wineboot 为自举
+#     wrapper（自动找 loader/box64 启动同名 .real 原生 ELF）。
+#
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
 #   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
@@ -84,6 +98,21 @@ rm -rf wine/dlls/winedac.drv
 cp -r "$DAC_SRC" wine/dlls/winedac.drv
 echo ">> winedac.drv 注入完成"
 
+# ---- 3.5 默认图形驱动 → dac（免注册表，bin/wine 直跑即用 DAC）----
+# wine 9.2 programs/explorer/desktop.c：无 HKCU\Software\Wine\Drivers
+# "Graphics" 值时默认串为 mac,x11 —— 本构建 --without-x，两者皆无，
+# 直跑必然 "The graphics driver is missing"（null driver）。
+# DAC 专用构建直接把默认串改为 dac（→ winedac.drv，映射机制与
+# x11 → winex11.drv 相同），免去 linbox-dac-reg 注册步骤。
+DESKTOP_C="wine/programs/explorer/desktop.c"
+if [ -f "$DESKTOP_C" ] && grep -qF "{'m','a','c',',','x','1','1',0}" "$DESKTOP_C"; then
+    sed -i "s/{'m','a','c',',','x','1','1',0}/{'d','a','c',0}/" "$DESKTOP_C"
+    echo ">> 默认图形驱动已改为 dac（explorer/desktop.c）"
+else
+    echo "⚠ 未找到 default_driver 字面量（wine 版本差异？）—— 部署后需运行" >&2
+    echo "  linbox-dac-reg 设置 HKCU\\Software\\Wine\\Drivers Graphics=dac" >&2
+fi
+
 # ---- 4. 生成器 + autoreconf ----
 ( cd wine && dlls/winevulkan/make_vulkan && tools/make_requests && tools/make_specfiles && autoreconf -f )
 
@@ -114,8 +143,9 @@ if [ "$TARGET" = "x86_64-linux" ]; then
     make -C wine install
 
 elif [ "$TARGET" = "aarch64-glibc" ]; then
-    # aarch64 glibc 构建（grun 直接跑 arm64 wine 本机侧；PE 侧 i386/x86_64
-    # 走 mingw new WoW64 —— 设备端 x86 PE 指令由 box64 转译）。
+    # aarch64 glibc 构建（grun/loader 直接跑 arm64 wine 本机侧；PE 侧
+    # i386/x86_64 走 mingw new WoW64）。⚠ wine 9.2 无内置 x86 模拟器，
+    # 本目标无法运行 x86/x86_64 PE 程序（详见文件头说明）。
     OUT="wine-dac-${WINE_VERSION}-aarch64"
     if [ "$(uname -m)" = "aarch64" ]; then
         # ---- arm64 主机原生构建（GitHub ubuntu-24.04-arm runner / 本机）----
@@ -161,13 +191,157 @@ else
     echo "未知 TARGET=$TARGET（支持 x86_64-linux | aarch64-glibc）"; exit 1
 fi
 
-# ---- 6. 打包 ----
+# ---- 6. 设备端自举改造（安卓无法裸 exec glibc ELF）----
+#   x86_64:  "cannot execute binary file: Exec format error"  → 需 box64 转译
+#   aarch64: "cannot execute: required file not found"        → 缺 glibc loader
+# 方案（glibc-runner / Mobox 同款，免 root 免安装）：
+#   a) sysroot/lib：全部 unix ELF 的 glibc 依赖闭包 + 动态 loader（ldd 收集）
+#   b) bin/{wine,wineserver,wineboot,...} 改名 *.real，原位生成自举 wrapper：
+#      x86_64  → box64（设备端自备，LinBox 体系标准组件）
+#      aarch64 → sysroot 自带 ld-linux 直接启动
+#   c) wine 主入口额外自动拉起 DAC 显示器（APK 内 DacReceiver）+ dac_allocd 侧车
+OUTDIR="$BUILD_DIR/out/$OUT"
+SYSLIB="$OUTDIR/sysroot/lib"
+if [ "$TARGET" = "x86_64-linux" ]; then
+    BOOT_MODE=box64;  LD_NAME=ld-linux-x86-64.so.2
+else
+    BOOT_MODE=loader; LD_NAME=ld-linux-aarch64.so.1
+fi
+
+echo ">> 6a. 收集 glibc 依赖闭包 → sysroot/lib"
+mkdir -p "$SYSLIB"
+DEPS_LIST="$BUILD_DIR/.sysroot-deps"
+: > "$DEPS_LIST"
+# CI 上主机架构 == 目标架构（x86_64→x86_64 runner / aarch64→arm runner），
+# ldd 原生可用；PE 侧文件非 ELF，ldd 静默失败自然跳过
+while IFS= read -r elf; do
+    ldd "$elf" 2>/dev/null | awk '
+        /=>[[:space:]]*\// { print $3; next }
+        /^[[:space:]]*\//  { print $1 }
+    ' >> "$DEPS_LIST"
+done < <(find "$OUTDIR/bin" "$OUTDIR/lib" -type f \( -perm -u+x -o -name '*.so*' \) 2>/dev/null)
+sort -u "$DEPS_LIST" | while IFS= read -r lib; do
+    [ -f "$lib" ] || continue
+    cp -L "$lib" "$SYSLIB/" 2>/dev/null || echo "  ⚠ 无法复制依赖: $lib"
+done
+[ -f "$SYSLIB/$LD_NAME" ] || { echo "✗ sysroot 缺动态 loader $LD_NAME"; exit 1; }
+echo "   sysroot/lib：$(ls -1 "$SYSLIB" | wc -l) 个文件，$(du -sh "$SYSLIB" | cut -f1)"
+
+echo ">> 6b. 生成自举 wrapper（boot=$BOOT_MODE）"
+emit_wrapper() { # $1=名字  $2=1 表示 wine 主入口（附 DAC 自动拉起）
+    local name="$1" main="$2"
+    {
+        cat <<'HDR'
+#!/system/bin/sh
+# ============================================================
+# LinBox-DAC 自举 wrapper —— 构建时自动生成，请勿手改
+# 安卓内核不能直接 exec glibc ELF（Exec format error /
+# required file not found），由本脚本完成 loader/box64 启动。
+# ============================================================
+HDR
+        cat <<'PATHS'
+DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+ROOT=$(dirname "$DIR")
+PATHS
+        echo "REAL=\"\$DIR/${name}.real\""
+        cat <<'CHECKS'
+SYSLIB="$ROOT/sysroot/lib"
+die() { echo "[wine-dac] ✗ $*" >&2; exit 1; }
+[ -f "$REAL" ] || die "缺 $REAL（tarball 解压不完整？）"
+[ -d "$SYSLIB" ] || die "缺 $SYSLIB（tarball 解压不完整？）"
+: "${PREFIX:=}"
+if [ -z "$PREFIX" ]; then
+    for _p in /data/user/*/com.linbox/files/usr /data/data/com.linbox/files/usr; do
+        [ -d "$_p" ] && PREFIX="$_p" && break
+    done
+fi
+[ -n "$PREFIX" ] || PREFIX=/data/user/0/com.linbox/files/usr
+export PREFIX
+CHECKS
+        if [ "$BOOT_MODE" = box64 ]; then
+            cat <<'B64'
+export LD_LIBRARY_PATH="$SYSLIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export BOX64_LD_LIBRARY_PATH="$SYSLIB${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+BOX64=""
+if [ -n "$BOX64_BIN" ] && [ -x "$BOX64_BIN" ]; then
+    BOX64="$BOX64_BIN"
+elif command -v box64 >/dev/null 2>&1; then
+    BOX64="$(command -v box64)"
+elif [ -x "$PREFIX/bin/box64" ]; then
+    BOX64="$PREFIX/bin/box64"
+elif [ -x /data/data/com.termux/files/usr/bin/box64 ]; then
+    BOX64="/data/data/com.termux/files/usr/bin/box64"
+fi
+[ -n "$BOX64" ] || die "未找到 box64 —— x86_64 wine 必须经 box64 转译。请把 box64 放入 PATH 或 \$PREFIX/bin 后重试（LinBox 一般自带）"
+B64
+        else
+            cat <<'ALD'
+LOADER="$SYSLIB/ld-linux-aarch64.so.1"
+[ -x "$LOADER" ] || die "缺 $LOADER（sysroot 不完整？）"
+ALD
+        fi
+        if [ "$main" = 1 ]; then
+            cat <<'MAIN'
+# ---- DAC 独立显示器自动拉起（APK 内原生安卓显示器，不依赖 X11） ----
+if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
+    SIZE="${LINBOX_DAC_SIZE:-1280x720}"
+    DW=${SIZE%x*}; DH=${SIZE#*x}
+    LD_LIBRARY_PATH= am broadcast -a com.linbox.action.DAC_START \
+        --ei width "$DW" --ei height "$DH" >/dev/null 2>&1
+    i=0
+    while [ ! -S "$PREFIX/tmp/linbox-dac.sock" ] && [ "$i" -lt 15 ]; do
+        sleep 1; i=$((i+1))
+    done
+    [ -S "$PREFIX/tmp/linbox-dac.sock" ] || \
+        echo "[wine-dac] ⚠ DAC 窗口未就绪（APK 需含 DAC 模块并保持安装）——仍继续启动 wine" >&2
+fi
+# ---- dac_allocd 侧车（glibc wine 的 AHardwareBuffer 分配代理） ----
+if [ ! -S "$PREFIX/tmp/linbox-dac-allocd.sock" ]; then
+    for _c in "$PREFIX/bin/dac_allocd" "$PREFIX/bin/libdac_allocd.so"; do
+        [ -f "$_c" ] || continue
+        chmod +x "$_c" 2>/dev/null
+        LD_LIBRARY_PATH= TMPDIR="$PREFIX/tmp" "$_c" >/dev/null 2>&1 &
+        echo $! > "$PREFIX/tmp/linbox-dac-allocd.pid" 2>/dev/null
+        sleep 1
+        break
+    done
+fi
+export WINEDEBUG="${WINEDEBUG:-fixme-all}"
+MAIN
+        fi
+        if [ "$BOOT_MODE" = box64 ]; then
+            echo 'exec "$BOX64" "$REAL" "$@"'
+        else
+            echo 'exec "$LOADER" --library-path "$SYSLIB" "$REAL" "$@"'
+        fi
+    } > "$OUTDIR/bin/$name"
+    chmod +x "$OUTDIR/bin/$name"
+}
+
+for _n in wine wineserver wineboot winecfg msiexec reg regsvr32; do
+    _f="$OUTDIR/bin/$_n"
+    [ -f "$_f" ] || continue
+    [ "$(head -c 4 "$_f" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || continue
+    mv "$_f" "$_f.real"
+    if [ "$_n" = wine ]; then emit_wrapper "$_n" 1; else emit_wrapper "$_n" 0; fi
+    echo "   + bin/$_n → wrapper → ${_n}.real"
+done
+[ -f "$OUTDIR/bin/wine" ] && [ -f "$OUTDIR/bin/wine.real" ] \
+    || { echo "✗ bin/wine 自举 wrapper 生成失败"; exit 1; }
+
+# ---- 7. 打包 ----
 mkdir -p "$BUILD_DIR/dist"
 ( cd "$BUILD_DIR/out" && tar -cJf "$BUILD_DIR/dist/${OUT}.tar.xz" "$OUT" )
 echo "=============================================="
 echo " 完成: $BUILD_DIR/dist/${OUT}.tar.xz"
+echo " 自举: $BOOT_MODE（sysroot 含 $LD_NAME + wrapper，安卓免 root 直跑）"
 echo " 部署（LinBox 终端内）:"
 echo "   tar -xJf ${OUT}.tar.xz -C \$HOME"
-echo "   \$HOME/$OUT/bin/wine explorer /desktop=dac,1280x720 game.exe"
+echo "   \$HOME/$OUT/bin/wine explorer /desktop=dac,1280x720 taskmgr"
+echo "   # wrapper 自动：box64/loader 启动 + 拉起 DAC 显示器 + dac_allocd 侧车"
+echo "   # 环境变量：LINBOX_DAC_SIZE=1920x1080 改分辨率；LINBOX_DAC_AUTO=0 关自动拉起"
+if [ "$TARGET" != "x86_64-linux" ]; then
+echo "   ⚠ aarch64 目标仅能跑 ARM64 PE；普通 x86/x86_64 程序请用 x86_64-linux + box64"
+fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
 echo "=============================================="
