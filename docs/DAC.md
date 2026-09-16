@@ -23,7 +23,7 @@
                                   │ 帧 + fd(SCM_RIGHTS)
 ┌───────────────────────── LinBox App 进程（com.linbox）─────────────────────────┐
 │                                 ▼                                              │
-│                linbox_dac_bridge.cpp（JNI，DacView 的 Surface）                   │
+│                linbox_dac_bridge.c（JNI，DacView 的 Surface）                   │
 │                  ├ AHardwareBuffer_recvHandleFromUnixSocket 导入               │
 │                  ├ ASurfaceControl_createFromWindow(SurfaceView)               │
 │                  ├ ASurfaceTransaction.setBuffer(ahb, acquireFence)            │

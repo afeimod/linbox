@@ -43,6 +43,13 @@ object DacApp : DacNative.TitleSink {
     private var desktopH = 720
 
     /**
+     * 无前台 Activity 时的挂起请求（v1.13）：如从 adb / 后台触发 DAC_START，
+     * 兕底容器拿不到 decorView；旧实现直接抛异常（主线程崩溅风险），
+     * 现改为记录请求，待下一个 Activity resume 时自动拉起。
+     */
+    private var pendingStart: Pair<Int, Int>? = null
+
+    /**
      * 兜底覆盖层需要 Activity 的 decorView：LinBoxApp 以 Application 上下文
      * 初始化（未接 LinBoxShell 浮窗体系），此处经 ActivityLifecycleCallbacks
      * 捕获当前前台 Activity，startDisplay 时用它取 decorView。
@@ -77,6 +84,11 @@ object DacApp : DacNative.TitleSink {
 
                         override fun onActivityResumed(a: android.app.Activity) {
                             currentActivity = a
+                            // 挂起的 DAC 启动请求（无 Activity 时收到广播）→ 现在可以拉起
+                            pendingStart?.let { (w, h) ->
+                                pendingStart = null
+                                startDisplay(w, h)
+                            }
                         }
 
                         override fun onActivityPaused(a: android.app.Activity) {
@@ -117,35 +129,42 @@ object DacApp : DacNative.TitleSink {
         desktopH = height
 
         main.post {
-            val container = ensureContainer()
-            dacView?.release()
-            dacView = DacView(container).apply {
-                setDesktopSize(width, height)
-                postWhenSurfaceReady {
-                    val path = socketPath()
-                    backend = try {
-                        connect(path)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "connect failed", e)
-                        DacNative.BACKEND_NONE
-                    }
-                    isRunning = backend != DacNative.BACKEND_NONE
-                    if (isRunning) {
-                        Log.i(TAG, "DAC display started ${width}x${height} backend=$backend")
-                        showTitle(DacNative.backendName(backend))
-                        notifyReady()
-                    } else {
-                        showTitle("DAC 连接失败（等待 wine ...）")
-                        // 后台连接重试：wine 侧稍后启动时仍可连上
-                        notifyReady()
+            try {
+                val container = ensureContainer()
+                pendingStart = null
+                dacView?.release()
+                dacView = DacView(container).apply {
+                    setDesktopSize(width, height)
+                    postWhenSurfaceReady {
+                        val path = socketPath()
+                        backend = try {
+                            connect(path)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "connect failed", e)
+                            DacNative.BACKEND_NONE
+                        }
+                        isRunning = backend != DacNative.BACKEND_NONE
+                        if (isRunning) {
+                            Log.i(TAG, "DAC display started ${width}x${height} backend=$backend")
+                            showTitle(DacNative.backendName(backend))
+                            notifyReady()
+                        } else {
+                            showTitle("DAC 连接失败（等待 wine ...）")
+                            // 后台连接重试：wine 侧稍后启动时仍可连上
+                            notifyReady()
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                pendingStart = width to height
+                Log.w(TAG, "DAC 兕底容器暂不可用（等 Activity 恢复后自动拉起）：${e.message}")
             }
         }
     }
 
     fun stopDisplay() {
         main.post {
+            pendingStart = null
             dacView?.release()
             dacView = null
             isRunning = false

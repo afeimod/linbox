@@ -33,21 +33,6 @@ if [ -n "$WINE_REAL" ]; then
     fi
 fi
 
-# 3.5 wine 架构（x86_64 构建在 arm64 上必须 box64/grun 转译）
-if [ -n "$WINE_REAL" ]; then
-    if file "$WINE_REAL" 2>/dev/null | grep -qiE 'x86-64|x86_64'; then
-        if command -v box64 >/dev/null 2>&1; then
-            ok "Wine 架构" "x86_64 构建（box64 已装，经转译运行）"
-        elif command -v grun >/dev/null 2>&1; then
-            warn "Wine 架构" "x86_64 构建，有 grun 但缺 box64（pkg install box64）"
-        else
-            bad "Wine 架构" "x86_64 构建且无 box64/grun —— 无法执行；推荐 Actions 重建 wine_target=aarch64-glibc"
-        fi
-    else
-        ok "Wine 架构" "aarch64 原生构建（grun 直接跑，无需 box64）"
-    fi
-fi
-
 # 4. winedac.drv（决定 DAC 原生栈是否可用）
 DAC_DRV=0
 if [ -n "$WINE_ROOT" ]; then

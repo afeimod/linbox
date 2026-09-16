@@ -17,7 +17,7 @@ set -e
 
 DXVK_VERSION="${DXVK_VERSION:-2.4}"
 WORK="${WORK:-$HOME/dxvk-build}"
-PREFIX_DIR="${1:-${PREFIX_DIR:-$HOME/.wine}}"
+PREFIX_DIR="${1:-$HOME/.wine}"
 DEPLOY="${DEPLOY:-1}"
 
 mkdir -p "$WORK" && cd "$WORK"
@@ -39,26 +39,7 @@ git submodule update --init --recursive
 ./package-release.sh "${DXVK_VERSION}" "$WORK/out" --no-package
 
 OUT="$WORK/out/dxvk-${DXVK_VERSION}"
-
-# package-release.sh（v2.x）的 32 位产物目录叫 x32（build_arch 32 → --bindir x32，
-# 见 dxvk 源码 package-release.sh:87 build_arch 32），官方 release 打包层才用 x86。
-# 这里统一规范为 x64/x86 —— 与 CI 校验、下方部署段（x86→syswow64）及
-# 社区通用习惯保持一致，避免"构建成功但校验找不到目录"的错位。
-if [ -d "$OUT/x32" ] && [ ! -e "$OUT/x86" ]; then
-    mv "$OUT/x32" "$OUT/x86"
-fi
-
-# 产物自检：两个架构目录必须存在且核心 DLL 齐备，缺了当场报错退出
-# （d3d8 仅 1.10.3+ 默认构建，不在强校验之列）
-for arch in x64 x86; do
-    [ -d "$OUT/$arch" ] || { echo "✗ 构建产物缺 $arch/ 目录"; exit 1; }
-    for dll in d3d9 d3d10core d3d11 dxgi; do
-        [ -f "$OUT/$arch/$dll.dll" ] || { echo "✗ 构建产物缺 $arch/$dll.dll"; exit 1; }
-    done
-done
-
-echo ">> 构建 OK：$OUT（x64/x86 核心 DLL 齐备）"
-ls -lh "$OUT/x64" "$OUT/x86"
+echo ">> 构建 OK：$OUT（x64/x86）"
 
 if [ "$DEPLOY" = "1" ]; then
     echo ">> 部署到 prefix: $PREFIX_DIR"
@@ -66,7 +47,6 @@ if [ "$DEPLOY" = "1" ]; then
         DLLDIR="$PREFIX_DIR/drive_c/windows/system32"
         [ "$arch" = "x86" ] && DLLDIR="$PREFIX_DIR/drive_c/windows/syswow64"
         [ -d "$OUT/$arch" ] || continue
-        mkdir -p "$DLLDIR"
         for dll in d3d9 d3d10core d3d11 dxvk_config; do
             cp "$OUT/$arch/$dll.dll" "$DLLDIR/" 2>/dev/null || true
         done

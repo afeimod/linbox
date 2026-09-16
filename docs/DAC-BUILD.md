@@ -36,21 +36,11 @@ pkg install clang meson
 # winedac.drv 无需任何修改 —— 它只依赖 win32u/user32 内部接口 + dlopen
 ```
 
-### 1c. glibc 变体（v1.11 自举 tarball，推荐）
+### 1c. glibc 变体（glibc-runner）
 
 ```bash
-# x86_64（跑普通 Windows 程序，设备端经 box64 转译）：
-TARGET=x86_64-linux ./wine/build_wine_dac.sh
-# aarch64（原生 ARM64 ELF；注意无法运行 x86/x86_64 PE，CI 走 arm runner）：
-TARGET=aarch64-glibc ./wine/build_wine_dac.sh
-
-# 产物 wine-dac-9.2-<target>.tar.xz 已完成设备端自举改造：
-#   sysroot/lib = glibc 依赖闭包（含动态 loader）
-#   bin/wine 等 = 自举 wrapper（x86_64→box64 / aarch64→自带 loader），
-#                 wine 主入口自动拉起 DAC 显示器与 dac_allocd
-# 部署后在 LinBox 终端直接执行，无需 grun/grun 手工包装：
-tar -xJf wine-dac-9.2-x86_64.tar.xz -C $HOME
-$HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
+TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
+# 产物 wine-dac-amd64/ 整树拷入 LinBox 终端，grun 运行
 ```
 
 ## 2. 集成进 LinBox APK（tools/merge-into-repo.sh，推荐）
@@ -60,10 +50,6 @@ $HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 ```bash
 ./tools/merge-into-repo.sh /path/to/linbox      # --dry-run 先预览变更
 ```
-
-> 包已整体并入仓库时（脚本位于 `<仓库>/tools/` 下），在仓库根直接
-> `./tools/merge-into-repo.sh .` 亦可：脚本检测到源码包与目标为同一目录，
-> 自动跳过复制阶段、仅执行幂等补丁（不会 cp 自拷贝报错）。
 
 脚本自动完成：
 1. 复制新增文件：`app/src/main/cpp/dac/`、`apps/dac/` Kotlin、
@@ -86,10 +72,8 @@ $HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 ### 手动编译（调试用）
 
 ```bash
-# 桥源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 含 C++ 签名，
-# 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰
-$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ \
-    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.cpp \
+$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang \
+    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.c \
     -llog -landroid -lEGL -lGLESv2
 $NDK/.../aarch64-linux-android26-clang -O2 -o libdac_allocd.so dac_allocd.c \
     -landroid -llog

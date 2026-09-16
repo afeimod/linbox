@@ -9,7 +9,7 @@
  */
 
 #if 0
-#pragma makedep unix  /* 本文件仅编译 unix 侧（wine 9.2 驱动模型） */
+#pragma makedep unix
 #endif
 
 #include "config.h"

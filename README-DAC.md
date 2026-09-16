@@ -57,7 +57,7 @@ APK 安装后，`linbox-dac*` 脚本随 bootstrap 自动落到 `$PREFIX/bin`
 （经 jniLibs `lib*.so` 管线分发，无需手动拷贝），同时装入 DAC 显示器组件
 （DacView / DacReceiver / dac_allocd）。
 
-## 真机三步出画面（v1.11 自举 tarball）
+## 真机三步出画面（v1.13 自举 tarball）
 
 ```bash
 # ① 装 APK（含 DAC 显示器）；② 解压 wine tarball；③ 直接跑：
@@ -66,14 +66,26 @@ $HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 ```
 
 `bin/wine` 是自举 wrapper，自动完成：
-1. **box64 启动**（x86_64 目标）：自动找设备端 box64（PATH → `$PREFIX/bin`），
-   以 tarball 内 sysroot/lib 的 glibc 闭包加载 wine.real（glibc-runner/Mobox 同款）；
-2. **拉起 DAC 显示器**：若 APK 的 DAC 窗口未开，自动广播
-   `com.linbox.action.DAC_START`（默认 1280x720，可用 `LINBOX_DAC_SIZE=WxH` 改）；
+1. **box64 启动**（x86_64 目标）：优先用 tarball 自带 box64 + 私有 aarch64 glibc 闭包/loader 直启
+   （零外部依赖，不碰 APK 的 glibc 目录）；
+2. **拉起 DAC 显示器**：若 APK 的 DAC 窗口未开，自动**显式**广播
+   `am broadcast -p com.linbox -a com.linbox.action.DAC_START`（默认 1280x720，
+   可用 `LINBOX_DAC_SIZE=WxH` 改；targetSdk≥26 收不到隐式广播，必须带 `-p`）；
 3. **拉起 dac_allocd 侧车**（glibc wine 的 AHardwareBuffer 分配代理）；
-4. exec 真身 `wine.real`（构建时默认图形驱动已补丁为 dac，免注册表直连 DAC）。
+4. 导出 `TMPDIR=$PREFIX/tmp`（winedac.drv 按 `$TMPDIR/linbox-dac.sock` 寻找 bridge，
+   终端未设 TMPDIR 时旧版会去 `/tmp` 找 → 永远连不上，v1.13 已修）；
+5. exec 真身 `wine.real`（构建时默认图形驱动已补丁为 dac，免注册表直连 DAC）。
 
 环境变量：`LINBOX_DAC_SIZE=1920x1080` 改分辨率；`LINBOX_DAC_AUTO=0` 关自动拉起。
+
+## 真机一键诊断
+
+```bash
+sh linbox-dac-diag.sh        # 只诊断；--fix 允许修复 APK glibc 里损坏的 libc.so
+```
+
+逐环检查：tarball 自举结构（是否 v1.12+）→ APK DAC 模块 marker → APK glibc 目录
+（libc.so 是否有效 ELF）→ am/显式广播实测 → socket → logcat。
 
 ## 真机报错对照
 
@@ -81,9 +93,10 @@ $HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 |------|------|------|
 | `cannot execute binary file: Exec format error` | x86_64 glibc ELF，安卓 CPU 不能直接执行，需 box64 转译 | 用 v1.11+ tarball（bin/wine 已是 wrapper）；确认设备有 box64（LinBox 自带/你仓库 build-box64.yml 产物） |
 | `cannot execute: required file not found` | aarch64 glibc ELF 的动态链接器 `/lib/ld-linux-aarch64.so.1` 在安卓不存在 | 用 v1.11+ tarball（自带 sysroot loader）；且 aarch64 目标本就不能跑 x86/x86_64 PE，请改用 x86_64-linux 目标 + box64 |
-| `box64: error while loading shared libraries: .../usr/glibc/lib/libc.so: invalid ELF header` | APK 自带 box64 的解释器被 patchelf 固定到 APK 的 glibc 目录，其 `libc.so` 是无效 ELF（ld 链接脚本文本/坏符号链）；旧 wrapper 导出的 x86_64 `LD_LIBRARY_PATH` 还会二次污染其原生加载器 | 用 v1.12+ tarball（自带 aarch64 box64 + 私有 glibc 闭包 + 私有 loader 直启，全程不碰 APK 的 glibc 目录；wrapper 启动前清空原生 LD_LIBRARY_PATH） |
+| `box64: error while loading shared libraries: .../usr/glibc/lib/libc.so: invalid ELF header` | 设备上跑的是 **v1.12 之前的旧 tarball**：无自带 box64 → 回退用 APK 自带 box64，其解释器被 patchelf 固定到 APK 的 glibc 目录，而 gpkg glibc 的 `libc.so` 是 ld 链接脚本文本（非 ELF）→ 必崩 | **换 v1.12+ tarball**（自带 aarch64 box64 + 私有 glibc 闭包 + 私有 loader 直启，全程不碰 APK 的 glibc 目录）。判别法：`ls $HOME/wine-dac-9.2-x86_64/bin/box64` 存在即新版 |
 | `未找到 box64` | 设备无 box64（v1.12+ tarball 自带，出现此错说明 tarball 解压不完整或为旧包） | 重下 v1.12+ tarball 完整解压；或把 box64 放入 `$PREFIX/bin` / PATH |
-| `DAC 窗口未就绪` | APK 不含 DAC 模块或未安装新 APK | 安装 Actions 构建的含 DAC APK（LinBox-release-*，Run #19 起 CI 产出均含 DAC）；启动 wine 时保持 LinBox 在前台 |
+| `DAC 窗口未就绪` | ① 旧 wrapper 发的是**隐式广播**（无 `-p`）——targetSdk≥26 的清单 receiver 收不到，被系统静默丢弃；② APK 无 DAC 模块/未重装；③ 发广播时 LinBox 不在前台 | 换 v1.13+ tarball（wrapper 已改显式 `-p com.linbox`）；先跑 `sh linbox-dac-diag.sh` 定位；发广播时保持 LinBox 前台。v1.13 起 winedac 会持续重连，窗口晚开也能自动接上 |
+| wine 起了但画面不出现 / `connect /tmp/linbox-dac.sock failed` | 终端未导出 `TMPDIR` → winedac 去 `/tmp` 找 bridge socket（v1.13 已修：wrapper 强制导出 `TMPDIR=$PREFIX/tmp`） | 换 v1.13+ tarball；或临时 `export TMPDIR=$PREFIX/tmp` 后再跑 |
 
 ## 终端使用（两条显示路径）
 

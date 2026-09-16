@@ -334,6 +334,11 @@ if [ -z "$PREFIX" ]; then
 fi
 [ -n "$PREFIX" ] || PREFIX=/data/user/0/com.linbox/files/usr
 export PREFIX
+# winedac.drv 用 TMPDIR 定位 bridge socket（$TMPDIR/linbox-dac.sock）；
+# 若终端未导出 TMPDIR，wine 会去 /tmp 找 → 永远连不上（v1.13 修复）。
+TMPDIR="$PREFIX/tmp"
+export TMPDIR
+mkdir -p "$TMPDIR" 2>/dev/null || true
 CHECKS
         if [ "$BOOT_MODE" = box64 ]; then
             cat <<'B64'
@@ -382,14 +387,28 @@ ALD
 if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
     SIZE="${LINBOX_DAC_SIZE:-1280x720}"
     DW=${SIZE%x*}; DH=${SIZE#*x}
-    LD_LIBRARY_PATH= am broadcast -a com.linbox.action.DAC_START \
-        --ei width "$DW" --ei height "$DH" >/dev/null 2>&1
+    # 必须显式指定包名（-p com.linbox）：targetSdk≥26 的应用，
+    # 清单注册的 receiver 收不到隐式广播（隐式会被系统静默丢弃），
+    # 这正是 v1.13 前"DAC 窗口未就绪"的主因之一。
+    if command -v am >/dev/null 2>&1; then
+        _amout=$(LD_LIBRARY_PATH= am broadcast -p com.linbox \
+            -a com.linbox.action.DAC_START \
+            --ei width "$DW" --ei height "$DH" 2>&1) || \
+            echo "[wine-dac] ⚠ am broadcast 失败：$_amout" >&2
+    else
+        echo "[wine-dac] ⚠ 终端缺少 am 命令（bootstrap 不完整？）——无法自动拉起 DAC 窗口" >&2
+    fi
     i=0
     while [ ! -S "$PREFIX/tmp/linbox-dac.sock" ] && [ "$i" -lt 15 ]; do
         sleep 1; i=$((i+1))
     done
-    [ -S "$PREFIX/tmp/linbox-dac.sock" ] || \
-        echo "[wine-dac] ⚠ DAC 窗口未就绪（APK 需含 DAC 模块并保持安装）——仍继续启动 wine" >&2
+    if [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
+        echo "[wine-dac] ⚠ DAC 窗口未就绪——wine 画面暂时无处显示（winedac 会持续重连，窗口就绪后自动接上）" >&2
+        echo "[wine-dac]   自查三点：" >&2
+        echo "[wine-dac]   1) ls $PREFIX/bin/linbox-dac  —— 不存在说明 APK 未含 DAC 模块或未重装/重进过 LinBox" >&2
+        echo "[wine-dac]   2) logcat -d -s LinBoxDAC       —— 看 DAC_START 是否到达、DacView 是否报错" >&2
+        echo "[wine-dac]   3) 发广播时 LinBox 必须处于前台（其 Activity 才能承载 DAC 画面）" >&2
+    fi
 fi
 # ---- dac_allocd 侧车（glibc wine 的 AHardwareBuffer 分配代理） ----
 if [ ! -S "$PREFIX/tmp/linbox-dac-allocd.sock" ]; then
