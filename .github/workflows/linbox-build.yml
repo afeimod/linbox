@@ -257,13 +257,16 @@ jobs:
               libvulkan-dev \
               autoconf gettext perl wget xz-utils pkg-config
           else
+            # x86_64 runner：wine 原生构建 + 交叉构建 tarball 自带 box64
+            #（v1.12：aarch64 box64 + 私有 glibc 闭包，真机不再依赖 APK 自带 box64）
             sudo apt install -y --fix-broken \
               build-essential gcc-multilib g++-multilib \
               mingw-w64 \
               flex bison \
               libfreetype-dev libfontconfig1-dev \
               libvulkan-dev \
-              autoconf gettext perl wget xz-utils pkg-config
+              autoconf gettext perl wget xz-utils pkg-config \
+              gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git
           fi
           which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
 
@@ -284,6 +287,13 @@ jobs:
             tar -tJf "$tb" | grep -qE "$pat" || { echo "✗ tarball 缺 $pat"; exit 1; }
           done
           echo "✓ 自举 tarball 结构完整（wrapper + wine.real + sysroot + winedac.so）——安卓真机可直接执行"
+          if [ "$WINE_TARGET" = "x86_64-linux" ]; then
+            # v1.12：自带 box64 + 私有 aarch64 glibc 闭包（invalid ELF header 修复）
+            for pat in "bin/box64$" "sysroot-arm/lib/ld-linux-aarch64\.so\.1" "sysroot-arm/lib/libc\.so\.6"; do
+              tar -tJf "$tb" | grep -qE "$pat" || { echo "✗ tarball 缺 $pat（自带 box64）"; exit 1; }
+            done
+            echo "✓ 自带 box64 + 私有 aarch64 glibc 闭包就位（不依赖 APK 自带 box64）"
+          fi
 
       - name: 📤 Upload Wine-DAC tarball
         uses: actions/upload-artifact@v4
@@ -305,6 +315,7 @@ jobs:
           echo "| Target | $WINE_TARGET |" >> $GITHUB_STEP_SUMMARY
           echo "| path/ patches | $APPLY_PATCHES |" >> $GITHUB_STEP_SUMMARY
           echo "| 设备端自举 | wrapper + sysroot（x86_64=box64 转译 / aarch64=自带 ld-linux） |" >> $GITHUB_STEP_SUMMARY
+          echo "| 自带 box64 | ${{ env.WINE_TARGET == 'x86_64-linux' && '是（aarch64 交叉 + 私有 glibc 闭包）' || '不适用' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================

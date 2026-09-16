@@ -21,12 +21,24 @@
 #     整进程转译）—— aarch64 目标仅供 ARM64 PE 特殊场景 / 未来接入
 #     Hangover 类模拟层。
 #
-#   设备端自举（v1.11）：安卓上裸 glibc ELF 无法直接 exec ——
+#   设备端自举（v1.11 → v1.12）：安卓上裸 glibc ELF 无法直接 exec ——
 #     x86_64 构建报 "Exec format error"，aarch64 构建报
 #     "required file not found"（缺 /lib/ld-linux-aarch64.so.1）。
 #     因此 tarball 自带：① sysroot/lib（全部 unix ELF 的 ldd glibc 闭包，
 #     含 ld-linux，Mobox 同款）；② bin/wine|wineserver|wineboot 为自举
 #     wrapper（自动找 loader/box64 启动同名 .real 原生 ELF）。
+#
+#   v1.12 自带 box64（真机 "invalid ELF header" 修复）：APK 自带 box64
+#     被 patchelf 固定解释器到 $PREFIX/glibc/lib/ld-linux-aarch64.so.1，
+#     自身 libc 解析完全依赖 APK 的 glibc 目录 —— 该目录若含 ld 链接脚本
+#     版 libc.so（文本文件），box64 启动即报
+#       "box64: error while loading shared libraries:
+#        /data/.../usr/glibc/lib/libc.so: invalid ELF header"
+#     且外部 export LD_LIBRARY_PATH 指向 x86_64 库会二次污染其原生加载器。
+#     故 x86_64 目标改为：CI 交叉构建 aarch64 box64 打进 tarball（bin/box64）
+#     + 私有 aarch64 glibc 闭包（sysroot-arm/lib，按 DT_NEEDED 精确收集）
+#     + 私有 loader 直启（ld-linux --library-path），全程不读 APK 的 glibc
+#     目录、不依赖 PATH、原生 LD_LIBRARY_PATH 一律清空。
 #
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
@@ -227,6 +239,71 @@ done
 [ -f "$SYSLIB/$LD_NAME" ] || { echo "✗ sysroot 缺动态 loader $LD_NAME"; exit 1; }
 echo "   sysroot/lib：$(ls -1 "$SYSLIB" | wc -l) 个文件，$(du -sh "$SYSLIB" | cut -f1)"
 
+# ---- 6a2.（仅 x86_64 目标）构建 tarball 自带 box64 + 私有 aarch64 glibc 闭包 ----
+# 见文件头 v1.12 说明：自带 box64 用私有 loader + 私有 libc 直启，
+# 规避 APK 自带 box64 的 "invalid ELF header" 与原生 LD_LIBRARY_PATH 污染。
+# BUILD_BUNDLED_BOX64=0 可跳过（本地快速重打包 / 测试桩场景）。
+SYSARM="$OUTDIR/sysroot-arm/lib"
+if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
+    echo ">> 6a2. 构建 tarball 自带 box64（aarch64 交叉）"
+    if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 \
+       || ! command -v cmake >/dev/null 2>&1 \
+       || ! command -v git >/dev/null 2>&1; then
+        echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git）..."
+        sudo apt-get update -qq || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git || true
+    fi
+    command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "✗ 缺 aarch64-linux-gnu-gcc，无法构建自带 box64"; exit 1; }
+    command -v cmake                 >/dev/null 2>&1 || { echo "✗ 缺 cmake，无法构建自带 box64"; exit 1; }
+    command -v git                   >/dev/null 2>&1 || { echo "✗ 缺 git，无法拉取 box64 源码"; exit 1; }
+    if [ ! -x "$OUTDIR/bin/box64" ]; then
+        if [ ! -d "$BUILD_DIR/box64-src" ]; then
+            git clone --depth 1 https://github.com/ptitSeb/box64.git "$BUILD_DIR/box64-src"
+        fi
+        cmake -S "$BUILD_DIR/box64-src" -B "$BUILD_DIR/box64-build" \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DARM64=ON -DARM_DYNAREC=ON \
+            > "$BUILD_DIR/box64-cmake.log" 2>&1 \
+            || { echo "✗ box64 cmake 失败（日志: $BUILD_DIR/box64-cmake.log）"; exit 1; }
+        make -C "$BUILD_DIR/box64-build" -j"$JOBS" \
+            > "$BUILD_DIR/box64-make.log" 2>&1 \
+            || { echo "✗ box64 make 失败（日志: $BUILD_DIR/box64-make.log）"; exit 1; }
+        [ -f "$BUILD_DIR/box64-build/box64" ] || {
+            echo "   ⚠ dynarec 构建无产物，回退 ARM_DYNAREC=OFF 重试（可用但转译性能较低）"
+            cmake -S "$BUILD_DIR/box64-src" -B "$BUILD_DIR/box64-build" \
+                -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DARM64=ON -DARM_DYNAREC=OFF > "$BUILD_DIR/box64-cmake.log" 2>&1
+            make -C "$BUILD_DIR/box64-build" -j"$JOBS" \
+                > "$BUILD_DIR/box64-make.log" 2>&1 \
+                || { echo "✗ box64 make 二次失败"; exit 1; }
+        }
+        readelf -h "$BUILD_DIR/box64-build/box64" | grep -q "Machine:.*AArch64" \
+            || { echo "✗ box64 产物不是 AArch64 ELF"; exit 1; }
+        install -m 755 "$BUILD_DIR/box64-build/box64" "$OUTDIR/bin/box64"
+    fi
+    # box64 自身的 glibc 闭包：严格按 DT_NEEDED 从交叉 sysroot 收集
+    mkdir -p "$SYSARM"
+    for _lib in $(readelf -d "$OUTDIR/bin/box64" \
+                  | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'); do
+        [ -f "$SYSARM/$_lib" ] && continue
+        _src="/usr/aarch64-linux-gnu/lib/$_lib"
+        [ -f "$_src" ] || _src="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/$_lib"
+        if [ -f "$_src" ]; then
+            cp -L "$_src" "$SYSARM/"
+        else
+            echo "  ⚠ box64 依赖 $_lib 在交叉 sysroot 缺失（部署后 box64 可能无法启动）"
+        fi
+    done
+    # glibc 动态 loader 本体（--library-path 直启用）
+    _ldarm="/usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1"
+    [ -f "$_ldarm" ] || _ldarm="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+    cp -L "$_ldarm" "$SYSARM/" 2>/dev/null || { echo "✗ 交叉 sysroot 缺 ld-linux-aarch64.so.1"; exit 1; }
+    echo "   自带 box64：$(du -h "$OUTDIR/bin/box64" | cut -f1)；sysroot-arm/lib：$(ls -1 "$SYSARM" | wc -l) 个文件"
+fi
+
 echo ">> 6b. 生成自举 wrapper（boot=$BOOT_MODE）"
 emit_wrapper() { # $1=名字  $2=1 表示 wine 主入口（附 DAC 自动拉起）
     local name="$1" main="$2"
@@ -260,11 +337,21 @@ export PREFIX
 CHECKS
         if [ "$BOOT_MODE" = box64 ]; then
             cat <<'B64'
-export LD_LIBRARY_PATH="$SYSLIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export BOX64_LD_LIBRARY_PATH="$SYSLIB${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+SYSARM="$ROOT/sysroot-arm/lib"
+# ---- 选择 box64：优先 tarball 自带（带私有 aarch64 glibc 闭包，零外部依赖）----
+# 自带 box64 用私有 loader 直启，完全不读 APK 的 glibc 目录，规避
+# "box64: .../usr/glibc/lib/libc.so: invalid ELF header"。
+LDP=""
+LOADER=""
 BOX64=""
 if [ -n "$BOX64_BIN" ] && [ -x "$BOX64_BIN" ]; then
     BOX64="$BOX64_BIN"
+elif [ -x "$DIR/box64" ]; then
+    BOX64="$DIR/box64"
+    if [ -x "$SYSARM/ld-linux-aarch64.so.1" ]; then
+        LOADER="$SYSARM/ld-linux-aarch64.so.1"
+        LDP="$SYSARM"
+    fi
 elif command -v box64 >/dev/null 2>&1; then
     BOX64="$(command -v box64)"
 elif [ -x "$PREFIX/bin/box64" ]; then
@@ -272,7 +359,16 @@ elif [ -x "$PREFIX/bin/box64" ]; then
 elif [ -x /data/data/com.termux/files/usr/bin/box64 ]; then
     BOX64="/data/data/com.termux/files/usr/bin/box64"
 fi
-[ -n "$BOX64" ] || die "未找到 box64 —— x86_64 wine 必须经 box64 转译。请把 box64 放入 PATH 或 \$PREFIX/bin 后重试（LinBox 一般自带）"
+[ -n "$BOX64" ] || die "未找到 box64 —— x86_64 wine 必须经 box64 转译（tarball 自带 bin/box64，缺失说明解压不完整；也可自备放入 PATH 或 $PREFIX/bin）"
+# 访客侧（x86_64 glibc 闭包 + wine unix 库）搜索路径：box64 内部加载器专用。
+# 注意用 BOX64_LD_LIBRARY_PATH 而非原生 LD_LIBRARY_PATH —— 后者会被
+# box64 自身的加载器读取，混入 x86_64 库（wrong ELF class）或 APK
+# glibc 目录（libc.so 为 ld 链接脚本文本 → invalid ELF header）都会
+# 让 box64 启动即崩（v1.12 前真机实测失败原因）。
+export BOX64_LD_LIBRARY_PATH="$SYSLIB:$ROOT/lib/wine/x86_64-unix:$ROOT/lib/wine${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+# 原生 LD_LIBRARY_PATH/LD_PRELOAD 一律清空：自带 box64 的原生依赖由
+# 私有 loader --library-path 提供；外部回退 box64 自带解释器自解析。
+unset LD_LIBRARY_PATH LD_PRELOAD
 B64
         else
             cat <<'ALD'
@@ -310,7 +406,13 @@ export WINEDEBUG="${WINEDEBUG:-fixme-all}"
 MAIN
         fi
         if [ "$BOOT_MODE" = box64 ]; then
-            echo 'exec "$BOX64" "$REAL" "$@"'
+            cat <<'EXECB64'
+if [ -n "$LOADER" ]; then
+    exec "$LOADER" --library-path "$LDP" "$BOX64" "$REAL" "$@"
+else
+    exec "$BOX64" "$REAL" "$@"
+fi
+EXECB64
         else
             echo 'exec "$LOADER" --library-path "$SYSLIB" "$REAL" "$@"'
         fi

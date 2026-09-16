@@ -81,8 +81,9 @@ $HOME/wine-dac-9.2-x86_64/bin/wine explorer /desktop=dac,1280x720 taskmgr
 |------|------|------|
 | `cannot execute binary file: Exec format error` | x86_64 glibc ELF，安卓 CPU 不能直接执行，需 box64 转译 | 用 v1.11+ tarball（bin/wine 已是 wrapper）；确认设备有 box64（LinBox 自带/你仓库 build-box64.yml 产物） |
 | `cannot execute: required file not found` | aarch64 glibc ELF 的动态链接器 `/lib/ld-linux-aarch64.so.1` 在安卓不存在 | 用 v1.11+ tarball（自带 sysroot loader）；且 aarch64 目标本就不能跑 x86/x86_64 PE，请改用 x86_64-linux 目标 + box64 |
-| `未找到 box64` | 设备无 box64 | 把 box64 放入 `$PREFIX/bin` 或 PATH（你仓库 Build Box64 (aarch64) 的产物） |
-| `DAC 窗口未就绪` | APK 不含 DAC 模块或未安装新 APK | 安装 Actions 构建的含 DAC APK（LinBox-release-*） |
+| `box64: error while loading shared libraries: .../usr/glibc/lib/libc.so: invalid ELF header` | APK 自带 box64 的解释器被 patchelf 固定到 APK 的 glibc 目录，其 `libc.so` 是无效 ELF（ld 链接脚本文本/坏符号链）；旧 wrapper 导出的 x86_64 `LD_LIBRARY_PATH` 还会二次污染其原生加载器 | 用 v1.12+ tarball（自带 aarch64 box64 + 私有 glibc 闭包 + 私有 loader 直启，全程不碰 APK 的 glibc 目录；wrapper 启动前清空原生 LD_LIBRARY_PATH） |
+| `未找到 box64` | 设备无 box64（v1.12+ tarball 自带，出现此错说明 tarball 解压不完整或为旧包） | 重下 v1.12+ tarball 完整解压；或把 box64 放入 `$PREFIX/bin` / PATH |
+| `DAC 窗口未就绪` | APK 不含 DAC 模块或未安装新 APK | 安装 Actions 构建的含 DAC APK（LinBox-release-*，Run #19 起 CI 产出均含 DAC）；启动 wine 时保持 LinBox 在前台 |
 
 ## 终端使用（两条显示路径）
 
