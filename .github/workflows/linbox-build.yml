@@ -258,6 +258,15 @@ jobs:
           else
             # x86_64 runner：wine 原生构建 + 交叉构建 tarball 自带 box64
             #（v1.12：aarch64 box64 + 私有 glibc 闭包，真机不再依赖 APK 自带 box64）
+            # v1.16：noble 已整体移除 gcc-13 交叉包（gcc-13-aarch64-linux-gnu
+            # 在 noble/noble-updates 全库消失），而 main 的元包
+            # gcc-aarch64-linux-gnu（gcc-defaults 1.214ubuntu1）仍死指
+            # gcc-13 → 必报 "held broken packages"。修法：主装单排除元包；
+            # 交叉 gcc 先模拟探测元包（未来 Ubuntu 修好自动回归），
+            # 不可用则显式装 gcc-14 交叉包并补无后缀符号链接
+            #（build_wine_dac.sh 6a2 写死 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc）。
+            # 已本地复现验证：gcc-14.2 交叉 + 符号链接 → box64 ARM_DYNAREC=ON
+            # 完整编译通过，产物 ELF64/AArch64。
             sudo apt install -y --fix-broken \
               build-essential gcc-multilib g++-multilib \
               mingw-w64 \
@@ -265,7 +274,16 @@ jobs:
               libfreetype-dev libfontconfig1-dev \
               libvulkan-dev \
               autoconf gettext perl wget xz-utils pkg-config \
-              gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git
+              libc6-dev-arm64-cross cmake git
+            if sudo apt-get install -s -y gcc-aarch64-linux-gnu >/dev/null 2>&1; then
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+            else
+              echo ">> 元包不可用（noble 已移除 gcc-13 交叉包）→ 改用 gcc-14 交叉包 + 无后缀符号链接"
+              sudo apt-get install -y gcc-14-aarch64-linux-gnu
+              [ -e /usr/bin/aarch64-linux-gnu-gcc ] || \
+                sudo ln -s aarch64-linux-gnu-gcc-14 /usr/bin/aarch64-linux-gnu-gcc
+            fi
+            aarch64-linux-gnu-gcc --version | head -1
           fi
           which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
 
