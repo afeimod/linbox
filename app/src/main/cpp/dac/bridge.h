@@ -15,6 +15,17 @@
 #include <android/native_window.h>
 #include <android/surface_control.h>
 
+/*
+ * v1.15 修复：本头文件的声明（尤其末尾 JNI 原型）必须为 C linkage。
+ * .cpp TU 里曾出现「declaration has a different language linkage」：
+ * bridge.h 原型是 C++ linkage、linbox_dac_bridge.cpp 定义带 extern "C"，
+ * 两者冲突；且 C linkage 缺失时 JNI 符号会被 C++ 修饰，运行时
+ * UnsatisfiedLinkError。此处整包 extern "C"（对结构体/枚举无影响）。
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define DAC_PROTOCOL_MAGIC     0x44414332u
 #define DAC_PROTOCOL_VERSION   1
 
@@ -189,5 +200,9 @@ Java_com_linbox_apps_dac_DacNative_nativeSendKey( JNIEnv *env, jclass clazz,
 JNIEXPORT void JNICALL
 Java_com_linbox_apps_dac_DacNative_nativeSetTitleSink( JNIEnv *env, jclass clazz,
                                                        jobject sink );
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* LINBOX_DAC_BRIDGE_H */

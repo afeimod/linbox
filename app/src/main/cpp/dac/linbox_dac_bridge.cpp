@@ -1185,7 +1185,7 @@ extern "C" void Java_com_linbox_apps_dac_DacNative_nativeSetTitleSink( JNIEnv *e
     }
 }
 
-jint JNI_OnLoad( JavaVM *vm, void *reserved )
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad( JavaVM *vm, void *reserved )
 {
     g_vm = vm;
     return JNI_VERSION_1_6;
