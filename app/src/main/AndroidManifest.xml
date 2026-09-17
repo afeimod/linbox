@@ -88,6 +88,17 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Terminal session keep alive" />
         </service>
+        <!-- LinBox DAC：终端 am broadcast 触发的显示入口（merge-into-repo.sh 注入） -->
+        <receiver
+            android:name="com.linbox.apps.dac.DacReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.linbox.action.DAC_START" />
+                <action android:name="com.linbox.action.DAC_STOP" />
+                <action android:name="com.linbox.action.DAC_STATUS" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

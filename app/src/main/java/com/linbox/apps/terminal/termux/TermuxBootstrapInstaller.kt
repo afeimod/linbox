@@ -628,6 +628,34 @@ object TermuxBootstrapInstaller {
             android.util.Log.w(TAG, "liblinbox_reprefix.so 缺失，安装后自动重写不可用")
         }
 
+
+        // (1.5) LinBox DAC 侧车守护进程（merge-into-repo.sh 注入）：
+        //       glibc Wine 模式下 AHardwareBuffer 代理（arm64 bionic 进程）
+        val dacAllocdSrc = File(nativeDir, "libdac_allocd.so")
+        if (dacAllocdSrc.isFile) {
+            val dacAllocdDst = File(prefix, "bin/dac_allocd")
+            dacAllocdSrc.copyTo(dacAllocdDst, overwrite = true)
+            Os.chmod(dacAllocdDst.absolutePath, PERMISSION_0700)
+        }
+
+
+        // (1.6) LinBox DAC 显示脚本（merge-into-repo.sh 注入）：
+        //       jniLibs 中以 lib*.so 分发的 shell 脚本 → 还原为 $PREFIX/bin/linbox-dac*
+        mapOf(
+            "liblinbox_dac.so" to "linbox-dac",
+            "liblinbox_dac_doctor.so" to "linbox-dac-doctor",
+            "liblinbox_dac_reg.so" to "linbox-dac-reg",
+            "liblinbox_dac_unreg.so" to "linbox-dac-unreg",
+            "liblinbox_dac_stop.so" to "linbox-dac-stop"
+        ).forEach { (lib, name) ->
+            val dacScriptSrc = File(nativeDir, lib)
+            if (dacScriptSrc.isFile) {
+                val dacScriptDst = File(prefix, "bin/$name")
+                dacScriptSrc.copyTo(dacScriptDst, overwrite = true)
+                Os.chmod(dacScriptDst.absolutePath, PERMISSION_0700)
+            }
+        }
+
         // (2) dpkg 包装器三层布局（fix7，对 dpkg 包自升级免疫）：
         //     libexec/linbox/dpkg       包装器本体（apt 经 Dir::Bin::dpkg
         //                               固定调用；libexec/linbox 不属于

@@ -78,6 +78,12 @@ class LinBoxApp : Application() {
         themeManager = ThemeManager(this)
         settingsStore = SettingsStore(this)
 
+        // LinBox DAC（tools/merge-into-repo.sh 注入）：注入上下文并初始化。
+        // 命令行链路：linbox-dac → am broadcast DAC_START → DacReceiver → DacApp
+        com.linbox.apps.dac.DacApp.appContext = this
+        com.linbox.apps.dac.DacApp.init(null)   // null = 兜底全屏覆盖层（挂前台 Activity decorView）
+
+
         // v2.22.2 fix9.6：X11 偏好提前就位 —— X11 窗口内的 LorieView
         // （onMeasure/getDimensionsFromSettings/onCreateInputConnection）
         // 读取静态 prefs，不等 X11 Activity 创建，避免 NPE 与测量错误。

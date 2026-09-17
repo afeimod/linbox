@@ -306,3 +306,130 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+// ============================================================
+// LinBox DAC —— 原生桥编译（tools/merge-into-repo.sh 幂等追加块）
+// 与上方 linbox-reprefix 同风格：Gradle Exec 调 NDK clang 逐 ABI 编译。
+// ⚠️ bridge 源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 内
+// setGeometry/setBuffer 等签名含 C++ 引用/默认参数且无 __cplusplus 分流，
+// 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰。
+//   liblinbox_dac_bridge.so  JNI 桥（app 进程内：SF 直合/AHB Canvas/dmabuf EGL）
+//   libdac_allocd.so         AHB 侧车守护进程（可执行伪装 so，由
+//                            TermuxBootstrapInstaller 拷到 $PREFIX/bin/dac_allocd）
+// 说明：AGP 每模块仅允许一个 externalNativeBuild.ndkBuild（已被 termux
+// Android.mk 占用），故与 reprefix 一样走 Exec 方案。
+// ============================================================
+val dacAbis = mapOf(
+    "arm64-v8a" to "aarch64-linux-android",
+    "armeabi-v7a" to "armv7a-linux-androideabi",
+    "x86" to "i686-linux-android",
+    "x86_64" to "x86_64-linux-android"
+)
+val dacApiBridge = 29   // ASurfaceControl/ASurfaceTransaction（API29 直合；低版本 DacNative.available 兜底禁用）
+val dacApiAllocd = 26   // AHardwareBuffer_allocate（API26+）
+val dacSource = file("src/main/cpp/dac")
+val dacOut = layout.buildDirectory.dir("dac")
+
+afterEvaluate {
+    val ndkDir = android.ndkDirectory
+    val osName = System.getProperty("os.name").lowercase()
+    val dacHostTag = when {
+        osName.contains("windows") -> "windows-x86_64"
+        osName.contains("mac") || osName.contains("darwin") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+    val clangBin = File(ndkDir, "toolchains/llvm/prebuilt/$dacHostTag/bin")
+
+    val buildDacAll = tasks.register("buildDacNatives") {
+        group = "build"
+        description = "编译 LinBox DAC 原生桥（liblinbox_dac_bridge.so + libdac_allocd.so，全 ABI）"
+    }
+
+    dacAbis.forEach { (abi, triple) ->
+        val abiName = abi.split("-").joinToString("") { p -> p.replaceFirstChar { it.uppercase() } }
+        val outDir = dacOut.get().dir(abi).asFile
+        val outBridge = File(outDir, "liblinbox_dac_bridge.so")
+        val outAllocd = File(outDir, "libdac_allocd.so")
+        val bridgeTask = tasks.register<Exec>("buildDacBridge$abiName") {
+            group = "build"
+            inputs.file(File(dacSource, "linbox_dac_bridge.cpp"))
+            outputs.file(outBridge)
+            doFirst {
+                outDir.mkdirs()
+                val clang = File(clangBin, "${triple}$dacApiBridge-clang++")
+                if (!clang.exists()) throw GradleException("找不到 NDK clang++：${clang.absolutePath}")
+            }
+            commandLine(
+                File(clangBin, "${triple}$dacApiBridge-clang++").absolutePath,
+                "-shared", "-fPIC", "-O2", "-Wall", "-Wno-unused-parameter",
+                "-o", outBridge.absolutePath,
+                File(dacSource, "linbox_dac_bridge.cpp").absolutePath,
+                "-llog", "-landroid", "-lEGL", "-lGLESv2"
+            )
+        }
+        val allocdTask = tasks.register<Exec>("buildDacAllocd$abiName") {
+            group = "build"
+            inputs.file(File(dacSource, "dac_allocd.c"))
+            outputs.file(outAllocd)
+            doFirst {
+                outDir.mkdirs()
+                val clang = File(clangBin, "${triple}$dacApiAllocd-clang")
+                if (!clang.exists()) throw GradleException("找不到 NDK clang：${clang.absolutePath}")
+            }
+            commandLine(
+                File(clangBin, "${triple}$dacApiAllocd-clang").absolutePath,
+                "-O2", "-Wall", "-Wno-unused-parameter",
+                "-o", outAllocd.absolutePath,
+                File(dacSource, "dac_allocd.c").absolutePath,
+                "-landroid", "-llog"
+            )
+        }
+        buildDacAll.configure { dependsOn(bridgeTask, allocdTask) }
+    }
+
+    tasks.named("preBuild") { dependsOn(buildDacAll) }
+    tasks.matching { it.name.startsWith("merge") && it.name.contains("JniLib") }
+        .configureEach { dependsOn(buildDacAll) }
+
+    android.sourceSets.getByName("main") {
+        jniLibs.srcDir(dacOut.get())
+    }
+}
+
+
+// ============================================================
+// LinBox DAC —— 显示脚本分发（tools/merge-into-repo.sh 幂等追加块）
+// ============================================================
+// 将 assets/termux/scripts 的 linbox-dac* shell 脚本以 lib*.so 名义并入
+// jniLibs（复用 DAC 原生库管线，全 ABI 目录各放一份，防 assets 提取逻辑
+// 不确定性），安装后由 TermuxBootstrapInstaller 还原为 $PREFIX/bin/linbox-dac*。
+// keepDebugSymbols：防 release strip 对非 ELF 文件报错（AGP ≥ 7.3）。
+// 依赖：上方「LinBox DAC —— 原生桥编译」块定义的 dacAbis / dacOut。
+// ============================================================
+android {
+    packaging {
+        jniLibs {
+            keepDebugSymbols.add("**/liblinbox_dac*.so")
+        }
+    }
+}
+
+tasks.register("copyDacDisplayScripts") {
+    group = "build"
+    description = "LinBox DAC shell 脚本以 lib*.so 并入 jniLibs（各 ABI 目录）"
+    val dacScriptDir = file("src/main/assets/termux/scripts")
+    inputs.dir(dacScriptDir)
+    outputs.upToDateWhen { false }
+    doLast {
+        dacAbis.keys.map { dacOut.get().dir(it).asFile }.forEach { d ->
+            d.mkdirs()
+            dacScriptDir.listFiles()?.filter { it.name.startsWith("linbox-dac") }?.forEach { f ->
+                // 注意：这里不能用全限定 java.io.File —— Kotlin DSL 脚本里
+                // 该写法会被隐式接收者遮蔽（Unresolved reference: io）。
+                // File 由 Kotlin 默认导入（java.io.*）解析，无遮蔽问题。
+                File(d, "lib" + f.name.replace("-", "_") + ".so").writeBytes(f.readBytes())
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn("copyDacDisplayScripts") }
+
