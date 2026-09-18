@@ -21,8 +21,7 @@ struct init_params
     void *reserved;
 };
 
-#define DAC_CALL( func, params ) __wine_unix_call( dac_handle, unix_##func, params )
+#define DAC_CALL( func, params ) WINE_UNIX_CALL( unix_##func, params )
 
-extern unixlib_handle_t dac_handle;
 
 #endif /* __WINEDAC_UNIXLIB_H */

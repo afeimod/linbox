@@ -14,7 +14,7 @@
  */
 
 #if 0
-#pragma makedep unix
+#pragma makedep unix  /* 本文件仅编译 unix 侧（wine 9.2 驱动模型） */
 #endif
 
 #include "config.h"
@@ -57,8 +57,7 @@ BOOL dac_WindowPosChanging( HWND hwnd, HWND insert_after, UINT swp_flags,
  * 状态
  * =================================================================== */
 struct dac_desktop dac_desktop = {0};
-static CRITICAL_SECTION desktop_cs;
-static BOOL desktop_cs_init;
+static pthread_mutex_t desktop_cs = PTHREAD_MUTEX_INITIALIZER;
 
 static pthread_mutex_t win_data_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct dac_win_data *win_data_context[32768];
@@ -147,7 +146,7 @@ struct dac_surface
     BITMAPINFO            info;
     void                 *bits;
     RECT                  bounds;    /* 脏区（surface 坐标） */
-    CRITICAL_SECTION      cs;
+    pthread_mutex_t       cs;
 };
 
 static inline struct dac_surface *get_dac_surface( struct window_surface *surface )
@@ -155,14 +154,52 @@ static inline struct dac_surface *get_dac_surface( struct window_surface *surfac
     return CONTAINING_RECORD( surface, struct dac_surface, header );
 }
 
+/* ---- unix 侧替代：win32 的 UnionRect / WideCharToMultiByte 在 .so 链接期不存在 ---- */
+static void dac_union_rect( RECT *dst, const RECT *r1, const RECT *r2 )
+{
+    BOOL e1 = (r1->left >= r1->right || r1->top >= r1->bottom);
+    BOOL e2 = (r2->left >= r2->right || r2->top >= r2->bottom);
+    if (e1 && e2) { dst->left = dst->top = dst->right = dst->bottom = 0; return; }
+    if (e1) { *dst = *r2; return; }
+    if (e2) { *dst = *r1; return; }
+    dst->left   = (r1->left   < r2->left)   ? r1->left   : r2->left;
+    dst->top    = (r1->top    < r2->top)    ? r1->top    : r2->top;
+    dst->right  = (r1->right  > r2->right)  ? r1->right  : r2->right;
+    dst->bottom = (r1->bottom > r2->bottom) ? r1->bottom : r2->bottom;
+}
+
+/* UTF-16 → UTF-8（含代理对）；返回写入字节数（含终止 0），截断时安全收敛 */
+static int dac_wc_to_utf8( const WCHAR *src, char *dst, int dst_size )
+{
+    unsigned int i = 0, o = 0;
+    if (dst_size <= 0) return 0;
+    while (src[i])
+    {
+        unsigned int c = src[i++], n;
+        if (c >= 0xd800 && c <= 0xdbff && src[i] >= 0xdc00 && src[i] <= 0xdfff)
+            c = 0x10000 + ((c - 0xd800) << 10) + (src[i++] - 0xdc00);
+        if (c < 0x80)      { n = 1; }
+        else if (c < 0x800){ n = 2; }
+        else if (c < 0x10000){ n = 3; }
+        else               { n = 4; }
+        if (o + n >= (unsigned)dst_size) break;
+        if (n == 1) dst[o++] = c;
+        else if (n == 2) { dst[o++] = 0xc0 | (c >> 6);  dst[o++] = 0x80 | (c & 0x3f); }
+        else if (n == 3) { dst[o++] = 0xe0 | (c >> 12); dst[o++] = 0x80 | ((c >> 6) & 0x3f); dst[o++] = 0x80 | (c & 0x3f); }
+        else { dst[o++] = 0xf0 | (c >> 18); dst[o++] = 0x80 | ((c >> 12) & 0x3f); dst[o++] = 0x80 | ((c >> 6) & 0x3f); dst[o++] = 0x80 | (c & 0x3f); }
+    }
+    dst[o] = 0;
+    return o + 1;
+}
+
 static void dac_surface_lock( struct window_surface *window_surface )
 {
-    EnterCriticalSection( &get_dac_surface(window_surface)->cs );
+    pthread_mutex_lock( &get_dac_surface(window_surface)->cs );
 }
 
 static void dac_surface_unlock( struct window_surface *window_surface )
 {
-    LeaveCriticalSection( &get_dac_surface(window_surface)->cs );
+    pthread_mutex_unlock( &get_dac_surface(window_surface)->cs );
 }
 
 static void *dac_surface_get_info( struct window_surface *window_surface, BITMAPINFO *info )
@@ -188,10 +225,10 @@ static void dac_surface_flush( struct window_surface *window_surface )
     RECT bounds, screen;
     struct dac_win_data *data;
 
-    EnterCriticalSection( &surface->cs );
+    pthread_mutex_lock( &surface->cs );
     bounds = surface->bounds;
     SetRectEmpty( &surface->bounds );
-    LeaveCriticalSection( &surface->cs );
+    pthread_mutex_unlock( &surface->cs );
 
     if (IsRectEmpty( &bounds )) return;
 
@@ -210,7 +247,7 @@ static void dac_surface_destroy( struct window_surface *window_surface )
 {
     struct dac_surface *surface = get_dac_surface( window_surface );
     TRACE( "destroy surface hwnd %p\n", surface->hwnd );
-    DeleteCriticalSection( &surface->cs );
+    pthread_mutex_destroy( &surface->cs );
     free( surface->bits );
     free( surface );
 }
@@ -273,7 +310,7 @@ static struct window_surface *create_window_surface( HWND hwnd, const RECT *surf
     }
     surface->bits = pixels;
 
-    InitializeCriticalSection( &surface->cs );
+    pthread_mutex_init( &surface->cs, NULL );
     TRACE( "created surface hwnd %p %dx%d\n", hwnd, width, height );
     return &surface->header;
 }
@@ -331,23 +368,13 @@ static BOOL desktop_create_slots( uint32_t width, uint32_t height )
 
 BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
 {
-    /* 连接重试（v1.13）：旧实现用一次性 tried 锁死——若 DAC 窗口在 wine
-     * 之后才就绪（am broadcast 竞速/用户手开），winedac 将永远连不上。
-     * 现改为限速重试（≥1s 间隔），bridge 就绪后自动接上；连接失败仅是
-     * 一次 socket 连接调用的开销，对窗口消息路径可忽略。 */
     static BOOL tried;
     static struct timespec last_try;
 
     if (dac_desktop.ready && dac_desktop.width == width &&
         dac_desktop.height == height) return TRUE;
 
-    if (!desktop_cs_init)
-    {
-        InitializeCriticalSection( &desktop_cs );
-        desktop_cs_init = TRUE;
-    }
-
-    EnterCriticalSection( &desktop_cs );
+    pthread_mutex_lock( &desktop_cs );
 
     if (!dac_connected())
     {
@@ -358,7 +385,7 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
             struct timespec diff;
 #if defined(CLOCK_MONOTONIC)
             clock_gettime( CLOCK_MONOTONIC, &now );
-            diff.tv_sec = now.tv_sec - last_try.tv_sec;
+            diff.tv_sec  = now.tv_sec - last_try.tv_sec;
             diff.tv_nsec = now.tv_nsec - last_try.tv_nsec;
             if (diff.tv_nsec < 0) { diff.tv_sec--; diff.tv_nsec += 1000000000L; }
             due = (diff.tv_sec >= 1);
@@ -368,6 +395,7 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
         }
         if (due)
         {
+            /* 限速重连（v1.13）：bridge 晚于 wine 就绪也能自动接上 */
             last_try = now;
             tried = TRUE;
             if (!dac_connect( "winedac" ))
@@ -395,7 +423,7 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
         if (dac_desktop.ready)
             TRACE( "desktop ready %ux%u\n", width, height );
     }
-    LeaveCriticalSection( &desktop_cs );
+    pthread_mutex_unlock( &desktop_cs );
 
     if (!dac_desktop.ready)
         WARN( "desktop %ux%u not ready (bridge 未连接)\n", width, height );
@@ -501,17 +529,17 @@ void dac_desktop_present( const RECT *damage )
     RECT dmg;
     uint32_t slot;
 
-    if (!dac_desktop.ready || !dac_connected() || !desktop_cs_init) return;
+    if (!dac_desktop.ready || !dac_connected()) return;
 
     /* 槽位背压：全部被 bridge 持有时丢弃本帧（v1 简化策略） */
     if ((dac_desktop.slot_pending & ((1u << DAC_DESKTOP_MAX_SLOTS) - 1)) ==
         ((1u << DAC_DESKTOP_MAX_SLOTS) - 1))
         return;
 
-    EnterCriticalSection( &desktop_cs );
+    pthread_mutex_lock( &desktop_cs );
     slot = dac_desktop.next_slot;
     dac_desktop.next_slot = (dac_desktop.next_slot + 1) % DAC_DESKTOP_MAX_SLOTS;
-    LeaveCriticalSection( &desktop_cs );
+    pthread_mutex_unlock( &desktop_cs );
 
     dmg = *damage;
     OffsetRect( &dmg, -dac_desktop.rect.left, -dac_desktop.rect.top );
@@ -637,7 +665,7 @@ void dac_WindowPosChanged( HWND hwnd, HWND insert_after, UINT swp_flags,
         data->surface = surface;
     }
 
-    UnionRect( &damage, &old, rect_window );
+    dac_union_rect( &damage, &old, rect_window );
     release_win_data( data );
 
     if (!(swp_flags & SWP_AGG_NOPOSCHANGE) || (swp_flags & (SWP_HIDEWINDOW | SWP_SHOWWINDOW)))
@@ -652,8 +680,7 @@ void dac_SetWindowText( HWND hwnd, LPCWSTR text )
     struct { uint64_t hwnd; char text[512]; } payload = { 0 };
     payload.hwnd = (uintptr_t)hwnd;
     if (text)
-        WideCharToMultiByte( CP_UTF8, 0, text, -1, payload.text,
-                             sizeof(payload.text), NULL, NULL );
+        dac_wc_to_utf8( text, payload.text, sizeof(payload.text) );
     dac_send_msg( DAC_MSG_TITLE, &payload, sizeof(payload), NULL, 0 );
 }
 
