@@ -90,6 +90,14 @@ done
 mkdir -p "$PREFIX_DIR/tmp" 2>/dev/null || true
 true > "$LOG" 2>/dev/null || LOG=/dev/null
 
+# v1.18 防前缀创建卡死：禁 Wine Mono / Gecko 安装确认框 ——
+# 首次建前缀时弹框等点击，DAC 未连接（无显示器）时无人能点"取消"，
+# 前缀初始化永久卡住（Lutris/PlayOnLinux 同款方案）。wine-dac tarball
+# 的 bin/wine wrapper 已内置同款逻辑；此处覆盖 grun/box64 直跑等路径。
+# .NET 程序需要真实 mono 时：WINEDLLOVERRIDES=... 自行覆盖或删除本块。
+WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+export WINEDLLOVERRIDES
+
 # ---------------- 0. 环境自检 ----------------
 WINE_BIN="$(command -v wine 2>/dev/null || command -v wine64 2>/dev/null)"
 [ -n "$WINE_BIN" ] || die "未找到 wine —— 先安装 wine（linbox-glibc 环境 / bionic wine 包）"

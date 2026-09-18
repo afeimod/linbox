@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import com.linbox.LinBoxApp
+import com.linbox.apps.dac.DacScreen
 import com.linbox.apps.settings.SettingsScreen
 import com.linbox.apps.terminal.TerminalScreen
 import com.linbox.apps.x11.X11Screen
@@ -22,19 +23,21 @@ import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
 
 /**
- * LinBox 壳层：终端主页 + X11 / 设置全屏页 + 输入覆盖层。
+ * LinBox 壳层：终端主页 + X11 / DAC / 设置全屏页 + 输入覆盖层。
  *
  * 无浮动窗口、无桌面启动器（原桌面环境的壁纸/图标网格/任务栏/开始菜单
  * 及替代它的启动器卡片均已移除）——App 打开即终端，终端就是主页：
  * - 主页 = 真实 Termux 终端铺满全屏；
- * - 终端执行 `linbox-x11`（或点工具栏"X11"）→ 整屏跳转 X11 图形界面；
- * - 工具栏"设置"→ 全屏设置页（虚拟手柄开关在这里）。
+ * - 终端执行 `linbox-x11`（或点悬浮球"X11"）→ 整屏跳转 X11 图形界面；
+ * - 悬浮球"DAC 显示器"（或 wine wrapper 的 DAC_START 广播）→ 全屏
+ *   DAC 显示器页（winedac.drv 画面直出安卓屏，不依赖 X11）；
+ * - 悬浮球"设置"→ 全屏设置页（虚拟手柄开关在这里）。
  *
  * 结构（自底向上）：
- * 1. 当前页面（ShellController.screen 决定：终端 / X11 / 设置）
+ * 1. 当前页面（ShellController.screen 决定：终端 / X11 / DAC / 设置）
  * 2. VirtualKeyboardOverlay（虚拟键盘，可拖动）
  * 3. GamepadOverlay + GamepadSettingsWindow（虚拟游戏手柄：开启后
- *    摇杆/按钮/迷你工具条悬浮在当前页面之上，X11 游戏可用）
+ *    摇杆/按钮/迷你工具条悬浮在当前页面之上，X11/DAC 游戏可用）
  * 4. MouseCursorOverlay（虚拟鼠标指针，最顶层）
  */
 @Composable
@@ -70,10 +73,11 @@ fun LinBoxShell() {
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // ===== 1. 当前页面（终端主页 / X11 / 设置） =====
+        // ===== 1. 当前页面（终端主页 / X11 / DAC / 设置） =====
         when (ShellController.screen) {
             ShellController.Screen.TERMINAL -> TerminalScreen()
             ShellController.Screen.X11 -> X11Screen()
+            ShellController.Screen.DAC -> DacScreen()
             ShellController.Screen.SETTINGS -> SettingsScreen()
         }
 

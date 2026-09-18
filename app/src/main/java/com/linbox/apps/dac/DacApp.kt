@@ -43,6 +43,39 @@ object DacApp : DacNative.TitleSink {
     private var desktopH = 720
 
     /**
+     * 最近一次请求的虚拟桌面尺寸（v1.18）：DAC_START 广播携带的 WxH，
+     * 或页面默认 1280x720。「DAC 显示器」页面组合时按此尺寸开屏。
+     */
+    var requestedSize: Pair<Int, Int> = 1280 to 720
+        private set
+
+    /**
+     * DAC 显示统一入口（v1.18）：DacReceiver 广播与悬浮球按钮共用。
+     * - 「DAC 显示器」页面已挂载宿主容器 → 直接在页面内开屏（含尺寸同步）；
+     * - 否则跳转全屏「DAC 显示器」页面（页面组合时自动 startDisplay），
+     *   不再裸挂 decorView 兜底覆盖层 —— 旧路径无关闭按钮、遮挡终端、
+     *   且 am 广播到达时往往无前台 Activity（这正是「点开 App」成为
+     *   唯一手动路径的原因）。
+     */
+    fun requestStart(width: Int, height: Int) {
+        requestedSize = width to height
+        if (rootView != null) {
+            startDisplay(width, height)
+        } else {
+            com.linbox.core.shell.ShellController.showDac()
+        }
+    }
+
+    /**
+     * 「DAC 显示器」页面挂载/解除宿主容器（v1.18，主线程调用）。
+     * 解除传 null：恢复兼容模式（startDisplay 走 decorView 兜底）。
+     * 经 main.post 排队：保证先于同一轮组合内随后的 startDisplay 生效。
+     */
+    fun attachHost(container: FrameLayout?) {
+        main.post { rootView = container }
+    }
+
+    /**
      * 无前台 Activity 时的挂起请求（v1.13）：如从 adb / 后台触发 DAC_START，
      * 兕底容器拿不到 decorView；旧实现直接抛异常（主线程崩溅风险），
      * 现改为记录请求，待下一个 Activity resume 时自动拉起。

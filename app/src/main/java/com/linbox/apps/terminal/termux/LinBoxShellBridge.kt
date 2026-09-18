@@ -125,15 +125,17 @@ object LinBoxShellBridge {
     private fun handleStart(args: String) {
         when (args.lowercase()) {
             "x11", "桌面", "gui" -> ShellController.showX11()
+            // v1.18：DAC 显示器页（winedac.drv 画面直出安卓屏）
+            "dac", "显示器", "dac显示器" -> ShellController.showDac()
             "settings", "设置" -> ShellController.showSettings()
             "terminal", "终端" -> ShellController.showTerminal()
-            else -> Log.w(TAG, "未知应用: $args（可用: terminal / x11 / settings）")
+            else -> Log.w(TAG, "未知应用: $args（可用: terminal / x11 / dac / settings）")
         }
     }
 
     private fun handleApps() {
         // 终端侧无 UI 弹窗，应用清单直接写日志（logcat 可见）
-        Log.i(TAG, "可用页面: 终端(terminal) / X11(x11) / 设置(settings)")
+        Log.i(TAG, "可用页面: 终端(terminal) / X11(x11) / DAC 显示器(dac) / 设置(settings)")
     }
 
     private fun handleOpen(args: String) {

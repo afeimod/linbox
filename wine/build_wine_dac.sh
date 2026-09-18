@@ -50,6 +50,15 @@
 #     未提供 GARM 时回退交叉 sysroot（本地快速打包场景），并在
 #     wrapper 里加 GLIBC_TUNABLES rseq=0 双保险 + 启动自检探针。
 #
+#   v1.18 首次建前缀卡死修复（无显示器场景）：wineboot 初始化新前缀
+#     时会弹 "Wine Mono Installer" / "Wine Gecko Installer" 确认框
+#     等点击；此时 DAC 窗口往往尚未连接（无显示器），无人能点
+#     "取消" → 前缀创建永久卡住（真机实测：wine explorer 卡死不动）。
+#     修法（Lutris/PlayOnLinux 同款）：wrapper 默认导出
+#       WINEDLLOVERRIDES="mscoree,mshtml="
+#     禁用 mscoree/mshtml 内建覆盖，wine 直接按"已禁用"处理，不再弹框。
+#     LINBOX_DAC_MONO_PROMPT=1 或自设 WINEDLLOVERRIDES 可恢复默认行为。
+#
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
 #   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
@@ -378,6 +387,16 @@ export PREFIX
 TMPDIR="$PREFIX/tmp"
 export TMPDIR
 mkdir -p "$TMPDIR" 2>/dev/null || true
+# v1.18 防前缀创建卡死：禁 Wine Mono / Gecko 安装确认框 ——
+# wineboot 初始化新前缀时弹框等点击，DAC 未连接（无显示器）时
+# 无人能点"取消"，前缀初始化永久卡住。禁用 mscoree/mshtml 覆盖
+# 即可跳过弹窗（Lutris/PlayOnLinux 同款方案）。
+# .NET/MSHTML 程序需要真实 mono 时：LINBOX_DAC_MONO_PROMPT=1 恢复弹窗，
+# 或自设 WINEDLLOVERRIDES（本块仅在未设置时生效）。
+if [ -z "$WINEDLLOVERRIDES" ] && [ "${LINBOX_DAC_MONO_PROMPT:-0}" != 1 ]; then
+    WINEDLLOVERRIDES="mscoree,mshtml="
+    export WINEDLLOVERRIDES
+fi
 CHECKS
         if [ "$BOOT_MODE" = box64 ]; then
             cat <<'B64'
@@ -467,12 +486,15 @@ if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; th
     done
     if [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
         echo "[wine-dac] ⚠ DAC 窗口未就绪——wine 画面暂时无处显示（winedac 会持续重连，窗口就绪后自动接上）" >&2
+        echo "[wine-dac] DAC 显示（两步，缺一不可）：" >&2
+        echo "[wine-dac]   1) 先在 LinBox 里点开「DAC 显示器」应用并保持前台" >&2
+        echo "[wine-dac]      （悬浮球菜单 → DAC 显示器；am 自动拉起受安卓限制会 Aborted，点 App 是等效路径）" >&2
+        echo "[wine-dac]   2) 再跑上面的命令 —— winedac.drv 自动连接 DAC 窗口，画面直出安卓屏" >&2
         echo "[wine-dac]   自查四点：" >&2
         echo "[wine-dac]   0) getprop ro.build.version.release  —— 安卓版本（越老 seccomp 越严）" >&2
         echo "[wine-dac]   1) ls $PREFIX/bin/linbox-dac  —— 不存在说明 APK 未含 DAC 模块或未重装/重进过 LinBox" >&2
         echo "[wine-dac]   2) logcat -d -s LinBoxDAC       —— 看 DAC_START 是否到达、DacView 是否报错" >&2
         echo "[wine-dac]   3) 发广播时 LinBox 必须处于前台（其 Activity 才能承载 DAC 画面）" >&2
-        echo "[wine-dac]   4) 绕过 am：直接在 LinBox 内点开「DAC 显示器」应用，就绪后 wine 自动接上" >&2
     fi
 fi
 # ---- dac_allocd 侧车（glibc wine 的 AHardwareBuffer 分配代理） ----
@@ -530,4 +552,5 @@ if [ "$TARGET" != "x86_64-linux" ]; then
 echo "   ⚠ aarch64 目标仅能跑 ARM64 PE；普通 x86/x86_64 程序请用 x86_64-linux + box64"
 fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
+echo " v1.18: wrapper 已默认禁 Mono/Gecko 弹窗（建前缀不再卡死）；LINBOX_DAC_MONO_PROMPT=1 恢复"
 echo "=============================================="

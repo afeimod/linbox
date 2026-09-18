@@ -17,7 +17,11 @@ import android.util.Log
  * am broadcast -a com.linbox.action.DAC_STOP
  * am broadcast -a com.linbox.action.DAC_STATUS
  * ```
- * `linbox-dac` 脚本自动封装上述调用。
+ * `linbox-dac` 脚本与 wine 自举 wrapper（bin/wine）自动封装上述调用。
+ *
+ * v1.18：DAC_START 改经 DacApp.requestStart 统一路由 —— 优先跳转
+ * 全屏「DAC 显示器」页面（带关闭按钮、可回终端），不再裸挂
+ * decorView 覆盖层；DAC_STOP 时若正停在 DAC 页面则退回终端主页。
  */
 class DacReceiver : BroadcastReceiver() {
 
@@ -42,11 +46,17 @@ class DacReceiver : BroadcastReceiver() {
                 val w = intent.getIntExtra(EXTRA_WIDTH, 1280)
                 val h = intent.getIntExtra(EXTRA_HEIGHT, 720)
                 Log.i(TAG, "DAC_START ${w}x${h}")
-                DacApp.instance?.startDisplay(w, h)
+                DacApp.requestStart(w, h)
             }
             ACTION_DAC_STOP -> {
                 Log.i(TAG, "DAC_STOP")
                 DacApp.instance?.stopDisplay()
+                // 正停在 DAC 页面（画面已停、黑屏无内容）→ 退回终端主页
+                if (com.linbox.core.shell.ShellController.screen ==
+                    com.linbox.core.shell.ShellController.Screen.DAC
+                ) {
+                    com.linbox.core.shell.ShellController.showTerminal()
+                }
             }
             ACTION_DAC_STATUS -> {
                 val ready = DacApp.instance?.isRunning ?: false

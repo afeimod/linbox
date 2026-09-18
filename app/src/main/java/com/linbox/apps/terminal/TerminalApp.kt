@@ -449,6 +449,7 @@ private fun RealTerminalArea() {
                 onFontIncrease = { controller.changeFontSize(+2) },
                 onLayerToggle = { symbolLayer = !symbolLayer },
                 onOpenX11 = { ShellController.showX11() },
+                onOpenDac = { ShellController.showDac() },
                 onOpenSettings = { ShellController.showSettings() }
             )
         }
@@ -535,6 +536,7 @@ private fun GlassFab(
     onFontIncrease: () -> Unit,
     onLayerToggle: () -> Unit,
     onOpenX11: () -> Unit,
+    onOpenDac: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     val app = LinBoxApp.get()
@@ -574,7 +576,7 @@ private fun GlassFab(
 
     val items = remember(
         symbolLayerActive, gamepadEnabled, onNewSession, onKeyboardToggle,
-        onPaste, onFontDecrease, onFontIncrease, onLayerToggle, onOpenX11, onOpenSettings
+        onPaste, onFontDecrease, onFontIncrease, onLayerToggle, onOpenX11, onOpenDac, onOpenSettings
     ) {
         listOf(
             FabItem("新会话", "＋") { onNewSession() },
@@ -593,6 +595,9 @@ private fun GlassFab(
                 GamepadController.settingsOpen = true
             },
             FabItem("X11 桌面", "X") { onOpenX11() },
+            // v1.18：全屏 DAC 显示器页（winedac.drv 画面直出安卓屏，不依赖 X11；
+            // wine wrapper 提示的"点开「DAC 显示器」应用"即此入口）
+            FabItem("DAC 显示器", "D") { onOpenDac() },
             FabItem("设置", "⚙") { onOpenSettings() }
         )
     }
