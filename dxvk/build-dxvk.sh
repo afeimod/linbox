@@ -23,7 +23,13 @@ DEPLOY="${DEPLOY:-1}"
 mkdir -p "$WORK" && cd "$WORK"
 
 if [ ! -d dxvk ]; then
-    git clone https://github.com/doitsujin/dxvk.git dxvk
+    # v1.17：clone 重试（网络抖动偶发导致 dxvk job 挂）
+    _ok=""
+    for _i in 1 2 3; do
+        git clone https://github.com/doitsujin/dxvk.git dxvk && _ok=1 && break \
+            || { rm -rf dxvk; sleep 20; }
+    done
+    [ -n "$_ok" ] || { echo "✗ dxvk 源码拉取失败（3 次）"; exit 1; }
 fi
 cd dxvk
 git checkout "v${DXVK_VERSION}"
@@ -32,7 +38,13 @@ git checkout "v${DXVK_VERSION}"
 # libdisplay-info（windows 分支）均为 git 子模块，普通 clone 不会拉取；
 # 缺了它们 meson 配置期必报 Missing Vulkan-Headers / Missing SPIRV-Headers
 # （对应 dxvk meson.build 的 fs.is_dir('include/vulkan/include') 检查）
-git submodule update --init --recursive
+# v1.17：submodule 拉取重试（同上，网络抖动兜底）
+_ok=""
+for _i in 1 2 3; do
+    git submodule update --init --recursive && _ok=1 && break || sleep 20
+done
+[ -n "$_ok" ] || { echo "✗ 子模块拉取失败（3 次）"; exit 1; }
+test -d include/vulkan || { echo "✗ 子模块不完整（缺 include/vulkan）"; exit 1; }
 
 # package-release.sh <release-dir-name> <output-dir> [--no-package]
 # 注意：第一个参数是产物目录名（非 git ref —— ref 已由上面 checkout）

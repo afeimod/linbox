@@ -40,10 +40,21 @@
 #     + 私有 loader 直启（ld-linux --library-path），全程不读 APK 的 glibc
 #     目录、不依赖 PATH、原生 LD_LIBRARY_PATH 一律清空。
 #
+#   v1.17 安卓 seccomp 安全（真机 "Bad system call" 根因修复）：vanilla
+#     glibc（noble 2.39）的 loader/libc 启动即调 statx / rseq / clone3，
+#     安卓 App 域 seccomp 白名单不放行 → SIGSYS 击杀，wine 零输出瞬间死。
+#     修法：sysroot-arm 改用 termux gpkg 的 "GNU libc for Android"
+#     （Mobox / glibc-runner 同源，已补丁：disable-clone3 / fstatat 弃
+#     statx / rseq 去注册 / faccessat2 降级 / fakesyscall 兜底层）。
+#     CI 下载 gpkg glibc deb 解包后以 GARM=<lib目录> 传入本脚本；
+#     未提供 GARM 时回退交叉 sysroot（本地快速打包场景），并在
+#     wrapper 里加 GLIBC_TUNABLES rseq=0 双保险 + 启动自检探针。
+#
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
 #   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
 #   WINE_VERSION=9.2 WINE_BRANCH=vanilla ./build_wine_dac.sh
+#   GARM=/path/to/gpkg-glibc-lib ./build_wine_dac.sh # 安卓补丁版 glibc（v1.17）
 #
 # 产物：$BUILD_DIR/dist/wine-dac-<ver>-<target>.tar.xz
 # ============================================================
@@ -55,6 +66,7 @@ TARGET="${TARGET:-x86_64-linux}"
 APPLY_LINBOX_PATCHES="${APPLY_LINBOX_PATCHES:-0}"
 BUILD_DIR="${BUILD_DIR:-$HOME/build_wine_dac}"
 JOBS="${JOBS:-$(nproc)}"
+GARM="${GARM:-}"   # v1.17：安卓补丁版 glibc 的 lib 目录（CI 传入）
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 LINBOX_ROOT="$(dirname "$SCRIPT_DIR")"            # 仓库根（含 path/）
 DAC_SRC="$SCRIPT_DIR/dlls/winedac.drv"
@@ -233,6 +245,13 @@ while IFS= read -r elf; do
     ' >> "$DEPS_LIST"
 done < <(find "$OUTDIR/bin" "$OUTDIR/lib" -type f \( -perm -u+x -o -name '*.so*' \) 2>/dev/null)
 sort -u "$DEPS_LIST" | while IFS= read -r lib; do
+    _base="$(basename "$lib")"
+    # v1.17：aarch64-glibc 目标且提供 GARM 时，glibc 闭包改用安卓补丁版
+    if [ "$TARGET" = "aarch64-glibc" ] && [ -n "$GARM" ] && [ -f "$GARM/$_base" ]; then
+        cp -L "$GARM/$_base" "$SYSLIB/" 2>/dev/null \
+            || echo "  ⚠ 无法复制依赖(GARM): $_base"
+        continue
+    fi
     [ -f "$lib" ] || continue
     cp -L "$lib" "$SYSLIB/" 2>/dev/null || echo "  ⚠ 无法复制依赖: $lib"
 done
@@ -246,12 +265,17 @@ echo "   sysroot/lib：$(ls -1 "$SYSLIB" | wc -l) 个文件，$(du -sh "$SYSLIB"
 SYSARM="$OUTDIR/sysroot-arm/lib"
 if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     echo ">> 6a2. 构建 tarball 自带 box64（aarch64 交叉）"
+    if [ -z "$GARM" ]; then
+        echo "   ⚠ 未提供 GARM（安卓补丁版 glibc）—— sysroot-arm 将用交叉主机 vanilla glibc"
+        echo "     vanilla glibc 在安卓 App 域可能被 seccomp 击杀（Bad system call）；CI 已默认提供 GARM"
+    fi
     if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 \
        || ! command -v cmake >/dev/null 2>&1 \
        || ! command -v git >/dev/null 2>&1; then
         echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git）..."
-        sudo apt-get update -qq || true
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        _sudo=""; [ "$(id -u)" = "0" ] || _sudo="sudo"
+        $_sudo apt-get update -qq || true
+        $_sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
             gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git || true
     fi
     command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "✗ 缺 aarch64-linux-gnu-gcc，无法构建自带 box64"; exit 1; }
@@ -259,7 +283,13 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     command -v git                   >/dev/null 2>&1 || { echo "✗ 缺 git，无法拉取 box64 源码"; exit 1; }
     if [ ! -x "$OUTDIR/bin/box64" ]; then
         if [ ! -d "$BUILD_DIR/box64-src" ]; then
-            git clone --depth 1 https://github.com/ptitSeb/box64.git "$BUILD_DIR/box64-src"
+            _ok=""
+            for _i in 1 2 3; do
+                git clone --depth 1 https://github.com/ptitSeb/box64.git \
+                    "$BUILD_DIR/box64-src" && _ok=1 && break \
+                    || { rm -rf "$BUILD_DIR/box64-src"; sleep 15; }
+            done
+            [ -n "$_ok" ] || { echo "✗ box64 源码拉取失败（3 次）"; exit 1; }
         fi
         cmake -S "$BUILD_DIR/box64-src" -B "$BUILD_DIR/box64-build" \
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -284,23 +314,32 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
             || { echo "✗ box64 产物不是 AArch64 ELF"; exit 1; }
         install -m 755 "$BUILD_DIR/box64-build/box64" "$OUTDIR/bin/box64"
     fi
-    # box64 自身的 glibc 闭包：严格按 DT_NEEDED 从交叉 sysroot 收集
+    # box64 自身的 glibc 闭包：严格按 DT_NEEDED 收集；
+    # v1.17：GARM（安卓补丁版 glibc）优先 —— vanilla glibc 在安卓 App 域
+    # 会被 seccomp 击杀（Bad system call）
     mkdir -p "$SYSARM"
     for _lib in $(readelf -d "$OUTDIR/bin/box64" \
                   | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p'); do
         [ -f "$SYSARM/$_lib" ] && continue
-        _src="/usr/aarch64-linux-gnu/lib/$_lib"
-        [ -f "$_src" ] || _src="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/$_lib"
+        _src=""
+        if [ -n "$GARM" ] && [ -f "$GARM/$_lib" ]; then
+            _src="$GARM/$_lib"
+        else
+            _src="/usr/aarch64-linux-gnu/lib/$_lib"
+            [ -f "$_src" ] || _src="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/$_lib"
+        fi
         if [ -f "$_src" ]; then
             cp -L "$_src" "$SYSARM/"
         else
-            echo "  ⚠ box64 依赖 $_lib 在交叉 sysroot 缺失（部署后 box64 可能无法启动）"
+            echo "  ⚠ box64 依赖 $_lib 缺失（GARM/交叉 sysroot 均无；部署后 box64 可能无法启动）"
         fi
     done
-    # glibc 动态 loader 本体（--library-path 直启用）
-    _ldarm="/usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1"
+    # glibc 动态 loader 本体（--library-path 直启用）；GARM（安卓版）优先
+    _ldarm=""
+    [ -n "$GARM" ] && [ -f "$GARM/ld-linux-aarch64.so.1" ] && _ldarm="$GARM/ld-linux-aarch64.so.1"
+    [ -n "$_ldarm" ] || _ldarm="/usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1"
     [ -f "$_ldarm" ] || _ldarm="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
-    cp -L "$_ldarm" "$SYSARM/" 2>/dev/null || { echo "✗ 交叉 sysroot 缺 ld-linux-aarch64.so.1"; exit 1; }
+    cp -L "$_ldarm" "$SYSARM/" 2>/dev/null || { echo "✗ 缺 ld-linux-aarch64.so.1（GARM/交叉 sysroot）"; exit 1; }
     echo "   自带 box64：$(du -h "$OUTDIR/bin/box64" | cut -f1)；sysroot-arm/lib：$(ls -1 "$SYSARM" | wc -l) 个文件"
 fi
 
@@ -374,11 +413,29 @@ export BOX64_LD_LIBRARY_PATH="$SYSLIB:$ROOT/lib/wine/x86_64-unix:$ROOT/lib/wine$
 # 原生 LD_LIBRARY_PATH/LD_PRELOAD 一律清空：自带 box64 的原生依赖由
 # 私有 loader --library-path 提供；外部回退 box64 自带解释器自解析。
 unset LD_LIBRARY_PATH LD_PRELOAD
+# v1.17：安卓 seccomp 双保险 —— 禁用 rseq 注册。gpkg 安卓版 glibc 本就
+# 已移除 rseq（此 tunable 对它无副作用）；若混入 vanilla glibc（≥2.35）
+# 启动即调 rseq，安卓 App 域 seccomp 直接 SIGSYS。
+GLIBC_TUNABLES="${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.pthread.rseq=0"
+export GLIBC_TUNABLES
+# v1.17 启动自检：私有 loader + 私有 glibc 先空跑一次 box64 --version。
+# 若被 seccomp 击杀（Bad system call），当场给出人话指引，不再黑屏猜。
+if [ -n "$LOADER" ]; then
+    if ! "$LOADER" --library-path "$LDP" "$BOX64" -v >/dev/null 2>&1; then
+        echo "[wine-dac] ⚠ 自检失败：私有 glibc 无法在本机启动 box64（Bad system call = 安卓 seccomp 拦截）" >&2
+        echo "[wine-dac]   → 本 tarball 的 sysroot-arm 不是安卓补丁版 glibc，请换 v1.17+ CI 产物" >&2
+        echo "[wine-dac]   → 设备安卓版本：$(getprop ro.build.version.release 2>/dev/null || echo 未知)" >&2
+    fi
+fi
 B64
         else
             cat <<'ALD'
 LOADER="$SYSLIB/ld-linux-aarch64.so.1"
 [ -x "$LOADER" ] || die "缺 $LOADER（sysroot 不完整？）"
+# v1.17：同 x86_64 分支 —— 清污染 + rseq 双保险
+unset LD_LIBRARY_PATH LD_PRELOAD
+GLIBC_TUNABLES="${GLIBC_TUNABLES:+$GLIBC_TUNABLES:}glibc.pthread.rseq=0"
+export GLIBC_TUNABLES
 ALD
         fi
         if [ "$main" = 1 ]; then
@@ -391,10 +448,16 @@ if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; th
     # 清单注册的 receiver 收不到隐式广播（隐式会被系统静默丢弃），
     # 这正是 v1.13 前"DAC 窗口未就绪"的主因之一。
     if command -v am >/dev/null 2>&1; then
-        _amout=$(LD_LIBRARY_PATH= am broadcast -p com.linbox \
+        _amrc=0
+        _amout=$(unset LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG; \
+            am broadcast -p com.linbox \
             -a com.linbox.action.DAC_START \
-            --ei width "$DW" --ei height "$DH" 2>&1) || \
-            echo "[wine-dac] ⚠ am broadcast 失败：$_amout" >&2
+            --ei width "$DW" --ei height "$DH" 2>&1) || _amrc=$?
+        if [ "$_amrc" -ne 0 ] || [ -z "$_amout" ]; then
+            echo "[wine-dac] ⚠ am broadcast 失败（exit=$_amrc）：$_amout" >&2
+            echo "[wine-dac]   若上方有 Aborted：logcat -d -b crash | tail -30 看 am 崩溃栈" >&2
+            echo "[wine-dac]   绕过：直接在 LinBox 里点开「DAC 显示器」应用即可（winedac 会自动接上）" >&2
+        fi
     else
         echo "[wine-dac] ⚠ 终端缺少 am 命令（bootstrap 不完整？）——无法自动拉起 DAC 窗口" >&2
     fi
@@ -404,10 +467,12 @@ if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; th
     done
     if [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
         echo "[wine-dac] ⚠ DAC 窗口未就绪——wine 画面暂时无处显示（winedac 会持续重连，窗口就绪后自动接上）" >&2
-        echo "[wine-dac]   自查三点：" >&2
+        echo "[wine-dac]   自查四点：" >&2
+        echo "[wine-dac]   0) getprop ro.build.version.release  —— 安卓版本（越老 seccomp 越严）" >&2
         echo "[wine-dac]   1) ls $PREFIX/bin/linbox-dac  —— 不存在说明 APK 未含 DAC 模块或未重装/重进过 LinBox" >&2
         echo "[wine-dac]   2) logcat -d -s LinBoxDAC       —— 看 DAC_START 是否到达、DacView 是否报错" >&2
         echo "[wine-dac]   3) 发广播时 LinBox 必须处于前台（其 Activity 才能承载 DAC 画面）" >&2
+        echo "[wine-dac]   4) 绕过 am：直接在 LinBox 内点开「DAC 显示器」应用，就绪后 wine 自动接上" >&2
     fi
 fi
 # ---- dac_allocd 侧车（glibc wine 的 AHardwareBuffer 分配代理） ----
