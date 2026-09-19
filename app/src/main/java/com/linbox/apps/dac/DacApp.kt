@@ -448,9 +448,10 @@ object DacApp : DacNative.TitleSink {
         )
 
         // 点标题条/▣ 还原全屏；✕ 停止显示
-        val restoreIt = { restore() }
-        bar.setOnClickListener(restoreIt)
-        btnRestore.setOnClickListener(restoreIt)
+        // （SAM 转换仅对直接传入的 lambda 生效：() -> Unit 变量不能赋给
+        //   View.OnClickListener 参数 —— v1.21.1 修复 CI 类型不匹配）
+        bar.setOnClickListener { restore() }
+        btnRestore.setOnClickListener { restore() }
         btnClose.setOnClickListener { stopDisplay() }
 
         val lp = FrameLayout.LayoutParams(wPx, hPx + barH)
