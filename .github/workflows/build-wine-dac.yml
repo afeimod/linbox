@@ -53,8 +53,13 @@ jobs:
             libfreetype-dev libfontconfig1-dev \
             libvulkan-dev \
             autoconf gettext perl wget xz-utils pkg-config
+          # v1.21.3：tarball 自带 box64（6a2）+ bin/wineserver 静态 arm64
+          # shim（6a3）都需要 aarch64 交叉工具链（脚本内也会自装，这里
+          # 预装保证确定性）
+          sudo apt install -y --fix-broken \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu
           # 交叉工具确认
-          which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
+          which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc aarch64-linux-gnu-gcc
 
       # ============ v1.21.2：获取安卓补丁版 glibc（gpkg）→ GARM ============
       # build_wine_dac.sh 自 v1.17 起支持 GARM（termux gpkg "GNU libc for
@@ -120,6 +125,20 @@ jobs:
           echo "tarball: $tb"
           tar -tJf "$tb" | grep -E "bin/wine$|winedac.so" && \
             echo "✓ winedac.so 已包含" || { echo "✗ 缺 winedac.so"; exit 1; }
+          # v1.21.3：确认 bin/wineserver 静态 shim 已就位（wine 内部
+          # posix_spawn 建前缀路径的关键修复）
+          work=$(mktemp -d)
+          tar -xJf "$tb" -C "$work"
+          ws="$work"/wine-dac-*/bin/wineserver
+          [ -f "$ws" ] || { echo "✗ 缺 bin/wineserver"; exit 1; }
+          if readelf -h "$ws" | grep -q "Machine:.*AArch64" && \
+             ! readelf -l "$ws" 2>/dev/null | grep -q INTERP; then
+            echo "✓ bin/wineserver = 静态 AArch64 shim（v1.21.3）"
+          else
+            echo "⚠ bin/wineserver 不是静态 AArch64 shim（回退 shell wrapper）"
+          fi
+          [ -f "$ws.real" ] && echo "✓ bin/wineserver.real 就位"
+          rm -rf "$work"
 
       - name: 📤 Upload Wine-DAC tarball
         uses: actions/upload-artifact@v4

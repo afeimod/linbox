@@ -72,22 +72,33 @@
 #     workflow 同步补上 v1.17 起就支持却从未接线的 GARM（安卓补丁版
 #     gpkg glibc，规避 seccomp 击杀 vanilla glibc 的 clone3/statx/rseq）。
 #
-#   v1.21.3 "wine: could not exec the wine loader" 修复（真机 2026-09 实测，
-#     v1.21.2 之后）：native wrapped 库全部加载成功、ntdll.so 也起来了，但
-#     wine loader 启动必先 re-exec 自己（ntdll loader.c __wine_main 的
-#     pre_exec() 在 x86_64 Linux 恒真 → execv(wine-preloader) 落空 → 回退
-#     execv(wine.real)）；wineserver / PE 子进程启动也全走 box64 的 my_execve
-#     hook —— hook 对 x86_64 ELF 的处理是 execve(bin/box64)，由内核按
-#     PT_INTERP 加载 box64。交叉编译 box64 的 PT_INTERP 是
-#     /lib/ld-linux-aarch64.so.1，安卓上不存在 → execve ENOENT → 内部
-#     exec 全灭。wrapper 首启是 "ld-linux --library-path box64" 直启（绕过
-#     PT_INTERP），这正是 "box64 自身能跑、内部 exec 全挂" 的差异根源。
-#     修法（Termux/Mobox 生态标准做法）：构建时 patchelf 把 box64 的
-#     interpreter 改指 LinBox 固定路径 $PREFIX/glibc/lib/ld-linux-aarch64.so.1
-#     （$PREFIX 为 LinBox 标准布局，部署后恒存在）；wrapper 部署时把
-#     GARM loader 复制到该路径，并 export LD_LIBRARY_PATH=sysroot-arm/lib
-#     （PT_INTERP 加载路径没有 --library-path 参数，靠它解析 box64 的
-#     libc.so.6 等依赖；guest 侧 box64 按 ELF class 跳过 aarch64 库不污染）。
+#   v1.21.3 建前缀静默退出修复（真机 2026-09 实测）：库加载全部通过后，
+#     wine 打印 "created the configuration directory" 即无声退出（无任何
+#     错误，终端直接回到提示符）。根因链（wine 9.2 源码级定位）：
+#     ① ntdll 的 server_init_process → start_server() 用 posix_spawn 拉起
+#       bin/wineserver，随后 waitpid 等它退出：退出码 2 = 锁被占（正常
+#       重试），其它非 0 = server 启动失败 → exit(status) 静默退出；
+#     ② bin/wineserver 是 "#!/system/bin/sh" 的 shell 自举 wrapper —— 内核
+#       经 shebang 调起 bionic 的 /system/bin/sh；
+#     ③ wine/box64 链路环境里带着 glibc 侧的 LD_LIBRARY_PATH（指向
+#       sysroot-arm，其中 v1.21.2 起含 soname=libc.so.6 的 arm64 glibc
+#       libc.so 副本）—— bionic linker 为 sh 解析 DT_NEEDED "libc.so" 时
+#       命中该文件（soname 不匹配）→ verneed 校验失败：
+#         CANNOT LINK EXECUTABLE "/system/bin/sh": cannot find "libc.so"
+#           from verneed[0] in DT_NEEDED list for "/system/bin/sh"
+#       sh 秒退 → start_server 得非 0 → 静默退出。
+#     修法（双管齐下，见 6a2/6a3）：
+#     A) bin/wineserver 改用「静态 arm64 原生 ELF 包装器」
+#       （wine/shim/linbox_wine_shim.c，按 /proc/self/exe 自名定位
+#       <name>.real，经私有 loader + box64 启动真身）—— 内核直接 exec、
+#       无解释器、无动态依赖、对环境零敏感；wine 内部 spawn 与终端
+#       直接调用（wineserver -k 等）同路径。交叉工具链缺失时自动回退
+#       旧 shell wrapper（内部 spawn 场景会复现旧问题）。
+#     B) 移除 v1.21.2 的 sysroot-arm/libc.so、libm.so 回退名副本 ——
+#       它们恰是 ③ 的 bionic 致命污染源（真实 stub 库自 v1.21.2 起已
+#       无条件收集，ALTNAME 回退场景实际不复存在；而只要 bionic 家族
+#       进程可能继承 LD_LIBRARY_PATH=sysroot-arm，无版本号 soname
+#       文件就是雷）。
 #
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
@@ -310,13 +321,12 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     fi
     if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 \
        || ! command -v cmake >/dev/null 2>&1 \
-       || ! command -v git >/dev/null 2>&1 \
-       || ! command -v patchelf >/dev/null 2>&1; then
-        echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git / patchelf）..."
+       || ! command -v git >/dev/null 2>&1; then
+        echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git）..."
         _sudo=""; [ "$(id -u)" = "0" ] || _sudo="sudo"
         $_sudo apt-get update -qq || true
         $_sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git patchelf || true
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git || true
     fi
     command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "✗ 缺 aarch64-linux-gnu-gcc，无法构建自带 box64"; exit 1; }
     command -v cmake                 >/dev/null 2>&1 || { echo "✗ 缺 cmake，无法构建自带 box64"; exit 1; }
@@ -353,21 +363,6 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
         readelf -h "$BUILD_DIR/box64-build/box64" | grep -q "Machine:.*AArch64" \
             || { echo "✗ box64 产物不是 AArch64 ELF"; exit 1; }
         install -m 755 "$BUILD_DIR/box64-build/box64" "$OUTDIR/bin/box64"
-        # v1.21.3 修复 "wine: could not exec the wine loader"（真机 2026-09 实测）：
-        # wine loader 启动必先 re-exec 自己（pre_exec() 在 x86_64 Linux 恒真）；
-        # wineserver / PE 子进程启动也全走 box64 my_execve hook —— hook 对
-        # x86_64 ELF 的处理是 execve(bin/box64)，由内核按 PT_INTERP 加载。
-        # 交叉编译 box64 的 PT_INTERP 是 /lib/ld-linux-aarch64.so.1（安卓
-        # 不存在）→ ENOENT。这里把它改指 LinBox 固定路径（$PREFIX 为 LinBox
-        # 标准布局部署后恒存在），wrapper 部署时把 GARM loader 放到该路径。
-        LINBOX_INTERP="/data/user/0/com.linbox/files/usr/glibc/lib/ld-linux-aarch64.so.1"
-        command -v patchelf >/dev/null 2>&1 \
-            || { echo "✗ 缺 patchelf —— box64 PT_INTERP 无法修复，wine 运行时必挂 could not exec the wine loader"; exit 1; }
-        patchelf --set-interpreter "$LINBOX_INTERP" "$OUTDIR/bin/box64"
-        _interp="$(patchelf --print-interpreter "$OUTDIR/bin/box64" 2>/dev/null || echo '?')"
-        [ "$_interp" = "$LINBOX_INTERP" ] \
-            || { echo "✗ box64 PT_INTERP 设置失败（got=$_interp）"; exit 1; }
-        echo "   box64 PT_INTERP → $LINBOX_INTERP（wrapper 部署时保证就位）"
     fi
     # box64 自身的 glibc 闭包：严格按 DT_NEEDED 收集；
     # v1.17：GARM（安卓补丁版 glibc）优先 —— vanilla glibc 在安卓 App 域
@@ -415,16 +410,16 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
             echo "  ⚠ glibc stub $_stub 无法收集（GARM/交叉 sysroot 均无）—— box64 wrapped 可能初始化失败"
         fi
     done
-    # ALTNAME 防御：box64 wrapped libpthread/libm 的回退 dlopen 名是
-    # "libc.so"/"libm.so"（无版本号）。glibc 体系没有这两个 soname —— 在
-    # sysroot-arm 各放一份 .6 的内容副本（soname 不变，loader 按 DT_NEEDED
-    # 精确名解析不会误用；仅兜底 dlopen 命中）。零成本消除这类回退失败。
-    if [ -f "$SYSARM/libc.so.6" ] && [ ! -f "$SYSARM/libc.so" ]; then
-        cp -L "$SYSARM/libc.so.6" "$SYSARM/libc.so" 2>/dev/null || true
-    fi
-    if [ -f "$SYSARM/libm.so.6" ] && [ ! -f "$SYSARM/libm.so" ]; then
-        cp -L "$SYSARM/libm.so.6" "$SYSARM/libm.so" 2>/dev/null || true
-    fi
+    # v1.21.3：不再放置 libc.so / libm.so 回退名副本（v1.21.2 的 ALTNAME
+    # 防御）—— 真实 stub 库（libpthread.so.0 等）上面已无条件收集，ALTNAME
+    # 回退场景实际不复存在；而无版本号 soname 文件是 bionic 致命污染源：
+    # wine/box64 链路环境的 LD_LIBRARY_PATH 若指向 sysroot-arm（box64 进程
+    # 链实测存在该泄漏），bionic 家族进程（/system/bin/sh、am、app_process…）
+    # 解析 DT_NEEDED "libc.so" 时会命中 arm64 glibc 的 libc.so（soname 是
+    # libc.so.6）→ verneed 校验失败 → "CANNOT LINK EXECUTABLE ... cannot
+    # find \"libc.so\" from verneed[0]" → 建前缀静默退出（真机 2026-09 实测）。
+    # sysroot-arm 只保留带版本号的 soname 文件 —— bionic 按名搜索不会误配，
+    # 未命中后自然回退 /system/lib64 的真 bionic 库。
     # glibc 动态 loader 本体（--library-path 直启用）；GARM（安卓版）优先
     _ldarm=""
     [ -n "$GARM" ] && [ -f "$GARM/ld-linux-aarch64.so.1" ] && _ldarm="$GARM/ld-linux-aarch64.so.1"
@@ -432,6 +427,41 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     [ -f "$_ldarm" ] || _ldarm="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
     cp -L "$_ldarm" "$SYSARM/" 2>/dev/null || { echo "✗ 缺 ld-linux-aarch64.so.1（GARM/交叉 sysroot）"; exit 1; }
     echo "   自带 box64：$(du -h "$OUTDIR/bin/box64" | cut -f1)；sysroot-arm/lib：$(ls -1 "$SYSARM" | wc -l) 个文件"
+fi
+
+# ---- 6a3.（仅 x86_64 目标）bin/wineserver 改用静态 arm64 原生 ELF 包装器 ----
+# v1.21.3：wine.real 经 posix_spawn 拉起 bin/wineserver 建 wine server；
+# shell wrapper 会被内核经 shebang 调起 bionic /system/bin/sh —— 在 wine
+# 链路环境下 bionic linker verneed 校验失败秒退（详见文件头 v1.21.3），
+# start_server waitpid 得非 0 → 静默退出。静态 ELF 包装器无解释器、无
+# 动态依赖、对环境零敏感，wine 内部 spawn 与终端直调（wineserver -k）
+# 走同一条路径。交叉工具链缺失（BUILD_BUNDLED_BOX64=0 的本地快速打包
+# 等）时跳过 → 下方 6b 回退生成旧 shell wrapper。
+SHIM_WINESERVER=0
+if [ "$TARGET" = "x86_64-linux" ] && [ -f "$OUTDIR/bin/wineserver" ] \
+   && command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    echo ">> 6a3. 构建 bin/wineserver 静态 arm64 包装器（v1.21.3）"
+    _shim_src="$SCRIPT_DIR/shim/linbox_wine_shim.c"
+    if [ ! -f "$_shim_src" ]; then
+        echo "   ⚠ 缺 $_shim_src —— 回退 shell wrapper"
+    else
+        mv "$OUTDIR/bin/wineserver" "$OUTDIR/bin/wineserver.real"
+        if aarch64-linux-gnu-gcc -static -O2 -s \
+            -o "$OUTDIR/bin/wineserver" "$_shim_src" 2>"$BUILD_DIR/shim-build.log" \
+            && [ -x "$OUTDIR/bin/wineserver" ]; then
+            if readelf -h "$OUTDIR/bin/wineserver" | grep -q "Machine:.*AArch64" \
+               && ! readelf -l "$OUTDIR/bin/wineserver" 2>/dev/null | grep -q "INTERP"; then
+                SHIM_WINESERVER=1
+                echo "   ✓ bin/wineserver：静态 AArch64 ELF（无解释器依赖）"
+            else
+                echo "   ⚠ 产物非静态 AArch64（日志: $BUILD_DIR/shim-build.log）—— 回退 shell wrapper"
+                mv "$OUTDIR/bin/wineserver.real" "$OUTDIR/bin/wineserver"
+            fi
+        else
+            echo "   ⚠ shim 编译失败（日志: $BUILD_DIR/shim-build.log）—— 回退 shell wrapper"
+            mv "$OUTDIR/bin/wineserver.real" "$OUTDIR/bin/wineserver"
+        fi
+    fi
 fi
 
 echo ">> 6b. 生成自举 wrapper（boot=$BOOT_MODE）"
@@ -511,30 +541,9 @@ fi
 # glibc 目录（libc.so 为 ld 链接脚本文本 → invalid ELF header）都会
 # 让 box64 启动即崩（v1.12 前真机实测失败原因）。
 export BOX64_LD_LIBRARY_PATH="$SYSLIB:$ROOT/lib/wine/x86_64-unix:$ROOT/lib/wine${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
-# 原生 LD_PRELOAD 一律清空。LD_LIBRARY_PATH（v1.21.3）：自带 box64 场景
-# 指向 sysroot-arm —— box64 被 wine 内部 exec 时（loader re-exec /
-# wineserver / PE 子进程）由内核按 PT_INTERP 加载，此时没有
-# --library-path 参数，全靠 LD_LIBRARY_PATH 解析 box64 的 libc.so.6 等
-# glibc 依赖；guest（x86_64）侧 box64 会按 ELF class 跳过 aarch64 库，
-# 不受污染。外部回退 box64（bionic 等）仍保持清空（读到 glibc 路径有险）。
-unset LD_PRELOAD
-# v1.21.3 PT_INTERP 就位：构建时 box64 的 interpreter 已 patchelf 到
-# $PREFIX/glibc/lib/ld-linux-aarch64.so.1（LinBox 固定路径）。这里确保
-# 该文件存在且是本 tarball 的 GARM 安卓补丁版 loader（与 sysroot-arm
-# 同源）。⚠ 部署命令必须先于 export 且自带 LD_LIBRARY_PATH= 前缀 ——
-# bionic 命令（mkdir/cmp/cp/getprop）吃到 LD_LIBRARY_PATH 后会在
-# sysroot-arm 里搜到 glibc 的 libc.so 并误加载，当场崩（容器实测 127）。
-if [ -n "$LOADER" ] && [ -f "$SYSARM/ld-linux-aarch64.so.1" ]; then
-    LD_LIBRARY_PATH= mkdir -p "$PREFIX/glibc/lib" 2>/dev/null
-    LD_LIBRARY_PATH= cmp -s "$SYSARM/ld-linux-aarch64.so.1" "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" 2>/dev/null \
-        || LD_LIBRARY_PATH= cp -f "$SYSARM/ld-linux-aarch64.so.1" "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" 2>/dev/null \
-        || echo "[wine-dac] ⚠ 无法部署 \$PREFIX/glibc/lib/ld-linux-aarch64.so.1 —— wine 内部 exec（wineserver/子进程）可能失败" >&2
-    # export 放部署之后：供 PT_INTERP loader 解析 box64 的 glibc 依赖；
-    # wine 链内 bionic 命令（am/dac_allocd）已各自显式清空，getprop 亦然。
-    export LD_LIBRARY_PATH="$SYSARM"
-else
-    unset LD_LIBRARY_PATH
-fi
+# 原生 LD_LIBRARY_PATH/LD_PRELOAD 一律清空：自带 box64 的原生依赖由
+# 私有 loader --library-path 提供；外部回退 box64 自带解释器自解析。
+unset LD_LIBRARY_PATH LD_PRELOAD
 # v1.17：安卓 seccomp 双保险 —— 禁用 rseq 注册。gpkg 安卓版 glibc 本就
 # 已移除 rseq（此 tunable 对它无副作用）；若混入 vanilla glibc（≥2.35）
 # 启动即调 rseq，安卓 App 域 seccomp 直接 SIGSYS。
@@ -546,7 +555,7 @@ if [ -n "$LOADER" ]; then
     if ! "$LOADER" --library-path "$LDP" "$BOX64" -v >/dev/null 2>&1; then
         echo "[wine-dac] ⚠ 自检失败：私有 glibc 无法在本机启动 box64（Bad system call = 安卓 seccomp 拦截）" >&2
         echo "[wine-dac]   → 本 tarball 的 sysroot-arm 不是安卓补丁版 glibc，请换 v1.17+ CI 产物" >&2
-        echo "[wine-dac]   → 设备安卓版本：$(LD_LIBRARY_PATH= getprop ro.build.version.release 2>/dev/null || echo 未知)" >&2
+        echo "[wine-dac]   → 设备安卓版本：$(getprop ro.build.version.release 2>/dev/null || echo 未知)" >&2
     fi
 fi
 B64
@@ -642,7 +651,13 @@ EXECB64
     chmod +x "$OUTDIR/bin/$name"
 }
 
-for _n in wine wineserver wineboot winecfg msiexec reg regsvr32; do
+# v1.21.3：bin/wineserver 已被 6a3 换成静态 arm64 shim 时不再生成
+# shell wrapper（shim 本身就是内核可直接 exec 的自举入口）
+_SHELL_WRAP_LIST="wine wineboot winecfg msiexec reg regsvr32"
+if [ "$SHIM_WINESERVER" != 1 ]; then
+    _SHELL_WRAP_LIST="wine wineserver $_SHELL_WRAP_LIST"
+fi
+for _n in $_SHELL_WRAP_LIST; do
     _f="$OUTDIR/bin/$_n"
     [ -f "$_f" ] || continue
     [ "$(head -c 4 "$_f" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || continue
@@ -650,6 +665,9 @@ for _n in wine wineserver wineboot winecfg msiexec reg regsvr32; do
     if [ "$_n" = wine ]; then emit_wrapper "$_n" 1; else emit_wrapper "$_n" 0; fi
     echo "   + bin/$_n → wrapper → ${_n}.real"
 done
+if [ "$SHIM_WINESERVER" = 1 ]; then
+    echo "   + bin/wineserver → 静态 arm64 shim → wineserver.real（v1.21.3）"
+fi
 [ -f "$OUTDIR/bin/wine" ] && [ -f "$OUTDIR/bin/wine.real" ] \
     || { echo "✗ bin/wine 自举 wrapper 生成失败"; exit 1; }
 
@@ -670,5 +688,11 @@ fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
 echo " v1.18: wrapper 已默认禁 Mono/Gecko 弹窗（建前缀不再卡死）；LINBOX_DAC_MONO_PROMPT=1 恢复"
 echo " v1.21: winedac 断线看门狗每 2 秒自动重连（任意启动顺序均可）；首次建前缀有进度提示"
-echo " v1.21.3: box64 PT_INTERP 已修复 —— wine 内部 re-exec/wineserver/PE 子进程 exec 全链打通"
+if [ "$SHIM_WINESERVER" = 1 ]; then
+echo " v1.21.3: bin/wineserver 为静态 arm64 shim（wineserver -k 可直调；"
+echo "          wine 内部 spawn 不再经 bionic shell，建前缀静默退出已修）"
+else
+echo " v1.21.3: ⚠ bin/wineserver 为 shell wrapper（本次构建无交叉工具链）——"
+echo "          建前缀场景需静态 shim，请在 CI 重新构建"
+fi
 echo "=============================================="
