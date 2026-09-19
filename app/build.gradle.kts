@@ -366,7 +366,15 @@ afterEvaluate {
             }
             commandLine(
                 File(clangBin, "${triple}$dacApiBridge-clang++").absolutePath,
-                "-shared", "-fPIC", "-O2", "-Wall", "-Wno-unused-parameter",
+                "-shared", "-fPIC",
+                // v1.20：直连 clang++ 默认动态链 libc++（DT_NEEDED
+                // libc++_shared.so），APK 未打包该库 → 真机 dlopen 直接失败
+                //（"library libc++_shared.so not found"，v1.20 真机实锤）。
+                // -static-libstdc++ 静态链 libc++_static.a：本库单一 C++ TU +
+                // 全 extern "C" JNI 导出，无跨 .so C++ ABI 交互，静态化零风险
+                //（CMake/ndk-build 默认即为 c++_static，此处仅对齐该默认）。
+                "-static-libstdc++",
+                "-O2", "-Wall", "-Wno-unused-parameter",
                 "-o", outBridge.absolutePath,
                 File(dacSource, "linbox_dac_bridge.cpp").absolutePath,
                 "-llog", "-landroid", "-lEGL", "-lGLESv2"
