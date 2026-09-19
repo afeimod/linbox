@@ -126,10 +126,10 @@ android {
         //   自动弹授权（行为略有差异但可用）
         // 唯一代价：Android 10+ 安装时提示“此应用为旧版 Android 打造”。
         // ============================================================
-        // v2.22.2 内置 X11 桌面（版本号随功能递增）
+        // v2.33.2 fix：DAC 桥低版本设备可加载（v1.19，版本号随功能递增）
         targetSdk = 28
-        versionCode = 60
-        versionName = "2.33.1"
+        versionCode = 61
+        versionName = "2.33.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -309,9 +309,11 @@ dependencies {
 // ============================================================
 // LinBox DAC —— 原生桥编译（tools/merge-into-repo.sh 幂等追加块）
 // 与上方 linbox-reprefix 同风格：Gradle Exec 调 NDK clang 逐 ABI 编译。
-// ⚠️ bridge 源为 .cpp（clang++ 编译）：NDK r26 的 surface_control.h 内
-// setGeometry/setBuffer 等签名含 C++ 引用/默认参数且无 __cplusplus 分流，
-// 纯 C 模式无法解析；JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰。
+// ⚠️ bridge 源为 .cpp（clang++ 编译）：以 API 26 目标编译，AHardwareBuffer_*
+// 直接链接；ASurfaceControl_*/ASurfaceTransaction_*（API 29）运行时 dlsym
+// 绑定（见 linbox_dac_bridge.cpp SF 符号绑定段）—— 保证 Android 8.0+ 设备
+// 均能加载本库，SF 直合仅在设备 API≥29 且符号齐全时启用。
+// JNI 符号由 bridge.h 的 extern "C" 守护保持不修饰。
 //   liblinbox_dac_bridge.so  JNI 桥（app 进程内：SF 直合/AHB Canvas/dmabuf EGL）
 //   libdac_allocd.so         AHB 侧车守护进程（可执行伪装 so，由
 //                            TermuxBootstrapInstaller 拷到 $PREFIX/bin/dac_allocd）
@@ -324,7 +326,11 @@ val dacAbis = mapOf(
     "x86" to "i686-linux-android",
     "x86_64" to "x86_64-linux-android"
 )
-val dacApiBridge = 29   // ASurfaceControl/ASurfaceTransaction（API29 直合；低版本 DacNative.available 兜底禁用）
+val dacApiBridge = 26   // v1.19：API 26 目标编译（Android 8.0+ 可加载）。旧版以 29 编译，
+                        // ELF 携带 ASurfaceControl_* 未定义符号，API<29 设备 dlopen 直接失败
+                        // →「DAC 显示器」报「原生桥接件未能加载」。现 API 29 符号全部改为
+                        // 运行时 dlsym（见 linbox_dac_bridge.cpp SF 符号绑定段）：设备 API≥29
+                        // 走 SF_DIRECT 直合，26-28 自动降级 AHB_CANVAS（v1.19 前不可达）。
 val dacApiAllocd = 26   // AHardwareBuffer_allocate（API26+）
 val dacSource = file("src/main/cpp/dac")
 val dacOut = layout.buildDirectory.dir("dac")

@@ -3,6 +3,11 @@ package com.linbox.apps.dac
 /**
  * DacNative — LinBox DAC 桥 JNI 绑定
  *
+ * v1.19：available=false 时提供真实失败原因 loadError（dlopen 原文）
+ * 与设备 API 级别 deviceApi，供 DacScreen 精确诊断 ——
+ * 旧版只猜「可能低于 Android 10」，而实际常见失败是 APK 未包含本机 ABI
+ * 的 so 或符号缺失，误导排查。
+ *
  * Copyright 2026 LinBox Project (MIT)
  */
 object DacNative {
@@ -61,7 +66,23 @@ object DacNative {
         fun onTitle(title: String)
     }
 
+    /** 设备 API 级别（诊断用） */
+    val deviceApi: Int = android.os.Build.VERSION.SDK_INT
+
+    /**
+     * 加载诊断（v1.19）：null = liblinbox_dac_bridge.so 已就绪；
+     * 否则为 dlopen 失败原文（UnsatisfiedLinkError.message）。
+     * lazy 保证只 load 一次且结果全应用一致（加载失败的库重试无意义）。
+     */
+    val loadError: String? by lazy {
+        try {
+            System.loadLibrary("linbox_dac_bridge")
+            null
+        } catch (t: Throwable) {
+            t.message ?: t.toString()
+        }
+    }
+
     val available: Boolean
-        get() = runCatching { System.loadLibrary("linbox_dac_bridge"); true }
-            .getOrDefault(false)
+        get() = loadError == null
 }

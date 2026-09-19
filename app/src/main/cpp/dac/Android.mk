@@ -2,6 +2,11 @@
 #
 # Copyright 2026 LinBox Project (MIT)
 #
+# ⚠️ v1.19：APK 正式构建走 app/build.gradle.kts 的 Gradle Exec 块
+# （linbox_dac_bridge.cpp，API 26 目标 + API 29 符号运行时 dlsym）。
+# 本 mk 引用的 linbox_dac_bridge.c 为遗留参考实现（API 29 直链版），
+# 仅作对照，勿用于出包 —— 低版本设备上会 dlopen 失败。
+#
 # 集成方式（二选一）：
 #   A) 在 app/build.gradle.kts 的 externalNativeBuild 中加入本 Android.mk
 #   B) Gradle Exec 直接调用 NDK clang（同 linbox-reprefix 方案，见

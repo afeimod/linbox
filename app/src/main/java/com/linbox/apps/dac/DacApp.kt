@@ -94,7 +94,9 @@ object DacApp : DacNative.TitleSink {
     fun init(hostContainer: FrameLayout?) {
         instance = this
         if (!DacNative.available) {
-            Log.w(TAG, "liblinbox_dac_bridge.so 不可用，DAC 显示禁用")
+            // v1.19：带真实失败原因（dlopen 原文 + 设备 API），不再只有一句话
+            Log.w(TAG, "liblinbox_dac_bridge.so 不可用，DAC 显示禁用 " +
+                "(api=${DacNative.deviceApi}, err=${DacNative.loadError})")
             return
         }
         DacNative.nativeSetTitleSink(this)

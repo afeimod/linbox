@@ -87,12 +87,25 @@ fun DacScreen() {
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // liblinbox_dac_bridge.so 不可用（API < 29 等）：给出人话提示
+            // liblinbox_dac_bridge.so 不可用：按真实原因诊断（v1.19）
+            // - API < 26：无 AHardwareBuffer，DAC 协议无法工作（真不支持）；
+            // - API ≥ 26 但加载失败：多为 APK 未包含本机 ABI 的 so 或
+            //   符号缺失（dlopen 原文直接展示，便于远程排查）。
+            val api = DacNative.deviceApi
+            val err = DacNative.loadError ?: "未知原因"
+            val reason = if (api < 26) {
+                "本设备为 Android " + android.os.Build.VERSION.RELEASE +
+                    "（API " + api + "），低于 DAC 所需的 Android 8.0（API 26）：" +
+                    "系统缺少 AHardwareBuffer，无法接收 wine 侧画面帧。\n" +
+                    "请改用 X11 桌面（linbox-x11 / 悬浮球 X11）。"
+            } else {
+                "本设备 API " + api + "（≥26，具备 DAC 硬件条件），库加载失败原因：\n" +
+                    err + "\n\n" +
+                    "常见处理：重新安装完整 APK（勿拆分/精简 ABI）；" +
+                    "若仍失败请连 adb 抓 LinBoxDAC 日志。"
+            }
             Text(
-                text = "DAC 显示器不可用\n\n" +
-                    "原生桥组件（liblinbox_dac_bridge.so）未能加载，\n" +
-                    "本设备可能低于 Android 10（API 29）。\n" +
-                    "请改用 X11 桌面（linbox-x11 / 悬浮球 X11）。",
+                text = "DAC 显示器不可用\n\n" + reason,
                 color = Color(0xFF9E9E9E),
                 fontSize = 14.sp,
                 lineHeight = 22.sp,

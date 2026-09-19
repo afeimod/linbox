@@ -72,15 +72,18 @@ TARGET=glibc-aarch64 ./wine/build_wine_dac.sh
 ### 手动编译（调试用）
 
 ```bash
-$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang \
-    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.c \
+# v1.19：桥必须以 API 26 目标编译（API 29 符号运行时 dlsym 绑定）；
+# 旧 API 29 直链版在 Android 8/9 设备上 dlopen 失败（「DAC 显示器」报不可用）
+$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++ \
+    -shared -fPIC -O2 -o liblinbox_dac_bridge.so linbox_dac_bridge.cpp \
     -llog -landroid -lEGL -lGLESv2
 $NDK/.../aarch64-linux-android26-clang -O2 -o libdac_allocd.so dac_allocd.c \
     -landroid -llog
 ```
 
-> 桥以 API 29 编译（ASurfaceControl 直链）；API 26–28 设备上加载失败时
-> `DacNative.available` 自动禁用 DAC，不影响 App 其他功能。
+> 桥以 API 26 编译：Android 8.0+ 均能加载；设备 API≥29 且符号齐全走
+> SF_DIRECT 直合，26–28 自动降级 AHB_CANVAS，API<26 由
+> `DacNative.available` 禁用 DAC（页面给出真实原因），不影响 App 其他功能。
 
 ## 3. Vulkan ICD（DXVK GPU 路径）
 

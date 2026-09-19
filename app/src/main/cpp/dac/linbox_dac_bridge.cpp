@@ -60,6 +60,113 @@
 #define LOGE(...) __android_log_print( ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__ )
 
 /* =====================================================================
+ * v1.19 SF 符号运行时绑定（低版本设备可加载修复）
+ * ===================================================================
+ * 旧版以 API 29 目标编译，ELF 携带 ASurfaceControl_* 与
+ * ASurfaceTransaction_*（及 Stats 访问器）未定义符号：API<29 设备的
+ * libandroid.so 不导出这些符号，System.loadLibrary 在 dlopen 阶段即
+ * 失败（"cannot locate symbol"），「DAC 显示器」页面只能报「原生桥接件
+ * 未能加载」，连设计中的 AHB_CANVAS 降级（API 26-28）也永远走不到。
+ *
+ * 现在库以 API 26 目标编译（Android 8.0+ 均可加载），全套 API 29
+ * 符号改在此处运行时 dlsym 绑定：任一符号缺失 → SF_DIRECT 不可用，
+ * 自动落 AHB_CANVAS 降级（桌面层仍有画面，DXVK 图层不可直合）。
+ *
+ * ABI 说明：setGeometry/setDamageRegion 平台导出为 C 符号（符号名
+ * 不修饰），const ARect& 引用形参 ABI 即传指针，此处统一按指针
+ * 形参声明、调用处传地址；其余签名与 NDK surface_control.h 一致。
+ * 与 API≥29 头文件声明并存无冲突（类型/变量均用独立 pfn_/p_ 前缀名）。
+ */
+typedef ASurfaceControl *(*pfn_ASC_createFromWindow)( ANativeWindow *, const char * );
+typedef ASurfaceControl *(*pfn_ASC_create)( ASurfaceControl *, const char * );
+typedef void (*pfn_ASC_release)( ASurfaceControl * );
+typedef ASurfaceTransaction *(*pfn_AST_create)( void );
+typedef void (*pfn_AST_delete)( ASurfaceTransaction * );
+typedef void (*pfn_AST_apply)( ASurfaceTransaction * );
+typedef void (*pfn_AST_setVisibility)( ASurfaceTransaction *, ASurfaceControl *, int8_t );
+typedef void (*pfn_AST_setZOrder)( ASurfaceTransaction *, ASurfaceControl *, int32_t );
+typedef void (*pfn_AST_setBuffer)( ASurfaceTransaction *, ASurfaceControl *, AHardwareBuffer *, int );
+typedef void (*pfn_AST_setGeometry)( ASurfaceTransaction *, ASurfaceControl *,
+                                     const ARect *, const ARect *, int32_t );
+typedef void (*pfn_AST_setDamageRegion)( ASurfaceTransaction *, ASurfaceControl *,
+                                         const ARect *, uint32_t );
+typedef void (*pfn_AST_setOnComplete)( ASurfaceTransaction *, void *,
+                                       void (*)( void *, ASurfaceTransactionStats * ) );
+typedef void (*pfn_ASTS_getControls)( const ASurfaceTransactionStats *,
+                                      ASurfaceControl ***, size_t * );
+typedef int  (*pfn_ASTS_getPrevFenceFd)( const ASurfaceTransactionStats *, ASurfaceControl * );
+typedef void (*pfn_ASTS_releaseControls)( ASurfaceControl ** );
+
+static pfn_ASC_createFromWindow  p_ASC_createFromWindow;
+static pfn_ASC_create            p_ASC_create;
+static pfn_ASC_release           p_ASC_release;
+static pfn_AST_create            p_AST_create;
+static pfn_AST_delete            p_AST_delete;
+static pfn_AST_apply             p_AST_apply;
+static pfn_AST_setVisibility     p_AST_setVisibility;
+static pfn_AST_setZOrder         p_AST_setZOrder;
+static pfn_AST_setBuffer         p_AST_setBuffer;
+static pfn_AST_setGeometry       p_AST_setGeometry;
+static pfn_AST_setDamageRegion   p_AST_setDamageRegion;
+static pfn_AST_setOnComplete     p_AST_setOnComplete;
+static pfn_ASTS_getControls      p_ASTS_getControls;
+static pfn_ASTS_getPrevFenceFd   p_ASTS_getPrevFenceFd;
+static pfn_ASTS_releaseControls  p_ASTS_releaseControls;
+
+static pthread_once_t g_sf_bind_once = PTHREAD_ONCE_INIT;
+static int g_sf_bind_ok;   /* 全部符号解析成功 */
+
+static void dac_sf_bind_impl( void )
+{
+    void *lib = dlopen( "libandroid.so", RTLD_NOW );
+    if (!lib)
+    {
+        LOGW( "dlopen libandroid.so failed: %s", dlerror() );
+        return;
+    }
+
+#define DAC_SYM(var, type, name)                                      \
+    do {                                                              \
+        var = (type)(uintptr_t)dlsym( lib, name );                    \
+        if (!var)                                                     \
+        {                                                             \
+            LOGW( "libandroid.so missing %s (API<29?)", name );       \
+            return;                                                   \
+        }                                                             \
+    } while (0)
+
+    DAC_SYM( p_ASC_createFromWindow, pfn_ASC_createFromWindow,
+             "ASurfaceControl_createFromWindow" );
+    DAC_SYM( p_ASC_create,           pfn_ASC_create,          "ASurfaceControl_create" );
+    DAC_SYM( p_ASC_release,          pfn_ASC_release,         "ASurfaceControl_release" );
+    DAC_SYM( p_AST_create,           pfn_AST_create,          "ASurfaceTransaction_create" );
+    DAC_SYM( p_AST_delete,           pfn_AST_delete,          "ASurfaceTransaction_delete" );
+    DAC_SYM( p_AST_apply,            pfn_AST_apply,           "ASurfaceTransaction_apply" );
+    DAC_SYM( p_AST_setVisibility,    pfn_AST_setVisibility,   "ASurfaceTransaction_setVisibility" );
+    DAC_SYM( p_AST_setZOrder,        pfn_AST_setZOrder,       "ASurfaceTransaction_setZOrder" );
+    DAC_SYM( p_AST_setBuffer,        pfn_AST_setBuffer,       "ASurfaceTransaction_setBuffer" );
+    DAC_SYM( p_AST_setGeometry,      pfn_AST_setGeometry,     "ASurfaceTransaction_setGeometry" );
+    DAC_SYM( p_AST_setDamageRegion,  pfn_AST_setDamageRegion, "ASurfaceTransaction_setDamageRegion" );
+    DAC_SYM( p_AST_setOnComplete,    pfn_AST_setOnComplete,   "ASurfaceTransaction_setOnComplete" );
+    DAC_SYM( p_ASTS_getControls,     pfn_ASTS_getControls,
+             "ASurfaceTransactionStats_getASurfaceControls" );
+    DAC_SYM( p_ASTS_getPrevFenceFd,  pfn_ASTS_getPrevFenceFd,
+             "ASurfaceTransactionStats_getPreviousReleaseFenceFd" );
+    DAC_SYM( p_ASTS_releaseControls, pfn_ASTS_releaseControls,
+             "ASurfaceTransactionStats_releaseASurfaceControls" );
+#undef DAC_SYM
+
+    g_sf_bind_ok = 1;
+    LOGI( "SF symbols bound: ASurfaceControl/Transaction OK" );
+}
+
+static int dac_sf_bind( void )
+{
+    pthread_once( &g_sf_bind_once, dac_sf_bind_impl );
+    return g_sf_bind_ok;
+}
+
+/* =====================================================================
  * 全局状态
  * =================================================================== */
 static JavaVM    *g_vm;
@@ -164,7 +271,7 @@ static void release_ahb( AHardwareBuffer *ahb )
  * =================================================================== */
 static ASurfaceTransaction *make_transaction(void)
 {
-    return ASurfaceTransaction_create();
+    return p_AST_create ? p_AST_create() : NULL;
 }
 
 /* vk_surface 几何应用（定位+缩放+层级）：
@@ -181,29 +288,36 @@ static void apply_vk_geometry( ASurfaceTransaction *trans, struct vk_surface *sf
      * 由 SurfaceFlinger 完成 source→destination 的缩放映射 */
     const int32_t dw = sf->w ? (int32_t)sf->w : bw;
     const int32_t dh = sf->h ? (int32_t)sf->h : bh;
+    if (!p_AST_setGeometry) return;
     src.left = 0;  src.top  = 0;
     src.right = bw; src.bottom = bh;
     dst.left = (int32_t)sf->x; dst.top = (int32_t)sf->y;
     dst.right = dst.left + dw; dst.bottom = dst.top + dh;
-    ASurfaceTransaction_setGeometry( trans, sf->sc, src, dst, 0 );
+    p_AST_setGeometry( trans, sf->sc, &src, &dst,
+                       0 /* ASURFACE_TRANSACTION_TRANSFORMATION_IDENTITY */ );
 
-    ASurfaceTransaction_setZOrder( trans, sf->sc, (int32_t)sf->z + 1 );
-    ASurfaceTransaction_setVisibility( trans, sf->sc, ASURFACE_TRANSACTION_VISIBILITY_SHOW );
+    if (p_AST_setZOrder)
+        p_AST_setZOrder( trans, sf->sc, (int32_t)sf->z + 1 );
+    if (p_AST_setVisibility)
+        p_AST_setVisibility( trans, sf->sc, ASURFACE_TRANSACTION_VISIBILITY_SHOW );
 }
 
 /* 预留：v2 直连路径（不经 tracked 回调） */
 __attribute__((unused))
 static void attach_vk_buffer_direct( struct vk_surface *sf, unsigned int idx, int fence_fd )
 {
-    ASurfaceTransaction *trans = make_transaction();
+    ASurfaceTransaction *trans;
+    if (!p_AST_setBuffer || !p_AST_apply) return;
+
+    trans = make_transaction();
     if (!trans) return;
 
-    ASurfaceTransaction_setBuffer( trans, sf->sc, sf->images[idx], fence_fd );
+    p_AST_setBuffer( trans, sf->sc, sf->images[idx], fence_fd );
 
     apply_vk_geometry( trans, sf );
 
-    ASurfaceTransaction_apply( trans );
-    ASurfaceTransaction_delete( trans );
+    p_AST_apply( trans );
+    if (p_AST_delete) p_AST_delete( trans );
 }
 
 /* =====================================================================
@@ -553,15 +667,20 @@ static void on_transaction_complete( void *context, ASurfaceTransactionStats *st
     size_t count = 0, i;
 
     /* 真实 API：getASurfaceControls 返回数组 + size（NDK 无按索引
-     * getASurfaceControl / getASurfaceControlCount，原写法为臆造）。 */
-    ASurfaceTransactionStats_getASurfaceControls( stats, &controls, &count );
+     * getASurfaceControl / getASurfaceControlCount，原写法为臆造）。
+     * v1.19：符号经 dlsym 绑定，缺失时跳过（fence 以 -1 兜底）。 */
+    if (p_ASTS_getControls)
+        p_ASTS_getControls( stats, &controls, &count );
     for (i = 0; i < count && controls; i++)
     {
-        int fd = ASurfaceTransactionStats_getPreviousReleaseFenceFd( stats, controls[i] );
-        if (fd >= 0) fence_fd = fd;
+        if (p_ASTS_getPrevFenceFd)
+        {
+            int fd = p_ASTS_getPrevFenceFd( stats, controls[i] );
+            if (fd >= 0) fence_fd = fd;
+        }
     }
-    if (controls)
-        ASurfaceTransactionStats_releaseASurfaceControls( controls );
+    if (controls && p_ASTS_releaseControls)
+        p_ASTS_releaseControls( controls );
 
     if (kind & 0x10000u)
         send_release( (uint32_t)(kind & 0xffff), fence_fd );
@@ -574,39 +693,49 @@ static void on_transaction_complete( void *context, ASurfaceTransactionStats *st
 static void attach_desktop_buffer_tracked( uint32_t slot, int fence_fd,
                                            int32_t dl, int32_t dt, int32_t dr, int32_t db )
 {
-    ASurfaceTransaction *trans = make_transaction();
+    ASurfaceTransaction *trans;
+    if (!p_AST_setBuffer || !p_AST_apply) return;   /* SF 符号未绑定 */
+
+    trans = make_transaction();
     if (!trans) return;
 
-    ASurfaceTransaction_setOnComplete( trans, (void *)(uintptr_t)DAC_CTXT_DESKTOP( slot ),
-                                   on_transaction_complete );
-    ASurfaceTransaction_setBuffer( trans, g_root_sc, g_slots[slot].ahb, fence_fd );
-    if (dr > dl && db > dt)
+    if (p_AST_setOnComplete)
+        p_AST_setOnComplete( trans, (void *)(uintptr_t)DAC_CTXT_DESKTOP( slot ),
+                             on_transaction_complete );
+    p_AST_setBuffer( trans, g_root_sc, g_slots[slot].ahb, fence_fd );
+    if (dr > dl && db > dt && p_AST_setDamageRegion)
     {
         /* 真实 API：setDamageRegion 收 ARect 数组 + count
          * （NDK 无 ASurfaceDamageRegion/ASurfaceRect 类型）。 */
         ARect damage;
         damage.left = dl; damage.top = dt;
         damage.right = dr; damage.bottom = db;
-        ASurfaceTransaction_setDamageRegion( trans, g_root_sc, &damage, 1 );
+        p_AST_setDamageRegion( trans, g_root_sc, &damage, 1 );
     }
-    ASurfaceTransaction_setVisibility( trans, g_root_sc, ASURFACE_TRANSACTION_VISIBILITY_SHOW );
-    ASurfaceTransaction_setZOrder( trans, g_root_sc, 0 );
-    ASurfaceTransaction_apply( trans );
-    ASurfaceTransaction_delete( trans );
+    if (p_AST_setVisibility)
+        p_AST_setVisibility( trans, g_root_sc, ASURFACE_TRANSACTION_VISIBILITY_SHOW );
+    if (p_AST_setZOrder)
+        p_AST_setZOrder( trans, g_root_sc, 0 );
+    p_AST_apply( trans );
+    if (p_AST_delete) p_AST_delete( trans );
 }
 
 static void attach_vk_buffer_tracked( struct vk_surface *sf, unsigned int idx, int fence_fd )
 {
-    ASurfaceTransaction *trans = make_transaction();
+    ASurfaceTransaction *trans;
+    if (!p_AST_setBuffer || !p_AST_apply) return;   /* SF 符号未绑定 */
+
+    trans = make_transaction();
     if (!trans) return;
 
-    ASurfaceTransaction_setOnComplete( trans, (void *)(uintptr_t)DAC_CTXT_VK( sf->id, idx ),
-                                   on_transaction_complete );
-    ASurfaceTransaction_setBuffer( trans, sf->sc, sf->images[idx], fence_fd );
+    if (p_AST_setOnComplete)
+        p_AST_setOnComplete( trans, (void *)(uintptr_t)DAC_CTXT_VK( sf->id, idx ),
+                             on_transaction_complete );
+    p_AST_setBuffer( trans, sf->sc, sf->images[idx], fence_fd );
     apply_vk_geometry( trans, sf );
 
-    ASurfaceTransaction_apply( trans );
-    ASurfaceTransaction_delete( trans );
+    p_AST_apply( trans );
+    if (p_AST_delete) p_AST_delete( trans );
 }
 
 /* =====================================================================
@@ -742,7 +871,7 @@ static struct vk_surface *find_or_create_surface( uint64_t id )
             {
                 char name[32];
                 snprintf( name, sizeof(name), "linbox-vk-%llu", (unsigned long long)id );
-                g_surfaces[i].sc = ASurfaceControl_create( g_root_sc, name );
+                g_surfaces[i].sc = p_ASC_create ? p_ASC_create( g_root_sc, name ) : NULL;
             }
             return &g_surfaces[i];
         }
@@ -865,7 +994,7 @@ static void handle_vk_surface_del( uint64_t id )
             for (j = 0; j < 8; j++)
                 if (!g_surfaces[i].is_dmabuf) release_ahb( g_surfaces[i].images[j] );
                 else close( (int)(intptr_t)g_surfaces[i].images[j] );
-            if (g_surfaces[i].sc) ASurfaceControl_release( g_surfaces[i].sc );
+            if (g_surfaces[i].sc && p_ASC_release) p_ASC_release( g_surfaces[i].sc );
             memset( &g_surfaces[i], 0, sizeof(g_surfaces[i]) );
             return;
         }
@@ -930,7 +1059,7 @@ static void close_connection(void)
                     else
                         release_ahb( g_surfaces[i].images[j] );
                 }
-            if (g_surfaces[i].sc) ASurfaceControl_release( g_surfaces[i].sc );
+            if (g_surfaces[i].sc && p_ASC_release) p_ASC_release( g_surfaces[i].sc );
             memset( &g_surfaces[i], 0, sizeof(g_surfaces[i]) );
         }
     }
@@ -1118,17 +1247,23 @@ extern "C" jint Java_com_linbox_apps_dac_DacNative_nativeConnect( JNIEnv *env, j
         return DAC_BACKEND_NONE;
     }
 
-    /* 后端选择 */
-    if (g_api_level >= 29)
+    /* 后端选择（v1.19）：SF_DIRECT 需设备 API≥29 且符号全部可绑定；
+     * API 26-28 走 AHB_CANVAS 降级（旧版此处不可达 —— .so 在低版本
+     * 设备上根本加载不了）；API<26 无 AHardwareBuffer，DAC 不支持。 */
+    if (g_api_level >= 29 && dac_sf_bind())
     {
-        g_root_sc = ASurfaceControl_createFromWindow( g_anw, "linbox-dac-root" );
+        g_root_sc = p_ASC_createFromWindow( g_anw, "linbox-dac-root" );
         g_backend = g_root_sc ? DAC_BACKEND_SF_DIRECT : DAC_BACKEND_AHB_CANVAS;
     }
-    else
-        g_backend = g_api_level >= 26 ? DAC_BACKEND_AHB_CANVAS : DAC_BACKEND_NONE;
-
-    if (g_backend == DAC_BACKEND_NONE)
+    else if (g_api_level >= 26)
     {
+        if (g_api_level < 29)
+            LOGI( "API %d: ASurfaceControl unavailable, fallback to AHB_CANVAS", g_api_level );
+        g_backend = DAC_BACKEND_AHB_CANVAS;
+    }
+    else
+    {
+        g_backend = DAC_BACKEND_NONE;
         LOGE( "device API %d below 26, DAC unsupported", g_api_level );
     }
 
@@ -1157,7 +1292,7 @@ extern "C" void Java_com_linbox_apps_dac_DacNative_nativeDisconnect( JNIEnv *env
     }
     if (g_root_sc)
     {
-        ASurfaceControl_release( g_root_sc );
+        if (p_ASC_release) p_ASC_release( g_root_sc );
         g_root_sc = NULL;
     }
     if (g_anw)

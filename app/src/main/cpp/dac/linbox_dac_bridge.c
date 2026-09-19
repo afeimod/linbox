@@ -3,6 +3,13 @@
  *
  * Copyright 2026 LinBox Project (MIT)
  *
+ * ⚠️ v1.19 起本 .c 文件为遗留参考实现（v1.18 前的直链版），APK 构建
+ * 只走 linbox_dac_bridge.cpp（API 26 目标 + API 29 符号运行时 dlsym，
+ * 见 app/build.gradle.kts buildDacBridge* 任务与 .cpp 头注）。
+ * 本文件直接链接 ASurfaceControl_*/ASurfaceTransaction_*（API 29 符号），
+ * 若以 API<29 目标 ndk-build 出的 so 在 Android 8/9 上 dlopen 失败 ——
+ * 正是 v1.19 修复的问题，请勿再用本文件出正式包。
+ *
  * 职责：
  *   1. 监听 $PREFIX/tmp/linbox-dac.sock，接受 winedac.drv 连接（同 UID 无需特权）
  *   2. 导入 wine 侧发来的 AHardwareBuffer（recvHandle）或 dmabuf fd

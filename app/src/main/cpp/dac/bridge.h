@@ -16,6 +16,44 @@
 #include <android/surface_control.h>
 
 /*
+ * v1.19 低版本设备修复：
+ *
+ * 旧版以 ${triple}29-clang++（API 29 目标）编译 liblinbox_dac_bridge.so，
+ * ELF 携带 ASurfaceControl_* 与 ASurfaceTransaction_*（及 Stats 访问器）
+ * 未定义符号：API<29
+ * 设备的 libandroid.so 不导出这些符号 → System.loadLibrary 直接
+ * dlopen 失败（"cannot locate symbol"）→「DAC 显示器」页面显示
+ * 「原生桥接件未能加载」，连设计中的 AHB_CANVAS 降级（API 26-28）
+ * 也永远走不到。
+ *
+ * 现改为 API 26 目标编译（见 app/build.gradle.kts buildDacBridge*）：
+ *  - AHardwareBuffer_*（API 26）直接链接，Android 8.0+ 均可加载；
+ *  - ASurfaceControl_* 与 ASurfaceTransaction_*（API 29）运行时 dlsym
+ *    绑定（linbox_dac_bridge.cpp 内 SF 符号解析段），设备 API<29 或
+ *    符号缺失时自动降级 AHB_CANVAS。
+ *
+ * 编译目标为 API<29 时 NDK 的 surface_control.h 整体为空（内部
+ * #if __ANDROID_API__ >= 29 门控），类型与常量在此自备 —— 仅 opaque
+ * 指针 / 枚举值，无 ABI 风险（dlsym 函数签名由 .cpp 内指针类型给出，
+ * const ARect& 传引用与平台 C 导出的传指针 ABI 一致）。
+ */
+#if defined(__ANDROID_API__) && __ANDROID_API__ < 29
+
+typedef struct ASurfaceControl        ASurfaceControl;
+typedef struct ASurfaceTransaction    ASurfaceTransaction;
+typedef struct ASurfaceTransactionStats ASurfaceTransactionStats;
+
+enum {
+    ASURFACE_TRANSACTION_VISIBILITY_SHOW = 0,
+    ASURFACE_TRANSACTION_VISIBILITY_HIDE = 1,
+};
+
+/* 变换常量（IDENTITY=0 等）直接传字面量：API 29 surface_control.h 的
+ * 变换枚举名与取值随版本演进，不在此复制。 */
+
+#endif /* __ANDROID_API__ < 29 */
+
+/*
  * v1.15 修复：本头文件的声明（尤其末尾 JNI 原型）必须为 C linkage。
  * .cpp TU 里曾出现「declaration has a different language linkage」：
  * bridge.h 原型是 C++ linkage、linbox_dac_bridge.cpp 定义带 extern "C"，
