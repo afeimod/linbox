@@ -59,6 +59,19 @@
 #     禁用 mscoree/mshtml 内建覆盖，wine 直接按"已禁用"处理，不再弹框。
 #     LINBOX_DAC_MONO_PROMPT=1 或自设 WINEDLLOVERRIDES 可恢复默认行为。
 #
+#   v1.21.2 wine 启动即 SIGSEGV 修复（真机 2026-09 实测）：box64 打印
+#     "Error initializing native libpthread.so.0 (last dlerror is libc.so:
+#     cannot open shared object file: Permission denied)" 后 pthread 符号
+#     全部 404、ntdll.so 无法加载、段错误。根因：sysroot-arm/lib 按 box64
+#     的 DT_NEEDED 收集是"浮动清单"—— glibc 2.34+ 链接器不再为 -lpthread
+#     stub 产生 DT_NEEDED，libpthread.so.0 从未进 sysroot-arm；而 box64 的
+#     全部 pthread_* 符号映射恰在 wrapped libpthread（wrapped libc 不提供），
+#     其初始化 dlopen("libpthread.so.0") 落空 → ALTNAME dlopen("libc.so")
+#     也落空 → 断链。修法：不依赖 DT_NEEDED，无条件收集 glibc 运行时
+#     全家桶（GARM 优先）+ 放置 libc.so/libm.so 回退名副本（ALTNAME 防御）；
+#     workflow 同步补上 v1.17 起就支持却从未接线的 GARM（安卓补丁版
+#     gpkg glibc，规避 seccomp 击杀 vanilla glibc 的 clone3/statx/rseq）。
+#
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
 #   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
@@ -343,6 +356,42 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
             echo "  ⚠ box64 依赖 $_lib 缺失（GARM/交叉 sysroot 均无；部署后 box64 可能无法启动）"
         fi
     done
+    # v1.21.2 修复"wine 启动即 SIGSEGV（pthread 符号全丢 / ntdll 无法加载）"：
+    # box64 的 wrapped 库系列（libpthread/libdl/librt/libutil/libresolv）初始化时
+    # 会 dlopen 各自的 soname，找不到时回退 ALTNAME（libpthread 的 ALTNAME 是
+    # "libc.so"）。上面按 box64 的 DT_NEEDED 收集是"浮动清单"—— 随 box64 版本
+    # 与工具链变化（glibc 2.34+ 里 pthread 并入 libc，stub 库可能不在
+    # DT_NEEDED 里），一旦 libpthread.so.0 缺席：dlopen 失败 → ALTNAME
+    # dlopen("libc.so") 也失败（glibc 没有无版本号 libc.so）→ wrapped libpthread
+    # 初始化失败 → wrapped libc 的 NEEDED 链断 → wine.real 的全部 pthread_*
+    # 重定位 404 → ntdll.so 加载失败 → SIGSEGV（真机 2026-09 实测）。
+    # 因此这里不依赖 DT_NEEDED，无条件收集 glibc 运行时全家桶
+    #（GARM 安卓补丁版优先，交叉 sysroot vanilla 兜底）。
+    for _stub in libpthread.so.0 libdl.so.2 librt.so.1 libutil.so.1 libresolv.so.2; do
+        [ -f "$SYSARM/$_stub" ] && continue
+        _src=""
+        if [ -n "$GARM" ] && [ -f "$GARM/$_stub" ]; then
+            _src="$GARM/$_stub"
+        else
+            _src="/usr/aarch64-linux-gnu/lib/$_stub"
+            [ -f "$_src" ] || _src="/usr/aarch64-linux-gnu/lib/aarch64-linux-gnu/$_stub"
+        fi
+        if [ -f "$_src" ]; then
+            cp -L "$_src" "$SYSARM/" || echo "  ⚠ 无法复制 glibc stub: $_stub"
+        else
+            echo "  ⚠ glibc stub $_stub 无法收集（GARM/交叉 sysroot 均无）—— box64 wrapped 可能初始化失败"
+        fi
+    done
+    # ALTNAME 防御：box64 wrapped libpthread/libm 的回退 dlopen 名是
+    # "libc.so"/"libm.so"（无版本号）。glibc 体系没有这两个 soname —— 在
+    # sysroot-arm 各放一份 .6 的内容副本（soname 不变，loader 按 DT_NEEDED
+    # 精确名解析不会误用；仅兜底 dlopen 命中）。零成本消除这类回退失败。
+    if [ -f "$SYSARM/libc.so.6" ] && [ ! -f "$SYSARM/libc.so" ]; then
+        cp -L "$SYSARM/libc.so.6" "$SYSARM/libc.so" 2>/dev/null || true
+    fi
+    if [ -f "$SYSARM/libm.so.6" ] && [ ! -f "$SYSARM/libm.so" ]; then
+        cp -L "$SYSARM/libm.so.6" "$SYSARM/libm.so" 2>/dev/null || true
+    fi
     # glibc 动态 loader 本体（--library-path 直启用）；GARM（安卓版）优先
     _ldarm=""
     [ -n "$GARM" ] && [ -f "$GARM/ld-linux-aarch64.so.1" ] && _ldarm="$GARM/ld-linux-aarch64.so.1"

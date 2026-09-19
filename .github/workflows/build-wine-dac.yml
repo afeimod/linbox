@@ -56,6 +56,51 @@ jobs:
           # 交叉工具确认
           which x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc
 
+      # ============ v1.21.2：获取安卓补丁版 glibc（gpkg）→ GARM ============
+      # build_wine_dac.sh 自 v1.17 起支持 GARM（termux gpkg "GNU libc for
+      # Android"，已补丁 disable-clone3/fstatat/rseq —— vanilla glibc 的
+      # 这些调用会被安卓 App 域 seccomp 击杀 SIGSYS），但此前 workflow 从未
+      # 传入 → sysroot-arm 一直是 vanilla 交叉 glibc。
+      # 尽力而为：任一步失败只警告，构建继续（GARM 置空 = 旧 vanilla 行为）。
+      - name: 🧩 Fetch Android-patched glibc (GARM, best effort)
+        run: |
+          mkdir -p /tmp/garm && cd /tmp/garm
+          BASE=https://packages.termux.dev/apt
+          # 1) glibc-repo（termux 主仓库）→ 解包读出 gpkg glibc 源地址
+          idx=$(curl -fsSL --retry 3 "$BASE/termux-main/dists/stable/main/binary-aarch64/Packages") || idx=""
+          rel=$(echo "$idx" | awk 'BEGIN{RS="";FS="\n"}{p="";f="";for(i=1;i<=NF;i++){if($i~/^Package: glibc-repo$/)p=1;if($i~/^Filename: /)f=substr($i,11)}if(p&&f){print f;exit}}')
+          srcurl=""
+          if [ -n "$rel" ]; then
+            curl -fsSL --retry 3 "$BASE/termux-main/$rel" -o glibc-repo.deb || true
+            dpkg -x glibc-repo.deb repox 2>/dev/null || true
+            _list="repox/data/data/com.termux/files/usr/etc/apt/sources.list.d/glibc.list"
+            if [ -f "$_list" ]; then
+              # 优先非 cloudflare 主域
+              srcurl=$(grep -h '^deb ' "$_list" | grep -v 'packages-cf' | awk '{print $2}' | head -1)
+              [ -n "$srcurl" ] || srcurl=$(grep -h '^deb ' "$_list" | awk '{print $2}' | head -1)
+            fi
+          fi
+          if [ -z "$srcurl" ]; then
+            echo "⚠ 未解析出 gpkg 源地址 —— GARM 置空，sysroot-arm 回退 vanilla glibc"
+          else
+            echo "gpkg 源: $srcurl"
+            # 2) 动态解析最新 glibc aarch64 deb 并解包
+            gidx=$(curl -fsSL --retry 3 "$srcurl/dists/stable/main/binary-aarch64/Packages") || gidx=""
+            gfile=$(echo "$gidx" | awk 'BEGIN{RS="";FS="\n"}{p="";a="";f="";for(i=1;i<=NF;i++){if($i~/^Package: glibc$/)p=1;if($i~/^Architecture: aarch64$/)a=1;if($i~/^Filename: /)f=substr($i,11)}if(p&&a&&f){print f;exit}}')
+            if [ -z "$gfile" ]; then
+              echo "⚠ 未在 gpkg 源找到 glibc aarch64 包 —— GARM 置空，回退 vanilla"
+            elif curl -fsSL --retry 3 "$srcurl/$gfile" -o glibc.deb \
+              && dpkg -x glibc.deb garmx \
+              && GLIBCDIR=$(find "$(pwd)/garmx" -type d -path '*glibc/lib' | head -1) \
+              && [ -f "$GLIBCDIR/ld-linux-aarch64.so.1" ] \
+              && [ -f "$GLIBCDIR/libpthread.so.0" ]; then
+              echo "✓ GARM 就绪: $GLIBCDIR（$(ls "$GLIBCDIR" | wc -l) 个文件）"
+              echo "GARM_DIR=$GLIBCDIR" >> "$GITHUB_ENV"
+            else
+              echo "⚠ GARM 解包/校验失败 —— GARM 置空，回退 vanilla"
+            fi
+          fi
+
       # ============ 构建（wine/build_wine_dac.sh：注入 winedac.drv + 编译 + 打包） ============
       - name: 🍷 Build Wine + winedac.drv
         run: |
@@ -64,6 +109,7 @@ jobs:
           TARGET=${{ github.event.inputs.target }} \
           WINE_VERSION=${{ github.event.inputs.wine_version }} \
           JOBS=$(nproc) \
+          GARM="${GARM_DIR:-}" \
           ./wine/build_wine_dac.sh
 
       # ============ 产物自检 ============
