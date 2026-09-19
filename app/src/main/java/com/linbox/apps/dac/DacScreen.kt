@@ -7,9 +7,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,7 +29,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.linbox.core.shell.ShellController
 
 /**
- * DacScreen — 「DAC 显示器」全屏页面（v1.18）
+ * DacScreen — 「DAC 显示器」全屏页面（v1.21）
  *
  * Copyright 2026 LinBox Project (MIT)
  *
@@ -39,30 +41,30 @@ import com.linbox.core.shell.ShellController
  * 进入方式：
  * - 终端悬浮球菜单 → 「DAC 显示器」（ShellController.showDac()）；
  * - 终端命令桥 `linbox open dac`（LinBoxShellBridge）；
+ * - 迷你悬浮窗标题条/▣（最小化后还原，v1.21）；
  * - wine wrapper / `linbox-dac` 脚本发 DAC_START 广播 → DacReceiver →
- *   DacApp.requestStart 自动跳转本页（am 可用时仍是等效路径）。
+ *   DacApp.requestStart（v1.21：终端页触发改为迷你悬浮窗，不跳页）。
  *
  * 渲染与交互：
  * - 画面为 DacView（SurfaceView）：winedac.drv 经 unix socket 直送
  *   AHardwareBuffer，SurfaceFlinger 合成（不依赖 X11）；
  * - 触摸即鼠标、虚拟键盘/手柄经 LinBox 输入覆盖层桥入（DacInput）；
  * - wine 侧窗口标题 / 连接状态由 DacApp.showTitle 显示在画面顶部；
- * - 返回键或右上角 ✕ 回终端主页；离开页面自动停显（wine 侧
- *   winedac.drv 持续重连，重进本页自动接上，无需重启 wine）。
+ * - 返回键或右上角 [─] 最小化：回终端，画面在悬浮小窗继续运行（v1.21）；
+ * - 右上角 [✕] 关闭：停止显示；
+ * - 任意顺序均可用：wine 侧 v1.21 重连看门狗每 2 秒自动接上
+ *   （先 wine 后 DAC / 先 DAC 后 wine / 中途关掉 DAC 均可）。
  */
 @Composable
 fun DacScreen() {
     val nativeReady = remember { DacNative.available }
 
-    // 返回键：回终端主页（wine 会话不受影响，winedac 会持续重连）
-    BackHandler(enabled = true) { ShellController.showTerminal() }
+    // 返回键：最小化 —— 回终端且 DAC 继续在悬浮小窗运行（v1.21）
+    BackHandler(enabled = true) { DacApp.minimize() }
 
-    // 离开页面：停显并解除宿主容器（恢复 DacApp 兜底模式语义）
+    // 离开页面：页面模式停显；最小化模式（画面已迁到悬浮窗）继续运行
     DisposableEffect(Unit) {
-        onDispose {
-            DacApp.stopDisplay()
-            DacApp.attachHost(null)
-        }
+        onDispose { DacApp.onPageGone() }
     }
 
     Box(
@@ -114,13 +116,31 @@ fun DacScreen() {
             )
         }
 
-        // ===== 右上角悬浮控制条：状态点 + 关闭（不遮挡画面主体触摸） =====
+        // ===== 右上角悬浮控制条：最小化 + 关闭（不遮挡画面主体触摸） =====
         Row(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 10.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // [─] 最小化（v1.21）：回终端，画面在悬浮小窗继续运行
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(Color(0xB3141414), CircleShape)
+                    .border(1.dp, Color(0x33FFFFFF), CircleShape)
+                    .clickable { DacApp.minimize() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "─",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            // [✕] 关闭：停止显示并回终端（区别于最小化）
             Box(
                 modifier = Modifier
                     .size(34.dp)

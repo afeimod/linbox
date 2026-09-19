@@ -36,6 +36,7 @@ class DacView(container: FrameLayout) : SurfaceHolder.Callback2, View.OnTouchLis
     private var scaleFactor = 1f          // 视图 → 虚拟桌面 缩放
     private var desktopW = 1280
     private var desktopH = 720
+    private var lastBound: Surface? = null   // v1.21：已重绑的 Surface（去重）
 
     private val scaleDetector = ScaleGestureDetector(
         container.context,
@@ -67,6 +68,23 @@ class DacView(container: FrameLayout) : SurfaceHolder.Callback2, View.OnTouchLis
         }
     }
 
+    /**
+     * v1.21：迁移到新容器（页面 ↔ 最小化悬浮窗 reparent）。
+     * 同窗口内 reparent 会销毁重建 Surface —— 重建后 surfaceChanged
+     * 回调里经 nativeSetSurface 无缝重绑呈现目标（连接不断）。
+     */
+    fun attachTo(container: FrameLayout) {
+        (surfaceView.parent as? FrameLayout)?.removeView(surfaceView)
+        container.addView(
+            surfaceView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        surfaceView.requestFocus()
+    }
+
     /** Surface 就绪回调（DacApp 连接前等待） */
     fun postWhenSurfaceReady(block: () -> Unit) {
         val holder = surfaceView.holder
@@ -88,6 +106,7 @@ class DacView(container: FrameLayout) : SurfaceHolder.Callback2, View.OnTouchLis
         surfaceView.requestFocus()
         val backend = DacNative.nativeConnect(surface, socketPath)
         connected = backend != DacNative.BACKEND_NONE
+        lastBound = if (connected) surface else null
         Log.i(TAG, "connect backend=$backend socket=$socketPath")
         return backend
     }
@@ -96,6 +115,22 @@ class DacView(container: FrameLayout) : SurfaceHolder.Callback2, View.OnTouchLis
         if (connected) {
             DacNative.nativeDisconnect()
             connected = false
+        }
+        lastBound = null
+    }
+
+    /**
+     * v1.21：Surface 重建后的无缝重绑（最小化/还原/旋转）。
+     * 仅当已连接且 Surface 变化时调用；失败静默（下帧 PRESENT 重试）。
+     */
+    private fun maybeRebind(holder: SurfaceHolder) {
+        val s = holder.surface ?: return
+        if (!connected || !s.isValid || s === lastBound) return
+        lastBound = s
+        try {
+            DacNative.nativeSetSurface(s)
+        } catch (t: Throwable) {
+            Log.w(TAG, "nativeSetSurface failed: ${t.message}")
         }
     }
 
@@ -117,6 +152,7 @@ class DacView(container: FrameLayout) : SurfaceHolder.Callback2, View.OnTouchLis
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.d(TAG, "surface changed ${width}x${height}")
+        maybeRebind(holder)   // v1.21：reparent/旋转后 Surface 重建 → 重绑呈现目标
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {

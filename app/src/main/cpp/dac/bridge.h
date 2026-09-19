@@ -240,6 +240,15 @@ Java_com_linbox_apps_dac_DacNative_nativeConnect( JNIEnv *env, jclass clazz,
 JNIEXPORT void JNICALL
 Java_com_linbox_apps_dac_DacNative_nativeDisconnect( JNIEnv *env, jclass clazz );
 
+/*
+ * nativeSetSurface(surface) → 0/-1（v1.21）
+ *   呈现目标重绑定（最小化悬浮窗/还原页面时 SurfaceView 重建）：
+ *   socket 连接与已导入 buffer 保留，仅替换 ANativeWindow/ASurfaceControl。
+ */
+JNIEXPORT jint JNICALL
+Java_com_linbox_apps_dac_DacNative_nativeSetSurface( JNIEnv *env, jclass clazz,
+                                                     jobject surface );
+
 /* 输入注入（LinBox 虚拟键鼠 → wine） */
 JNIEXPORT void JNICALL
 Java_com_linbox_apps_dac_DacNative_nativeSendMouse( JNIEnv *env, jclass clazz,

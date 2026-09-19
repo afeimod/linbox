@@ -47,6 +47,14 @@ object DacNative {
     @JvmStatic
     external fun nativeDisconnect()
 
+    /**
+     * v1.21：呈现目标重绑定（最小化悬浮窗/还原页面时 SurfaceView 重建）。
+     * socket 连接与已导入 buffer 保留，仅替换 ANativeWindow/ASurfaceControl。
+     * @return 0 = 重绑成功；-1 = 显示未激活或 Surface 无效（可忽略）
+     */
+    @JvmStatic
+    external fun nativeSetSurface(surface: Any): Int
+
     @JvmStatic
     external fun nativeSendMouse(
         flags: Int, x: Float, y: Float, buttons: Int,

@@ -485,11 +485,13 @@ if [ "${LINBOX_DAC_AUTO:-1}" = 1 ] && [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; th
         sleep 1; i=$((i+1))
     done
     if [ ! -S "$PREFIX/tmp/linbox-dac.sock" ]; then
-        echo "[wine-dac] ⚠ DAC 窗口未就绪——wine 画面暂时无处显示（winedac 会持续重连，窗口就绪后自动接上）" >&2
-        echo "[wine-dac] DAC 显示（两步，缺一不可）：" >&2
-        echo "[wine-dac]   1) 先在 LinBox 里点开「DAC 显示器」应用并保持前台" >&2
-        echo "[wine-dac]      （悬浮球菜单 → DAC 显示器；am 自动拉起受安卓限制会 Aborted，点 App 是等效路径）" >&2
-        echo "[wine-dac]   2) 再跑上面的命令 —— winedac.drv 自动连接 DAC 窗口，画面直出安卓屏" >&2
+        echo "[wine-dac] ⚠ DAC 窗口未就绪——不用管顺序，winedac 每 2 秒自动重连（v1.21）" >&2
+        echo "[wine-dac] DAC 显示（v1.21 起任意顺序均可，无需重启 wine）：" >&2
+        echo "[wine-dac]   · 先开 DAC 再跑 wine：直接点「DAC 显示器」应用即可" >&2
+        echo "[wine-dac]   · 先跑 wine 再开 DAC：本命令跑完后，随时点开「DAC 显示器」" >&2
+        echo "[wine-dac]     （悬浮球菜单 → DAC 显示器；2 秒内自动接上画面）" >&2
+        echo "[wine-dac]   · DAC_START 广播到达时在终端页：会以迷你悬浮窗出现，" >&2
+        echo "[wine-dac]     点小窗标题条/▣ 还原全屏，✕ 关闭" >&2
         echo "[wine-dac]   自查四点：" >&2
         echo "[wine-dac]   0) getprop ro.build.version.release  —— 安卓版本（越老 seccomp 越严）" >&2
         echo "[wine-dac]   1) ls $PREFIX/bin/linbox-dac  —— 不存在说明 APK 未含 DAC 模块或未重装/重进过 LinBox" >&2
@@ -507,6 +509,17 @@ if [ ! -S "$PREFIX/tmp/linbox-dac-allocd.sock" ]; then
         sleep 1
         break
     done
+fi
+# ---- v1.21 前缀创建进度提示：首次运行前缀在手机上要 1~5 分钟，
+# 不提示会被当成卡死；Mono/Gecko 弹窗 v1.18 起已默认禁用 ----
+if [ -z "${WINEPREFIX:-}" ]; then
+    WINEPREFIX="$HOME/.wine"
+    export WINEPREFIX
+fi
+if [ ! -d "$WINEPREFIX/drive_c/windows/system32" ]; then
+    echo "[wine-dac] ● 首次运行：正在创建 wine 前缀（$WINEPREFIX）" >&2
+    echo "[wine-dac]   手机上约需 1~5 分钟，期间无输出属正常，请勿退出" >&2
+    echo "[wine-dac]   （Mono/Gecko 下载弹窗已默认禁用；超 10 分钟无响应可跑 linbox-dac doctor）" >&2
 fi
 export WINEDEBUG="${WINEDEBUG:-fixme-all}"
 MAIN
@@ -553,4 +566,5 @@ echo "   ⚠ aarch64 目标仅能跑 ARM64 PE；普通 x86/x86_64 程序请用 x
 fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
 echo " v1.18: wrapper 已默认禁 Mono/Gecko 弹窗（建前缀不再卡死）；LINBOX_DAC_MONO_PROMPT=1 恢复"
+echo " v1.21: winedac 断线看门狗每 2 秒自动重连（任意启动顺序均可）；首次建前缀有进度提示"
 echo "=============================================="

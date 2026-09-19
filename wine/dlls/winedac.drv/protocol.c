@@ -37,6 +37,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(dac);
 static int dac_sock = -1;
 static pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char dac_exe_name[256];
+/* 连接代（v1.21）：每次握手成功 +1。window.c 据此判定桌面槽位是否
+ * 属于当前连接 —— 重连后必须重发 DESKTOP_ALLOC（bridge 侧槽位随旧
+ * 连接关闭已清空），否则新连接上 PRESENT 无 buffer → 永久黑屏。 */
+static unsigned int dac_conn_gen;
 
 int dac_connected(void)
 {
@@ -47,6 +51,25 @@ int dac_sock_fd(void)
 {
     return dac_sock;
 }
+
+unsigned int dac_connection_gen(void)
+{
+    return dac_conn_gen;
+}
+
+/* 关闭指定 socket；仅当它仍是当前连接时重置状态。
+ * 事件线程退出路径用：若看门狗已抢先把新连接放入 dac_sock，
+ * 不得把新连接误杀（v1.21）。 */
+void dac_discard_socket( int fd )
+{
+    pthread_mutex_lock( &send_mutex );
+    if (fd >= 0) close( fd );
+    if (dac_sock == fd) dac_sock = -1;
+    pthread_mutex_unlock( &send_mutex );
+}
+
+/* 内部版前置声明：调用方已持有 send_mutex（定义在文件后部） */
+static void dac_disconnect_locked(void);
 
 static int send_fds( int sock, const void *buf, size_t len, const int *fds, int fd_count )
 {
@@ -114,6 +137,9 @@ int dac_send_msg( uint32_t type, const void *payload, uint32_t len,
     else
         ret = write_all( dac_sock, &hdr, sizeof(hdr) );
     if (!ret && len) ret = write_all( dac_sock, payload, len );
+    if (ret) dac_disconnect_locked();   /* 发送失败即断（EPIPE/ECONNRESET）：
+                                         * 不置断则 dac_connected() 恒真，
+                                         * 看门狗永远不重连（v1.21） */
     pthread_mutex_unlock( &send_mutex );
 
     if (ret) WARN( "send msg %u failed: %s\n", type, strerror(errno) );
@@ -215,14 +241,20 @@ void dac_close_recv_fds( int *fds, int n )
         if (fds[i] >= 0) { close( fds[i] ); fds[i] = -1; }
 }
 
-void dac_disconnect(void)
+/* 内部版：调用方已持有 send_mutex（dac_send_msg 失败路径用） */
+static void dac_disconnect_locked(void)
 {
-    pthread_mutex_lock( &send_mutex );
     if (dac_sock >= 0)
     {
         close( dac_sock );
         dac_sock = -1;
     }
+}
+
+void dac_disconnect(void)
+{
+    pthread_mutex_lock( &send_mutex );
+    dac_disconnect_locked();
     pthread_mutex_unlock( &send_mutex );
 }
 
@@ -306,7 +338,8 @@ int dac_connect( const char *exe_name )
             {
                 struct dac_hello_ack *a = (struct dac_hello_ack *)ack;
                 if (len < sizeof(*a) || !a->ok) goto fail;
-                TRACE( "bridge backend=%u api=%u\n", a->backend, a->api_level );
+                TRACE( "bridge backend=%u api=%u gen=%u\n", a->backend, a->api_level, dac_conn_gen + 1 );
+                dac_conn_gen++;   /* 握手成功：连接代 +1（槽位重建判定） */
                 return 0;
             }
         }

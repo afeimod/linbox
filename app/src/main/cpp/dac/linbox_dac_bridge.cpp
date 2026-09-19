@@ -846,8 +846,17 @@ static void handle_desktop_present( int conn, const struct dac_present *present 
     if (present->damage_count && read_full( conn, &dmg, sizeof(dmg) ))
         return;
 
+    /* 呈现全程持 g_state_lock（v1.21）：与 UI 线程 nativeSetSurface
+     * （最小化/还原时重绑 Surface）及新连接替换旧连接的
+     * close_connection（accept 线程）互斥。socket 读取在锁外。 */
+    pthread_mutex_lock( &g_state_lock );
+
     slot = &g_slots[present->slot];
-    if (!slot->ahb) return;
+    if (!slot->ahb)
+    {
+        pthread_mutex_unlock( &g_state_lock );
+        return;
+    }
 
     if (g_backend == DAC_BACKEND_SF_DIRECT)
         attach_desktop_buffer_tracked( present->slot, -1,
@@ -858,13 +867,20 @@ static void handle_desktop_present( int conn, const struct dac_present *present 
     {
         /* NONE：无呈现面（纯后台运行） */
     }
+
+    pthread_mutex_unlock( &g_state_lock );
 }
 
 static struct vk_surface *find_or_create_surface( uint64_t id )
 {
     int i;
+    pthread_mutex_lock( &g_state_lock );   /* sc 创建与 nativeSetSurface 重绑互斥 */
     for (i = 0; i < 4; i++)
-        if (g_surfaces[i].id == id) return &g_surfaces[i];
+        if (g_surfaces[i].id == id)
+        {
+            pthread_mutex_unlock( &g_state_lock );
+            return &g_surfaces[i];
+        }
     for (i = 0; i < 4; i++)
         if (!g_surfaces[i].id)
         {
@@ -876,8 +892,10 @@ static struct vk_surface *find_or_create_surface( uint64_t id )
                 snprintf( name, sizeof(name), "linbox-vk-%llu", (unsigned long long)id );
                 g_surfaces[i].sc = p_ASC_create ? p_ASC_create( g_root_sc, name ) : NULL;
             }
+            pthread_mutex_unlock( &g_state_lock );
             return &g_surfaces[i];
         }
+    pthread_mutex_unlock( &g_state_lock );
     return NULL;
 }
 
@@ -944,6 +962,9 @@ static void handle_vk_present( const struct dac_present *present,
         ((int *)frame_fds)[0] = -1;   /* 所有权转移，防主循环误关 */
     }
 
+    /* 呈现全程持 g_state_lock（v1.21，理由同 handle_desktop_present） */
+    pthread_mutex_lock( &g_state_lock );
+
     if (sf->is_dmabuf)
     {
         int fd = (int)(intptr_t)sf->images[present->slot];
@@ -953,12 +974,14 @@ static void handle_vk_present( const struct dac_present *present,
                                                     : sf->width,
                          sf->format );
         send_vk_released( sf->id, present->slot, fence_fd );  /* blit 后立即可复用 */
+        pthread_mutex_unlock( &g_state_lock );
         return;
     }
 
     if (!sf->images[present->slot])
     {
         if (fence_fd >= 0) close( fence_fd );
+        pthread_mutex_unlock( &g_state_lock );
         return;
     }
 
@@ -971,6 +994,8 @@ static void handle_vk_present( const struct dac_present *present,
         /* AHB_CANVAS：DXVK 在低版本 API 不可直合，直接回执释放 */
         send_vk_released( sf->id, present->slot, -1 );
     }
+
+    pthread_mutex_unlock( &g_state_lock );
 }
 
 static void handle_vk_layer_pos( const struct dac_vk_layer_pos *pos )
@@ -991,6 +1016,7 @@ static void handle_vk_layer_pos( const struct dac_vk_layer_pos *pos )
 static void handle_vk_surface_del( uint64_t id )
 {
     int i, j;
+    pthread_mutex_lock( &g_state_lock );
     for (i = 0; i < 4; i++)
         if (g_surfaces[i].id == id)
         {
@@ -999,8 +1025,10 @@ static void handle_vk_surface_del( uint64_t id )
                 else close( (int)(intptr_t)g_surfaces[i].images[j] );
             if (g_surfaces[i].sc && p_ASC_release) p_ASC_release( g_surfaces[i].sc );
             memset( &g_surfaces[i], 0, sizeof(g_surfaces[i]) );
+            pthread_mutex_unlock( &g_state_lock );
             return;
         }
+    pthread_mutex_unlock( &g_state_lock );
 }
 
 /* 窗口标题包（wine → app）：hwnd + UTF-8 文本（缓冲 512B） */
@@ -1293,6 +1321,8 @@ extern "C" void Java_com_linbox_apps_dac_DacNative_nativeDisconnect( JNIEnv *env
         close( g_listen_fd );
         g_listen_fd = -1;
     }
+    /* SC/ANW 释放与呈现线程互斥（v1.21）：连接线程可能正在 attach buffer */
+    pthread_mutex_lock( &g_state_lock );
     if (g_root_sc)
     {
         if (p_ASC_release) p_ASC_release( g_root_sc );
@@ -1304,6 +1334,76 @@ extern "C" void Java_com_linbox_apps_dac_DacNative_nativeDisconnect( JNIEnv *env
         g_anw = NULL;
     }
     g_backend = DAC_BACKEND_NONE;
+    pthread_mutex_unlock( &g_state_lock );
+}
+
+/* v1.21：呈现目标重绑定 —— 最小化悬浮窗 / 还原页面 / 旋转时
+ * SurfaceView 会被销毁重建（同窗口内 reparent 也触发），socket 连接
+ * 与已导入 buffer 全部保留，仅替换 ANativeWindow / ASurfaceControl：
+ * - SF_DIRECT：重建根 SC + VK 子层 SC（buffer 下一帧 PRESENT 重新挂上，
+ *   attach_desktop_buffer_tracked 每帧都带 setVisibility/setZOrder）；
+ * - AHB_CANVAS：替换 g_anw（下一帧 lock/unlockAndPost 直用新窗口）。
+ * 调用时机（UI 线程，DacView.surfaceChanged）：与呈现路径共用
+ * g_state_lock 互斥。 */
+extern "C" jint Java_com_linbox_apps_dac_DacNative_nativeSetSurface( JNIEnv *env, jclass clazz,
+                                                                     jobject surface )
+{
+    ANativeWindow *anw;
+    int i;
+
+    pthread_mutex_lock( &g_state_lock );
+    if (g_backend == DAC_BACKEND_NONE || !g_anw)
+    {
+        pthread_mutex_unlock( &g_state_lock );
+        return -1;   /* 显示未激活：调用方重连或忽略即可 */
+    }
+
+    anw = ANativeWindow_fromSurface( env, surface );
+    if (!anw)
+    {
+        pthread_mutex_unlock( &g_state_lock );
+        return -1;
+    }
+
+    if (g_backend == DAC_BACKEND_SF_DIRECT)
+    {
+        if (g_root_sc && p_ASC_release) { p_ASC_release( g_root_sc ); g_root_sc = NULL; }
+        for (i = 0; i < 4; i++)
+        {
+            if (g_surfaces[i].sc && p_ASC_release) p_ASC_release( g_surfaces[i].sc );
+            g_surfaces[i].sc = NULL;
+        }
+    }
+
+    ANativeWindow_release( g_anw );
+    g_anw = anw;
+
+    if (g_backend == DAC_BACKEND_SF_DIRECT && p_ASC_createFromWindow)
+    {
+        g_root_sc = p_ASC_createFromWindow( g_anw, "linbox-dac-root" );
+        if (g_root_sc)
+        {
+            for (i = 0; i < 4; i++)
+            {
+                if (g_surfaces[i].id && p_ASC_create)
+                {
+                    char name[32];
+                    snprintf( name, sizeof(name), "linbox-vk-%llu",
+                              (unsigned long long)g_surfaces[i].id );
+                    g_surfaces[i].sc = p_ASC_create( g_root_sc, name );
+                }
+            }
+        }
+        else
+        {
+            LOGE( "rebind: ASC createFromWindow failed" );
+            g_backend = DAC_BACKEND_AHB_CANVAS;   /* 兜底：至少 CPU 路径还能出画面 */
+        }
+    }
+
+    pthread_mutex_unlock( &g_state_lock );
+    LOGI( "presentation surface rebound (minimize/restore)" );
+    return 0;
 }
 
 extern "C" void Java_com_linbox_apps_dac_DacNative_nativeSetTitleSink( JNIEnv *env, jclass clazz,

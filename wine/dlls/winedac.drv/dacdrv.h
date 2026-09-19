@@ -23,6 +23,8 @@
 extern int  dac_connect( const char *exe_name );
 extern void dac_disconnect(void);
 extern int  dac_connected(void);
+extern unsigned int dac_connection_gen(void);   /* 连接代：握手成功 +1（v1.21） */
+extern void dac_discard_socket( int fd );       /* 关指定 socket，仍为当前连接才重置（v1.21） */
 extern int  dac_send_msg( uint32_t type, const void *payload, uint32_t len,
                           const int *fds, int fd_count );
 extern int  dac_recv_msg( uint32_t *type, void *buf, uint32_t buf_size,

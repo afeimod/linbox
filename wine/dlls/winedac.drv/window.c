@@ -59,6 +59,14 @@ BOOL dac_WindowPosChanging( HWND hwnd, HWND insert_after, UINT swp_flags,
 struct dac_desktop dac_desktop = {0};
 static pthread_mutex_t desktop_cs = PTHREAD_MUTEX_INITIALIZER;
 
+/* v1.21 重连看门狗：bridge（DAC 窗口）晚于/早于 wine 启动、或中途被关，
+ * 均按最近请求的桌面尺寸每 2 秒自动重连 + 重建槽位。
+ * 旧实现只在 dac_CreateDesktop 等三处各试一次 → 任意启动顺序不对就永久黑屏。 */
+static uint32_t reconnect_w = 1280, reconnect_h = 720;
+static BOOL     watchdog_started;
+static pthread_mutex_t event_cs = PTHREAD_MUTEX_INITIALIZER;
+static BOOL     event_thread_alive;
+
 static pthread_mutex_t win_data_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct dac_win_data *win_data_context[32768];
 
@@ -370,9 +378,18 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
 {
     static BOOL tried;
     static struct timespec last_try;
+    /* 槽位所属连接代（v1.21）：重连后 bridge 侧槽位已随旧连接清空，
+     * 必须重发 DESKTOP_ALLOC，否则 PRESENT 无 buffer → 永久黑屏 */
+    static unsigned int slots_gen;
 
-    if (dac_desktop.ready && dac_desktop.width == width &&
-        dac_desktop.height == height) return TRUE;
+    reconnect_w = width;
+    reconnect_h = height;   /* 看门狗按最近请求的尺寸重试 */
+
+    /* 早退条件加 dac_connected() + 连接代判定：桥断开后 ready 虽仍为
+     * TRUE，也不能跳过重连/槽位重建（v1.20 及之前早退 → 黑屏根因①） */
+    if (dac_desktop.ready && dac_connected() &&
+        slots_gen == dac_connection_gen() &&
+        dac_desktop.width == width && dac_desktop.height == height) return TRUE;
 
     pthread_mutex_lock( &desktop_cs );
 
@@ -405,8 +422,12 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
 
     if (dac_connected())
     {
+        BOOL need_slots = !dac_desktop.ready ||
+                          dac_desktop.width != width ||
+                          dac_desktop.height != height ||
+                          slots_gen != dac_connection_gen();
         int i;
-        if (dac_desktop.ready)
+        if (dac_desktop.ready && need_slots)
         {
             for (i = 0; i < DAC_DESKTOP_MAX_SLOTS; i++)
             {
@@ -419,14 +440,18 @@ BOOL dac_desktop_ensure( uint32_t width, uint32_t height )
             }
             dac_desktop.ready = FALSE;
         }
-        dac_desktop.ready = desktop_create_slots( width, height );
+        if (need_slots)
+        {
+            dac_desktop.ready = desktop_create_slots( width, height );
+            slots_gen = dac_connection_gen();
+        }
         if (dac_desktop.ready)
-            TRACE( "desktop ready %ux%u\n", width, height );
+            TRACE( "desktop ready %ux%u gen %u\n", width, height, slots_gen );
     }
     pthread_mutex_unlock( &desktop_cs );
 
     if (!dac_desktop.ready)
-        WARN( "desktop %ux%u not ready (bridge 未连接)\n", width, height );
+        WARN( "desktop %ux%u not ready (bridge 未连接，看门狗每 2 秒重试)\n", width, height );
     return dac_desktop.ready;
 }
 
@@ -564,12 +589,40 @@ void dac_desktop_present( const RECT *damage )
 /* =====================================================================
  * 驱动窗口函数
  * =================================================================== */
+
+/* 重连看门狗（v1.21）：只在桌面进程（explorer /desktop=dac）启动。
+ * 别的进程（taskmgr 等）不创建虚拟桌面、不起看门狗 —— 单连接设计下
+ * 避免多进程连接互踢。 */
+static void *reconnect_watchdog( void *arg )
+{
+    (void)arg;
+    for (;;)
+    {
+        usleep( 2000000 );   /* 2s 一拍：失败重试 + 断线重连共用 */
+        if (!driver_ready) continue;
+        dac_desktop_ensure( reconnect_w, reconnect_h );
+    }
+    return NULL;
+}
+
 BOOL dac_CreateDesktop( const WCHAR *name, UINT width, UINT height )
 {
+    static pthread_t watchdog_tid;
+
     TRACE( "virtual desktop %ux%u\n", width, height );
     driver_ready = TRUE;
+    reconnect_w = width;
+    reconnect_h = height;
+    if (!watchdog_started)
+    {
+        watchdog_started = TRUE;
+        if (pthread_create( &watchdog_tid, NULL, reconnect_watchdog, NULL ))
+            watchdog_started = FALSE;
+        else
+            pthread_detach( watchdog_tid );
+    }
     if (!dac_desktop_ensure( width, height ))
-        ERR( "desktop init failed — LinBox DAC 窗口未开启？\n" );
+        ERR( "desktop init failed — LinBox DAC 窗口未开启（看门狗每 2 秒自动重试，先开 DAC 还是先跑 wine 均可）\n" );
     return TRUE;
 }
 
@@ -865,6 +918,7 @@ static void *event_thread_proc( void *arg )
     unsigned char buf[4096];
     uint32_t type, len;
     int fds[DAC_MAX_DMABUF_PLANES], fd_count = 0;
+    int myfd = dac_sock_fd();   /* 记录本线程服务的连接（退出时精准丢弃） */
 
     for (;;)
     {
@@ -882,15 +936,37 @@ static void *event_thread_proc( void *arg )
         dac_process_bridge_event( type, buf, len, fds, fd_count );
         dac_close_recv_fds( fds, fd_count );
     }
+
+    /* v1.21：桥断开（用户关 DAC 窗口/页面）→ 丢弃 socket、标记线程退出。
+     * 旧代码两个致命点：① socket 残留 → dac_connected() 恒真，永不重连
+     * （黑屏根因②）；② 槽位残留在旧连接上，重连后不重发 ALLOC。 */
+    dac_discard_socket( myfd );
+    pthread_mutex_lock( &event_cs );
+    event_thread_alive = FALSE;
+    pthread_mutex_unlock( &event_cs );
     return NULL;
 }
 
 void start_event_thread(void)
 {
     pthread_t tid;
+
+    /* 防双开（v1.21）：看门狗与 dac_desktop_ensure 竞争时不得起两个事件线程 */
+    pthread_mutex_lock( &event_cs );
+    if (event_thread_alive)
+    {
+        pthread_mutex_unlock( &event_cs );
+        return;
+    }
+    event_thread_alive = TRUE;
+    pthread_mutex_unlock( &event_cs );
+
     if (pthread_create( &tid, NULL, event_thread_proc, NULL ))
     {
         ERR( "failed to start event thread\n" );
+        pthread_mutex_lock( &event_cs );
+        event_thread_alive = FALSE;
+        pthread_mutex_unlock( &event_cs );
         return;
     }
     pthread_detach( tid );
