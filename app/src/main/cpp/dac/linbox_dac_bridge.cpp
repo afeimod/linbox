@@ -35,7 +35,10 @@
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
-#include <android/surface_control.h>
+/* surface_control.h 不在此处 include：bridge.h 按 __ANDROID_API__ 统一
+ * 管理（API<29 自备类型/枚举，API≥29 引入 NDK 头）—— 本文件若先无条件
+ * include 再遇 bridge.h 自备枚举，会在 NDK r24+ 低 API 目标下重定义
+ * （CI "redefinition of enumerator" 修复，v1.20）。 */
 #include <android/data_space.h>
 #include <sys/socket.h>
 #include <sys/stat.h>

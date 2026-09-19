@@ -6,7 +6,7 @@
  * ⚠️ v1.19 起本 .c 文件为遗留参考实现（v1.18 前的直链版），APK 构建
  * 只走 linbox_dac_bridge.cpp（API 26 目标 + API 29 符号运行时 dlsym，
  * 见 app/build.gradle.kts buildDacBridge* 任务与 .cpp 头注）。
- * 本文件直接链接 ASurfaceControl_*/ASurfaceTransaction_*（API 29 符号），
+ * 本文件直接链接 ASurfaceControl_* 与 ASurfaceTransaction_*（API 29 符号），
  * 若以 API<29 目标 ndk-build 出的 so 在 Android 8/9 上 dlopen 失败 ——
  * 正是 v1.19 修复的问题，请勿再用本文件出正式包。
  *

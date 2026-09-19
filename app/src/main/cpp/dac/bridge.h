@@ -13,7 +13,6 @@
 #include <stdint.h>
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
-#include <android/surface_control.h>
 
 /*
  * v1.19 低版本设备修复：
@@ -32,24 +31,42 @@
  *    绑定（linbox_dac_bridge.cpp 内 SF 符号解析段），设备 API<29 或
  *    符号缺失时自动降级 AHB_CANVAS。
  *
- * 编译目标为 API<29 时 NDK 的 surface_control.h 整体为空（内部
- * #if __ANDROID_API__ >= 29 门控），类型与常量在此自备 —— 仅 opaque
- * 指针 / 枚举值，无 ABI 风险（dlsym 函数签名由 .cpp 内指针类型给出，
- * const ARect& 传引用与平台 C 导出的传指针 ABI 一致）。
+ * v1.20 修复（CI：redefinition of enumerator）：
+ *
+ * API<29 目标下【不再 include】<android/surface_control.h>，类型与
+ * 枚举在此自备 ——
+ *  - NDK r24+：surface_control.h 即使在低 API 目标下也声明 opaque
+ *    类型与 VISIBILITY 枚举（仅函数声明门控），先 include 再自备必
+ *    触发 "redefinition of enumerator"；
+ *  - 旧 NDK：该头文件在低 API 目标下整体为空，include 与否无妨；
+ *  两种 NDK 统一为「不引入 + 自备」，dlsym 方案不受影响。
+ *
+ * ⚠ 枚举取值必须与官方 API 29 surface_control.h 严格一致：
+ *     ASURFACE_TRANSACTION_VISIBILITY_HIDE = 0
+ *     ASURFACE_TRANSACTION_VISIBILITY_SHOW = 1
+ *   v1.19 自备版曾写反（SHOW=0/HIDE=1）—— 若按反值编译出库，
+ *   API≥29 设备 SF 直合会把 surface 藏掉 → DAC 屏幕全黑。
+ *   函数签名（尤其 setVisibility 的 int8_t visibility）由 .cpp 内
+ *   dlsym 指针类型给出；const ARect& 传引用与平台 C 导出的传指针
+ *   ABI 一致，无 ABI 风险。
  */
 #if defined(__ANDROID_API__) && __ANDROID_API__ < 29
 
-typedef struct ASurfaceControl        ASurfaceControl;
-typedef struct ASurfaceTransaction    ASurfaceTransaction;
-typedef struct ASurfaceTransactionStats ASurfaceTransactionStats;
+typedef struct ASurfaceControl            ASurfaceControl;
+typedef struct ASurfaceTransaction        ASurfaceTransaction;
+typedef struct ASurfaceTransactionStats   ASurfaceTransactionStats;
 
 enum {
-    ASURFACE_TRANSACTION_VISIBILITY_SHOW = 0,
-    ASURFACE_TRANSACTION_VISIBILITY_HIDE = 1,
+    ASURFACE_TRANSACTION_VISIBILITY_HIDE = 0,
+    ASURFACE_TRANSACTION_VISIBILITY_SHOW = 1,
 };
 
 /* 变换常量（IDENTITY=0 等）直接传字面量：API 29 surface_control.h 的
  * 变换枚举名与取值随版本演进，不在此复制。 */
+
+#else  /* __ANDROID_API__ >= 29：NDK 头文件原生可用 */
+
+#include <android/surface_control.h>
 
 #endif /* __ANDROID_API__ < 29 */
 
