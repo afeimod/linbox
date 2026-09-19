@@ -72,6 +72,23 @@
 #     workflow 同步补上 v1.17 起就支持却从未接线的 GARM（安卓补丁版
 #     gpkg glibc，规避 seccomp 击杀 vanilla glibc 的 clone3/statx/rseq）。
 #
+#   v1.21.3 "wine: could not exec the wine loader" 修复（真机 2026-09 实测，
+#     v1.21.2 之后）：native wrapped 库全部加载成功、ntdll.so 也起来了，但
+#     wine loader 启动必先 re-exec 自己（ntdll loader.c __wine_main 的
+#     pre_exec() 在 x86_64 Linux 恒真 → execv(wine-preloader) 落空 → 回退
+#     execv(wine.real)）；wineserver / PE 子进程启动也全走 box64 的 my_execve
+#     hook —— hook 对 x86_64 ELF 的处理是 execve(bin/box64)，由内核按
+#     PT_INTERP 加载 box64。交叉编译 box64 的 PT_INTERP 是
+#     /lib/ld-linux-aarch64.so.1，安卓上不存在 → execve ENOENT → 内部
+#     exec 全灭。wrapper 首启是 "ld-linux --library-path box64" 直启（绕过
+#     PT_INTERP），这正是 "box64 自身能跑、内部 exec 全挂" 的差异根源。
+#     修法（Termux/Mobox 生态标准做法）：构建时 patchelf 把 box64 的
+#     interpreter 改指 LinBox 固定路径 $PREFIX/glibc/lib/ld-linux-aarch64.so.1
+#     （$PREFIX 为 LinBox 标准布局，部署后恒存在）；wrapper 部署时把
+#     GARM loader 复制到该路径，并 export LD_LIBRARY_PATH=sysroot-arm/lib
+#     （PT_INTERP 加载路径没有 --library-path 参数，靠它解析 box64 的
+#     libc.so.6 等依赖；guest 侧 box64 按 ELF class 跳过 aarch64 库不污染）。
+#
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
 #   TARGET=aarch64-glibc ./build_wine_dac.sh         # aarch64 交叉（grun arm64）
@@ -293,12 +310,13 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     fi
     if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 \
        || ! command -v cmake >/dev/null 2>&1 \
-       || ! command -v git >/dev/null 2>&1; then
-        echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git）..."
+       || ! command -v git >/dev/null 2>&1 \
+       || ! command -v patchelf >/dev/null 2>&1; then
+        echo "   安装交叉工具链（gcc-aarch64-linux-gnu / libc6-dev-arm64-cross / cmake / git / patchelf）..."
         _sudo=""; [ "$(id -u)" = "0" ] || _sudo="sudo"
         $_sudo apt-get update -qq || true
         $_sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git || true
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross cmake git patchelf || true
     fi
     command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "✗ 缺 aarch64-linux-gnu-gcc，无法构建自带 box64"; exit 1; }
     command -v cmake                 >/dev/null 2>&1 || { echo "✗ 缺 cmake，无法构建自带 box64"; exit 1; }
@@ -335,6 +353,21 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
         readelf -h "$BUILD_DIR/box64-build/box64" | grep -q "Machine:.*AArch64" \
             || { echo "✗ box64 产物不是 AArch64 ELF"; exit 1; }
         install -m 755 "$BUILD_DIR/box64-build/box64" "$OUTDIR/bin/box64"
+        # v1.21.3 修复 "wine: could not exec the wine loader"（真机 2026-09 实测）：
+        # wine loader 启动必先 re-exec 自己（pre_exec() 在 x86_64 Linux 恒真）；
+        # wineserver / PE 子进程启动也全走 box64 my_execve hook —— hook 对
+        # x86_64 ELF 的处理是 execve(bin/box64)，由内核按 PT_INTERP 加载。
+        # 交叉编译 box64 的 PT_INTERP 是 /lib/ld-linux-aarch64.so.1（安卓
+        # 不存在）→ ENOENT。这里把它改指 LinBox 固定路径（$PREFIX 为 LinBox
+        # 标准布局部署后恒存在），wrapper 部署时把 GARM loader 放到该路径。
+        LINBOX_INTERP="/data/user/0/com.linbox/files/usr/glibc/lib/ld-linux-aarch64.so.1"
+        command -v patchelf >/dev/null 2>&1 \
+            || { echo "✗ 缺 patchelf —— box64 PT_INTERP 无法修复，wine 运行时必挂 could not exec the wine loader"; exit 1; }
+        patchelf --set-interpreter "$LINBOX_INTERP" "$OUTDIR/bin/box64"
+        _interp="$(patchelf --print-interpreter "$OUTDIR/bin/box64" 2>/dev/null || echo '?')"
+        [ "$_interp" = "$LINBOX_INTERP" ] \
+            || { echo "✗ box64 PT_INTERP 设置失败（got=$_interp）"; exit 1; }
+        echo "   box64 PT_INTERP → $LINBOX_INTERP（wrapper 部署时保证就位）"
     fi
     # box64 自身的 glibc 闭包：严格按 DT_NEEDED 收集；
     # v1.17：GARM（安卓补丁版 glibc）优先 —— vanilla glibc 在安卓 App 域
@@ -478,9 +511,30 @@ fi
 # glibc 目录（libc.so 为 ld 链接脚本文本 → invalid ELF header）都会
 # 让 box64 启动即崩（v1.12 前真机实测失败原因）。
 export BOX64_LD_LIBRARY_PATH="$SYSLIB:$ROOT/lib/wine/x86_64-unix:$ROOT/lib/wine${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
-# 原生 LD_LIBRARY_PATH/LD_PRELOAD 一律清空：自带 box64 的原生依赖由
-# 私有 loader --library-path 提供；外部回退 box64 自带解释器自解析。
-unset LD_LIBRARY_PATH LD_PRELOAD
+# 原生 LD_PRELOAD 一律清空。LD_LIBRARY_PATH（v1.21.3）：自带 box64 场景
+# 指向 sysroot-arm —— box64 被 wine 内部 exec 时（loader re-exec /
+# wineserver / PE 子进程）由内核按 PT_INTERP 加载，此时没有
+# --library-path 参数，全靠 LD_LIBRARY_PATH 解析 box64 的 libc.so.6 等
+# glibc 依赖；guest（x86_64）侧 box64 会按 ELF class 跳过 aarch64 库，
+# 不受污染。外部回退 box64（bionic 等）仍保持清空（读到 glibc 路径有险）。
+unset LD_PRELOAD
+# v1.21.3 PT_INTERP 就位：构建时 box64 的 interpreter 已 patchelf 到
+# $PREFIX/glibc/lib/ld-linux-aarch64.so.1（LinBox 固定路径）。这里确保
+# 该文件存在且是本 tarball 的 GARM 安卓补丁版 loader（与 sysroot-arm
+# 同源）。⚠ 部署命令必须先于 export 且自带 LD_LIBRARY_PATH= 前缀 ——
+# bionic 命令（mkdir/cmp/cp/getprop）吃到 LD_LIBRARY_PATH 后会在
+# sysroot-arm 里搜到 glibc 的 libc.so 并误加载，当场崩（容器实测 127）。
+if [ -n "$LOADER" ] && [ -f "$SYSARM/ld-linux-aarch64.so.1" ]; then
+    LD_LIBRARY_PATH= mkdir -p "$PREFIX/glibc/lib" 2>/dev/null
+    LD_LIBRARY_PATH= cmp -s "$SYSARM/ld-linux-aarch64.so.1" "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" 2>/dev/null \
+        || LD_LIBRARY_PATH= cp -f "$SYSARM/ld-linux-aarch64.so.1" "$PREFIX/glibc/lib/ld-linux-aarch64.so.1" 2>/dev/null \
+        || echo "[wine-dac] ⚠ 无法部署 \$PREFIX/glibc/lib/ld-linux-aarch64.so.1 —— wine 内部 exec（wineserver/子进程）可能失败" >&2
+    # export 放部署之后：供 PT_INTERP loader 解析 box64 的 glibc 依赖；
+    # wine 链内 bionic 命令（am/dac_allocd）已各自显式清空，getprop 亦然。
+    export LD_LIBRARY_PATH="$SYSARM"
+else
+    unset LD_LIBRARY_PATH
+fi
 # v1.17：安卓 seccomp 双保险 —— 禁用 rseq 注册。gpkg 安卓版 glibc 本就
 # 已移除 rseq（此 tunable 对它无副作用）；若混入 vanilla glibc（≥2.35）
 # 启动即调 rseq，安卓 App 域 seccomp 直接 SIGSYS。
@@ -492,7 +546,7 @@ if [ -n "$LOADER" ]; then
     if ! "$LOADER" --library-path "$LDP" "$BOX64" -v >/dev/null 2>&1; then
         echo "[wine-dac] ⚠ 自检失败：私有 glibc 无法在本机启动 box64（Bad system call = 安卓 seccomp 拦截）" >&2
         echo "[wine-dac]   → 本 tarball 的 sysroot-arm 不是安卓补丁版 glibc，请换 v1.17+ CI 产物" >&2
-        echo "[wine-dac]   → 设备安卓版本：$(getprop ro.build.version.release 2>/dev/null || echo 未知)" >&2
+        echo "[wine-dac]   → 设备安卓版本：$(LD_LIBRARY_PATH= getprop ro.build.version.release 2>/dev/null || echo 未知)" >&2
     fi
 fi
 B64
@@ -616,4 +670,5 @@ fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
 echo " v1.18: wrapper 已默认禁 Mono/Gecko 弹窗（建前缀不再卡死）；LINBOX_DAC_MONO_PROMPT=1 恢复"
 echo " v1.21: winedac 断线看门狗每 2 秒自动重连（任意启动顺序均可）；首次建前缀有进度提示"
+echo " v1.21.3: box64 PT_INTERP 已修复 —— wine 内部 re-exec/wineserver/PE 子进程 exec 全链打通"
 echo "=============================================="
