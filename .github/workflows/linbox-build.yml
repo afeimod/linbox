@@ -345,12 +345,13 @@ jobs:
           ls -lh "$HOME/build_wine_dac/dist/"
           tb=$(ls "$HOME/build_wine_dac/dist/"*.tar.xz | head -1)
           echo "tarball: $tb"
-          # 设备端自举结构：bin/wine(wrapper) + bin/wine.real(真身) +
-          # sysroot/lib 动态 loader + winedac.so，四者缺一不可
-          for pat in "bin/wine$" "bin/wine\.real$" "sysroot/lib/ld-linux" "winedac\.so"; do
+          # 设备端自举结构（v1.21.3 命名）：bin/wine(wrapper) + bin/wine64(starter
+          # 真身) + bin/wine64-preloader(ntdll 二次 exec) + bin/wineserver(真实 ELF，
+          # box64 posix_spawn 接管) + sysroot/lib 动态 loader + winedac.so
+          for pat in "bin/wine$" "bin/wine64$" "bin/wine64-preloader$" "bin/wineserver$" "sysroot/lib/ld-linux" "winedac\.so"; do
             tar -tJf "$tb" | grep -qE "$pat" || { echo "✗ tarball 缺 $pat"; exit 1; }
           done
-          echo "✓ 自举 tarball 结构完整（wrapper + wine.real + sysroot + winedac.so）——安卓真机可直接执行"
+          echo "✓ 自举 tarball 结构完整（wine wrapper + wine64 + wine64-preloader + wineserver ELF + sysroot + winedac.so）——安卓真机可直接执行"
           if [ "$WINE_TARGET" = "x86_64-linux" ]; then
             # v1.12：自带 box64 + 私有 aarch64 glibc 闭包（invalid ELF header 修复）
             for pat in "bin/box64$" "sysroot-arm/lib/ld-linux-aarch64\.so\.1" "sysroot-arm/lib/libc\.so\.6"; do

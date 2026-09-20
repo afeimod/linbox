@@ -72,33 +72,35 @@
 #     workflow 同步补上 v1.17 起就支持却从未接线的 GARM（安卓补丁版
 #     gpkg glibc，规避 seccomp 击杀 vanilla glibc 的 clone3/statx/rseq）。
 #
-#   v1.21.3 建前缀静默退出修复（真机 2026-09 实测）：库加载全部通过后，
-#     wine 打印 "created the configuration directory" 即无声退出（无任何
-#     错误，终端直接回到提示符）。根因链（wine 9.2 源码级定位）：
-#     ① ntdll 的 server_init_process → start_server() 用 posix_spawn 拉起
-#       bin/wineserver，随后 waitpid 等它退出：退出码 2 = 锁被占（正常
-#       重试），其它非 0 = server 启动失败 → exit(status) 静默退出；
-#     ② bin/wineserver 是 "#!/system/bin/sh" 的 shell 自举 wrapper —— 内核
-#       经 shebang 调起 bionic 的 /system/bin/sh；
-#     ③ wine/box64 链路环境里带着 glibc 侧的 LD_LIBRARY_PATH（指向
-#       sysroot-arm，其中 v1.21.2 起含 soname=libc.so.6 的 arm64 glibc
-#       libc.so 副本）—— bionic linker 为 sh 解析 DT_NEEDED "libc.so" 时
-#       命中该文件（soname 不匹配）→ verneed 校验失败：
-#         CANNOT LINK EXECUTABLE "/system/bin/sh": cannot find "libc.so"
-#           from verneed[0] in DT_NEEDED list for "/system/bin/sh"
-#       sh 秒退 → start_server 得非 0 → 静默退出。
-#     修法（双管齐下，见 6a2/6a3）：
-#     A) bin/wineserver 改用「静态 arm64 原生 ELF 包装器」
-#       （wine/shim/linbox_wine_shim.c，按 /proc/self/exe 自名定位
-#       <name>.real，经私有 loader + box64 启动真身）—— 内核直接 exec、
-#       无解释器、无动态依赖、对环境零敏感；wine 内部 spawn 与终端
-#       直接调用（wineserver -k 等）同路径。交叉工具链缺失时自动回退
-#       旧 shell wrapper（内部 spawn 场景会复现旧问题）。
-#     B) 移除 v1.21.2 的 sysroot-arm/libc.so、libm.so 回退名副本 ——
-#       它们恰是 ③ 的 bionic 致命污染源（真实 stub 库自 v1.21.2 起已
-#       无条件收集，ALTNAME 回退场景实际不复存在；而只要 bionic 家族
-#       进程可能继承 LD_LIBRARY_PATH=sysroot-arm，无版本号 soname
-#       文件就是雷）。
+#   v1.21.3 wine 启动链与 wineserver 拉起修复（真机 2026-09 实测）：
+#     ① "wine: could not exec the wine loader"（ntdll 的 __wine_main
+#     fatal_error）。根因链：wine 9.2 --enable-archs=i386,x86_64 构建的
+#     starter 名为 bin/wine、preloader 名为 bin/wine-preloader；
+#     ntdll preloader_exec 按"loader basename 是否以 64 结尾"选 preloader
+#     文件名，且 exec 前置逻辑依赖 /proc/self/exe（box64 下指向 box64 自身
+#     所在目录）。tarball 把 starter 改名 wine.real 后：basename 不以 64
+#     结尾 → ntdll 找 wine-preloader；而 box64 的 execve/execv 拦截只有
+#     在目标路径以 "wine64-preloader" 结尾时才走"跳过 preloader 直跑
+#     wine 本体"的官方通道 —— 两条命名约定错位，starter → preloader 的
+#     exec 只能落到脆弱的"box64 直接执行 preloader"回退链，真机两跳全败。
+#     修法：starter 原位改名为 bin/wine64（basename 以 64 结尾）——
+#       ntdll 选 wine64-preloader；box64 命中 skip_first 通道，直接
+#       re-exec `box64 bin/wine64 ...`；新进程 basename "wine64" 又触发
+#       box64 的 "Wine64 detected"（地址空间 prereserve + wine 专项处理）；
+#       WINELOADERNOEXEC=1 随环境继承，ntdll 不再二次 exec。wrapper 对外
+#       仍叫 bin/wine（用户接口不变），内部 REAL=$DIR/wine64。
+#     ② "posix_spawn(.../bin/wineserver) IsX64=0" → 落回安卓原生 spawn →
+#     /system/bin/sh 被拉起即 "CANNOT LINK EXECUTABLE ... cannot find
+#     libc.so from verneed[0]"（环境被访客侧库路径污染）。根因：wineserver
+#     曾被包成 shell wrapper，box64 的 posix_spawn 拦截对脚本
+#     FileIsX64ELF=0 不接管。修法：bin/wineserver 保持真实 x86_64 ELF
+#     （ntdll exec_wineserver 固定 posix_spawn /proc/self/exe 同目录的
+#     wineserver，与自带 box64 同在 bin/）→ IsX64=1 → box64 直接接管转译，
+#     原生 sh 永不被拉起。wineboot 保留 wrapper（其内部 wineboot 是 PE，
+#     经 NtCreateUserProcess，不走 unix posix_spawn）。
+#     ③ preloader 双名兜底：bin/wine-preloader 与 bin/wine64-preloader
+#     缺哪个补哪个（wine 9.2 双架构构建只装前者；纯 win64 构建只装后者），
+#     保证 ntdll 无论按哪个名字查找都能命中。
 #
 # 用法（Ubuntu x86_64 主机 / GitHub Actions runner 均可）：
 #   ./build_wine_dac.sh                              # 默认 x86_64-linux
@@ -410,16 +412,16 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
             echo "  ⚠ glibc stub $_stub 无法收集（GARM/交叉 sysroot 均无）—— box64 wrapped 可能初始化失败"
         fi
     done
-    # v1.21.3：不再放置 libc.so / libm.so 回退名副本（v1.21.2 的 ALTNAME
-    # 防御）—— 真实 stub 库（libpthread.so.0 等）上面已无条件收集，ALTNAME
-    # 回退场景实际不复存在；而无版本号 soname 文件是 bionic 致命污染源：
-    # wine/box64 链路环境的 LD_LIBRARY_PATH 若指向 sysroot-arm（box64 进程
-    # 链实测存在该泄漏），bionic 家族进程（/system/bin/sh、am、app_process…）
-    # 解析 DT_NEEDED "libc.so" 时会命中 arm64 glibc 的 libc.so（soname 是
-    # libc.so.6）→ verneed 校验失败 → "CANNOT LINK EXECUTABLE ... cannot
-    # find \"libc.so\" from verneed[0]" → 建前缀静默退出（真机 2026-09 实测）。
-    # sysroot-arm 只保留带版本号的 soname 文件 —— bionic 按名搜索不会误配，
-    # 未命中后自然回退 /system/lib64 的真 bionic 库。
+    # ALTNAME 防御：box64 wrapped libpthread/libm 的回退 dlopen 名是
+    # "libc.so"/"libm.so"（无版本号）。glibc 体系没有这两个 soname —— 在
+    # sysroot-arm 各放一份 .6 的内容副本（soname 不变，loader 按 DT_NEEDED
+    # 精确名解析不会误用；仅兜底 dlopen 命中）。零成本消除这类回退失败。
+    if [ -f "$SYSARM/libc.so.6" ] && [ ! -f "$SYSARM/libc.so" ]; then
+        cp -L "$SYSARM/libc.so.6" "$SYSARM/libc.so" 2>/dev/null || true
+    fi
+    if [ -f "$SYSARM/libm.so.6" ] && [ ! -f "$SYSARM/libm.so" ]; then
+        cp -L "$SYSARM/libm.so.6" "$SYSARM/libm.so" 2>/dev/null || true
+    fi
     # glibc 动态 loader 本体（--library-path 直启用）；GARM（安卓版）优先
     _ldarm=""
     [ -n "$GARM" ] && [ -f "$GARM/ld-linux-aarch64.so.1" ] && _ldarm="$GARM/ld-linux-aarch64.so.1"
@@ -429,44 +431,12 @@ if [ "$TARGET" = "x86_64-linux" ] && [ "${BUILD_BUNDLED_BOX64:-1}" = "1" ]; then
     echo "   自带 box64：$(du -h "$OUTDIR/bin/box64" | cut -f1)；sysroot-arm/lib：$(ls -1 "$SYSARM" | wc -l) 个文件"
 fi
 
-# ---- 6a3.（仅 x86_64 目标）bin/wineserver 改用静态 arm64 原生 ELF 包装器 ----
-# v1.21.3：wine.real 经 posix_spawn 拉起 bin/wineserver 建 wine server；
-# shell wrapper 会被内核经 shebang 调起 bionic /system/bin/sh —— 在 wine
-# 链路环境下 bionic linker verneed 校验失败秒退（详见文件头 v1.21.3），
-# start_server waitpid 得非 0 → 静默退出。静态 ELF 包装器无解释器、无
-# 动态依赖、对环境零敏感，wine 内部 spawn 与终端直调（wineserver -k）
-# 走同一条路径。交叉工具链缺失（BUILD_BUNDLED_BOX64=0 的本地快速打包
-# 等）时跳过 → 下方 6b 回退生成旧 shell wrapper。
-SHIM_WINESERVER=0
-if [ "$TARGET" = "x86_64-linux" ] && [ -f "$OUTDIR/bin/wineserver" ] \
-   && command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-    echo ">> 6a3. 构建 bin/wineserver 静态 arm64 包装器（v1.21.3）"
-    _shim_src="$SCRIPT_DIR/shim/linbox_wine_shim.c"
-    if [ ! -f "$_shim_src" ]; then
-        echo "   ⚠ 缺 $_shim_src —— 回退 shell wrapper"
-    else
-        mv "$OUTDIR/bin/wineserver" "$OUTDIR/bin/wineserver.real"
-        if aarch64-linux-gnu-gcc -static -O2 -s \
-            -o "$OUTDIR/bin/wineserver" "$_shim_src" 2>"$BUILD_DIR/shim-build.log" \
-            && [ -x "$OUTDIR/bin/wineserver" ]; then
-            if readelf -h "$OUTDIR/bin/wineserver" | grep -q "Machine:.*AArch64" \
-               && ! readelf -l "$OUTDIR/bin/wineserver" 2>/dev/null | grep -q "INTERP"; then
-                SHIM_WINESERVER=1
-                echo "   ✓ bin/wineserver：静态 AArch64 ELF（无解释器依赖）"
-            else
-                echo "   ⚠ 产物非静态 AArch64（日志: $BUILD_DIR/shim-build.log）—— 回退 shell wrapper"
-                mv "$OUTDIR/bin/wineserver.real" "$OUTDIR/bin/wineserver"
-            fi
-        else
-            echo "   ⚠ shim 编译失败（日志: $BUILD_DIR/shim-build.log）—— 回退 shell wrapper"
-            mv "$OUTDIR/bin/wineserver.real" "$OUTDIR/bin/wineserver"
-        fi
-    fi
-fi
-
 echo ">> 6b. 生成自举 wrapper（boot=$BOOT_MODE）"
-emit_wrapper() { # $1=名字  $2=1 表示 wine 主入口（附 DAC 自动拉起）
-    local name="$1" main="$2"
+# emit_wrapper <对外名> <主入口0/1> [真实ELF名，缺省<对外名>.real]
+# v1.21.3：wine 主入口的真实 ELF 名固定为 wine64（见文件头：ntdll 按
+# basename 尾 "64" 选 preloader，box64 也只对 wine64-preloader 走直跳通道）
+emit_wrapper() { # $1=名字  $2=1 表示 wine 主入口（附 DAC 自动拉起）  $3=真实ELF名
+    local name="$1" main="$2" realname="${3:-${1}.real}"
     {
         cat <<'HDR'
 #!/system/bin/sh
@@ -480,7 +450,7 @@ HDR
 DIR=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 ROOT=$(dirname "$DIR")
 PATHS
-        echo "REAL=\"\$DIR/${name}.real\""
+        echo "REAL=\"\$DIR/$realname\""
         cat <<'CHECKS'
 SYSLIB="$ROOT/sysroot/lib"
 die() { echo "[wine-dac] ✗ $*" >&2; exit 1; }
@@ -521,6 +491,13 @@ LOADER=""
 BOX64=""
 if [ -n "$BOX64_BIN" ] && [ -x "$BOX64_BIN" ]; then
     BOX64="$BOX64_BIN"
+    # v1.21.3 防呆：wine 内部按 /proc/self/exe 所在目录（= box64 目录）
+    # 推导 wineserver/preloader 路径 —— 外部 box64 与 wine 不同目录时
+    # 该推导会指向错误位置，wineserver 拉起 / ntdll 二次 exec 都会乱。
+    if [ "$(dirname "$BOX64")" != "$DIR" ]; then
+        echo "[wine-dac] ⚠ BOX64_BIN 指向外部 box64（$BOX64）—— 不与本目录 wine64/wineserver 同目录" >&2
+        echo "[wine-dac]   ntdll 按 box64 所在目录推导 wine 组件路径，建议改用 $DIR/box64" >&2
+    fi
 elif [ -x "$DIR/box64" ]; then
     BOX64="$DIR/box64"
     if [ -x "$SYSARM/ld-linux-aarch64.so.1" ]; then
@@ -529,6 +506,7 @@ elif [ -x "$DIR/box64" ]; then
     fi
 elif command -v box64 >/dev/null 2>&1; then
     BOX64="$(command -v box64)"
+    echo "[wine-dac] ⚠ 使用 PATH 中的外部 box64（$BOX64）—— 应保证与本目录 wine64/wineserver 同目录，否则 wine 内部组件推导会乱" >&2
 elif [ -x "$PREFIX/bin/box64" ]; then
     BOX64="$PREFIX/bin/box64"
 elif [ -x /data/data/com.termux/files/usr/bin/box64 ]; then
@@ -651,25 +629,54 @@ EXECB64
     chmod +x "$OUTDIR/bin/$name"
 }
 
-# v1.21.3：bin/wineserver 已被 6a3 换成静态 arm64 shim 时不再生成
-# shell wrapper（shim 本身就是内核可直接 exec 的自举入口）
-_SHELL_WRAP_LIST="wine wineboot winecfg msiexec reg regsvr32"
-if [ "$SHIM_WINESERVER" != 1 ]; then
-    _SHELL_WRAP_LIST="wine wineserver $_SHELL_WRAP_LIST"
-fi
-for _n in $_SHELL_WRAP_LIST; do
+# v1.21.3 命名策略（详见文件头）：
+#   wine       → starter ELF 改名 bin/wine64（basename 以 "64" 结尾）：
+#                ntdll 选 wine64-preloader、box64 走 skip_first 直跳通道、
+#                "Wine64 detected" prereserve 全部命中；wrapper 仍叫 bin/wine
+#   wineserver → 保持真实 x86_64 ELF（ntdll exec_wineserver 固定 posix_spawn
+#                /proc/self/exe 同目录的它；wrapper 脚本会让 box64 的
+#                posix_spawn 拦截 IsX64=0 失守，落回安卓原生 spawn 被 sh 坑）
+#   其余       → 改名 *.real + wrapper（纯人工工具，无内部 spawn）
+for _n in wine wineserver wineboot winecfg msiexec reg regsvr32; do
     _f="$OUTDIR/bin/$_n"
     [ -f "$_f" ] || continue
     [ "$(head -c 4 "$_f" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || continue
-    mv "$_f" "$_f.real"
-    if [ "$_n" = wine ]; then emit_wrapper "$_n" 1; else emit_wrapper "$_n" 0; fi
-    echo "   + bin/$_n → wrapper → ${_n}.real"
+    if [ "$_n" = wine ]; then
+        mv "$_f" "$OUTDIR/bin/wine64"
+        emit_wrapper "$_n" 1 wine64
+        echo "   + bin/wine → wrapper → bin/wine64"
+    elif [ "$_n" = wineserver ]; then
+        chmod +x "$_f" 2>/dev/null || true
+        echo "   + bin/wineserver 保持真实 ELF（box64 posix_spawn 直接接管，IsX64=1）"
+    else
+        mv "$_f" "$_f.real"
+        emit_wrapper "$_n" 0
+        echo "   + bin/$_n → wrapper → ${_n}.real"
+    fi
 done
-if [ "$SHIM_WINESERVER" = 1 ]; then
-    echo "   + bin/wineserver → 静态 arm64 shim → wineserver.real（v1.21.3）"
+
+# v1.21.3 preloader 双名兜底：ntdll preloader_exec 按 loader basename
+# 是否以 "64" 结尾二选一（wine64 → wine64-preloader / 其余 → wine-preloader）。
+# wine 9.2 --enable-archs=i386,x86_64 构建只装 wine-preloader；纯 win64
+# 构建只装 wine64-preloader —— 两个名字都备齐，查找哪个都能命中。
+_pl64="$OUTDIR/bin/wine64-preloader"
+_pl32="$OUTDIR/bin/wine-preloader"
+if [ ! -f "$_pl64" ] && [ -f "$_pl32" ]; then
+    cp "$_pl32" "$_pl64"
+    echo "   + 复制 wine-preloader → wine64-preloader（双名兜底）"
+elif [ ! -f "$_pl32" ] && [ -f "$_pl64" ]; then
+    cp "$_pl64" "$_pl32"
+    echo "   + 复制 wine64-preloader → wine-preloader（双名兜底）"
 fi
-[ -f "$OUTDIR/bin/wine" ] && [ -f "$OUTDIR/bin/wine.real" ] \
-    || { echo "✗ bin/wine 自举 wrapper 生成失败"; exit 1; }
+
+# v1.21.3 产物自检：四个关键文件缺一不可
+[ -f "$OUTDIR/bin/wine" ] && [ -f "$OUTDIR/bin/wine64" ] \
+    || { echo "✗ bin/wine wrapper / bin/wine64 starter 生成失败"; exit 1; }
+[ -f "$OUTDIR/bin/wine64-preloader" ] \
+    || { echo "✗ 缺 bin/wine64-preloader（ntdll 二次 exec 必需，见 v1.21.3 说明）"; exit 1; }
+[ -f "$OUTDIR/bin/wineserver" ] \
+    && [ "$(head -c 4 "$OUTDIR/bin/wineserver" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] \
+    || { echo "✗ bin/wineserver 不是真实 x86_64 ELF（posix_spawn IsX64 识别必需）"; exit 1; }
 
 # ---- 7. 打包 ----
 mkdir -p "$BUILD_DIR/dist"
@@ -688,11 +695,9 @@ fi
 echo " 验证: lib/wine/*/winedac.so 存在 → linbox-dac doctor"
 echo " v1.18: wrapper 已默认禁 Mono/Gecko 弹窗（建前缀不再卡死）；LINBOX_DAC_MONO_PROMPT=1 恢复"
 echo " v1.21: winedac 断线看门狗每 2 秒自动重连（任意启动顺序均可）；首次建前缀有进度提示"
-if [ "$SHIM_WINESERVER" = 1 ]; then
-echo " v1.21.3: bin/wineserver 为静态 arm64 shim（wineserver -k 可直调；"
-echo "          wine 内部 spawn 不再经 bionic shell，建前缀静默退出已修）"
-else
-echo " v1.21.3: ⚠ bin/wineserver 为 shell wrapper（本次构建无交叉工具链）——"
-echo "          建前缀场景需静态 shim，请在 CI 重新构建"
-fi
+echo " v1.21.3: starter 真身改名为 bin/wine64（ntdll/box64 preloader 命名约定对齐，"
+echo "   修 \"could not exec the wine loader\"）；bin/wineserver 保持真实 ELF"
+echo "   （box64 posix_spawn IsX64=1 直接接管，修 /system/bin/sh 链接失败）；"
+echo "   wine-preloader / wine64-preloader 双名兜底。人工跑 wineserver 用："
+echo "   \$HOME/$OUT/bin/box64 \$HOME/$OUT/bin/wineserver（或让 wine 自动拉起）"
 echo "=============================================="
