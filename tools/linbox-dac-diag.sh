@@ -56,24 +56,8 @@ echo "[2] wine tarball 自举结构（$HOME/wine-dac-9.2-x86_64）"
 WT="$HOME/wine-dac-9.2-x86_64"
 HAVE_NEW=0
 if [ -d "$WT/bin" ]; then
-    # v1.21.3：starter 真身改名 wine64（ntdll/box64 命名约定），兼容旧版 wine.real
-    if [ -f "$WT/bin/wine64" ]; then
-        ok "bin/wine64 存在（v1.21.3+ starter 真身）"
-    elif [ -f "$WT/bin/wine.real" ]; then
-        bad "bin/wine64 缺失，检测到旧版 bin/wine.real —— v1.21.3 前命名会踩 ntdll/box64 preloader 错位，请整体解压新版 tarball"
-    else
-        bad "bin/wine64 缺失（bin/wine 自举 wrapper 已生成？）——请整体解压新版"
-    fi
-    if [ -f "$WT/bin/wine64-preloader" ]; then
-        ok "bin/wine64-preloader 存在（ntdll 二次 exec 必需）"
-    else
-        bad "bin/wine64-preloader 缺失——旧版 tarball，请整体解压 v1.21.3+"
-    fi
-    if [ -f "$WT/bin/wineserver" ] && [ "$(head -c 4 "$WT/bin/wineserver" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]; then
-        ok "bin/wineserver 为真实 ELF（box64 posix_spawn 可接管，IsX64=1）"
-    else
-        bad "bin/wineserver 非 ELF/缺失——旧版 tarball（wrapper 化会致 IsX64=0 → sh 链接失败），请整体解压 v1.21.3+"
-    fi
+    [ -f "$WT/bin/wine.real" ] && ok "bin/wine.real 存在（自举 wrapper 已生成）" \
+        || bad "bin/wine.real 缺失——旧版 tarball（wrapper 生成前），请整体解压新版"
     if [ -x "$WT/bin/box64" ]; then
         ok "bin/box64 自带（v1.12+ 自举 tarball）"
         HAVE_NEW=1
