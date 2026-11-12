@@ -1,0 +1,2240 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# ============================================================
+# linbox-wine v2.12 —— 基线恢复版（v2.3 语义 + 纯日志）
+# 2026-10-27：回滚 v2.4~v2.11 全部行为改动（会话日志 tee 接管、zink GL
+# 默认、wineboot 前置善后/残缺前缀清理、模拟器 DLL 预置、SONAME 运行时
+# 自愈、堆打标探测等），逐字节恢复 v2.3（ad214ca —— 加日志之前可正常
+# 构建前缀的实证基线）的执行语义；在此之上仅增加【纯日志】。
+# 纯日志硬约束（全部满足，后续改动不得违反）：
+#   1. 不重定向 stdio —— v2.4 的 exec > >(tee ...) 2>&1 已实证为回归源，
+#      永久禁止
+#   2. 不新增/修改任何导出环境变量 —— wine 看到的环境与 v2.3 完全一致
+#      （LINBOX_SESSION_LOG 由 App 侧传入，wine/bash 均不读它）
+#   3. 不清理前缀、不预置 DLL、不动注册表逻辑 —— 全部维持 v2.3 原样
+#   4. 不改 exec 结构/目标 —— wineboot 仍直连 exec wineboot 二进制
+#   5. log() 仅 >> 追加（每次写完即关 fd，不向 exec 后的 wine 泄漏文件
+#      描述符）；LINBOX_SESSION_LOG 未设置时 log() 完全空转，终端用法
+#      零影响
+# ============================================================
+# linbox-wine v2.3 — LinBox 容器 Wine 启动器（bionic rootfs / X11）
+# v2.3 变更：ensure_emulate_modeset —— 自动写入 wine 注册表
+#            HKCU\Software\Wine\X11 Driver\EmulateModeset=Y。
+#            LinBox 的 X 服务不支持 RandR 动态调分辨率（走 .linbox-x11-res
+#            握手文件），wine 10+ 的 x11drv 却在 explorer 初始化显示设置时
+#            调 RandR → NtUserChangeDisplaySettings 返回 -2 → 模式表没进
+#            注册表 → 游戏 NtUserEnumDisplaySettings 报 "display mode not
+#            found" → D3D 设备创建失败弹错（设备日志 CubeMap.exe 实证，
+#            即"所有游戏运行 exe 报错"的根因）。EmulateModeset 是 wine
+#            上游为无 RandR 环境准备的官方开关，开启后模式切换虚拟化、
+#            枚举返回当前模式。
+#            另：--debug 诊断模式（WINEDEBUG=+seh,+module,err+vulkan,
+#            err+wgl）；bionic 下不再导出 LC_ALL（消除 setlocale 噪音）；
+#            旧版内置 hangover 兜底时给出显式升级提示。
+# ★ 隔离版（assets 分发，App 启动时覆盖安装到 rootfs/usr/bin）★
+# ------------------------------------------------------------
+# 职责：
+#   1. 解析容器（~/.linbox/containers/<name>）与 WINEPREFIX
+#   2. 全量环境隔离 —— 容器运行不受 Termux（linbox 终端）数据环境
+#      影响：PREFIX/HOME/TMPDIR/LD_LIBRARY_PATH/LANG/音频/XDG 全部
+#      切换到 rootfs 自己的一套，并清洗终端侧注入的残留变量
+#   3. 音频自持 —— 优先拉起 rootfs 自带 PulseAudio（unix socket，
+#      module-sles-sink 直连 Android 音频），不挂靠 Termux 侧 4713
+#   4. 依容器配置与 wine 二进制 ELF 架构自动选后端：
+#        arm64ec  : aarch64 wine 直接原生运行（new WoW64，无需模拟器）
+#        box64    : box64 + x86_64 wine（/usr/opt/<wine>，主力路径）
+#        hangover : 旧版兼容（aarch64 wine 在 /usr/opt/bin，qemu 模拟）
+#        fexcore  : FEX-Emu（FEXInterpreter）+ x86_64 wine
+#        native   : x86_64 设备直接运行（无模拟器）
+#      后端识别按 $WINE_DIR/bin/wine 的 ELF 头（e_machine）自动判定：
+#      bionic-arm64ec 构建与 bionic-x86_64 构建装在任意槽位均可直接用
+#   5. X 服务自启（v2.1 核心）：启动 wine 前检查 X socket，缺失则
+#      后台拉起内置 termux-x11（与 linbox-x11 同源），DISPLAY 一律
+#      强制 :1（LINBOX_DISPLAY 可覆盖）—— 终端里直接跑
+#        wine notepad
+#      即可出画面，不再需要先手敲 linbox-x11 :1 && env DISPLAY=:1
+#   5. Wine 多版本：容器 wine= 选 /usr/opt/<name>（linbox-container
+#      wine-list 可见；空 = 全局 default_wine，再空 = /usr/opt/wine）
+#   6. 显示模式 dmode（对齐 glibc-runner -d/-v/-f）：
+#        off : 跟随 X11 窗口（native，桌面会话默认）
+#        d   : 固定 X 屏幕分辨率（-d，游戏真实全屏渲染 + 贴合拉伸）
+#        v   : wine 虚拟桌面 explorer /desktop（-v，DDraw 老游戏）
+#        f   : 强制窗口直出（-f，清除注册表 wine 蓝底桌面）
+#   7. 首次运行自动 wineboot -i 初始化前缀
+#
+# 用法：
+#   linbox-wine [--container <name>] <wine 参数...>
+#   linbox-wine --list-backends
+#   环境变量 LINBOX_CONTAINER=<name> 可代替 --container
+#   rootfs/usr/bin/wine|winecfg|wineboot|regedit 均为本脚本的包装器
+#
+# 显示（重要）：本 rootfs 为 X11 方案。X 服务为 LinBox 内置
+# termux-x11/libXlorie，unix socket 在 App 侧
+#   /data/data/com.linbox/files/usr/tmp/.X11-unix/Xn
+# rootfs 内 libxcb/xtrans/libX11 已按该路径打补丁，因此只需
+# 设好 DISPLAY —— 一律强制 DISPLAY=:1（LINBOX_DISPLAY 可覆盖）。
+# v2.1 起 X 服务未运行时由本脚本自动拉起（socket 探测），
+# 用户不再需要先手敲 linbox-x11 :1。
+# ============================================================
+
+# ---------- 基础路径（与 bionic-rootfs/default.conf 一致） ----------
+RFS_ROOT="/data/data/com.linbox/files/rootfs"
+RFS_USR="$RFS_ROOT/usr"
+APP_PREFIX="/data/data/com.linbox/files/usr"
+CONT_ROOT="$RFS_ROOT/home/.linbox/containers"
+CONF_GLOBAL="$RFS_USR/etc/linbox/container.conf"
+X11_SOCK_DIR="$APP_PREFIX/tmp/.X11-unix"
+LOG_DIR="$CONT_ROOT/logs"
+
+version() { echo "linbox-wine 2.17.0 (v3.3.20 全语义：zip/tar 驱动包安装 + wrapper 栈 ADRENOTOOLS 四件套激活 + android 驱动自动路由 + AppDefaults 垃圾注册表清除)"; }
+
+# ---------- 纯日志（v2.12 唯一新增的执行代码） ----------
+# 仅当 App 会话传入 LINBOX_SESSION_LOG（可写文件路径）时生效；终端直跑
+# 或未传时完全空转。log() 只向文件追加一行，不写 stdout/stderr，
+# 不碰任何环境变量与前缀状态 —— 见文件头“纯日志硬约束”。
+LINBOX_LOG_FILE="${LINBOX_SESSION_LOG:-}"
+log() {
+    [ -n "$LINBOX_LOG_FILE" ] || return 0
+    printf '[linbox-wine] %s\n' "$*" >>"$LINBOX_LOG_FILE" 2>/dev/null || true
+}
+
+# ---------- 运行时目录兜底（必须在任何 wine 调用前） ----------
+# wine 按 termux 风格构建，把 /tmp 硬编码为 $RFS_USR/tmp：wineserver 启动时
+# 要在其下创建 .wine-<uid> 运行时目录；X11 socket 在 App 侧 tmp/.X11-unix。
+mkdir -p "$RFS_USR/tmp" "$APP_PREFIX/tmp/.X11-unix" "$LOG_DIR" "$RFS_ROOT/home" 2>/dev/null || true
+
+die() { echo "linbox-wine: $*" >&2; exit 1; }
+info() { echo "[linbox-wine] $*"; }
+
+usage() {
+    cat << 'EOF'
+linbox-wine v2.3 — LinBox 容器 Wine 启动器（bionic rootfs / X11 · 环境隔离版）
+
+用法:
+  linbox-wine [--container <name>] <wine 参数...>
+  linbox-wine --debug <wine 参数...> 诊断模式（+seh/+module/vulkan/wgl 错误全开，排障用）
+  linbox-wine --list-backends        查看可用后端（box64/hangover/fexcore/native）
+  linbox-wine --install-driver <zip|tar|URL> [槽位名]
+                                      安装 Vulkan 驱动包（yuzu zip / adpkg zip /
+                                      wrapper 栈 tar；同 App 图形驱动页 ➕）
+  linbox-wine --version
+
+说明:
+  - 未指定容器时使用默认容器（linbox-container default <name> 设置）
+  - 环境变量 LINBOX_CONTAINER=<name> 可代替 --container
+  - 后端按容器配置 backend= 选择；auto 时: aarch64 → box64，
+    无 box64 则 hangover；x86_64 设备 → native
+  - wine 多版本: 容器 wine= 目录名（/usr/opt/<名>）或绝对路径；
+    留空用全局 default_wine，再留空用 /usr/opt/wine
+  - 显示: X11，强制 DISPLAY=:1（内置 X 服务未运行时自动拉起）
+  - 显示模式 dmode: off 跟随窗口 / d 固定分辨率 / v 虚拟桌面 / f 强制直出
+  - 后端新增 arm64ec：所选 wine 为 aarch64 形态（bionic-arm64ec 构建）
+    时直接原生运行（new WoW64）；x86_64 形态仍走 box64/native
+  - 音频: 容器自带 —— rootfs PulseAudio（unix socket 隔离），
+    与 Termux 侧 TCP 4713 完全无关；audio=off 可整体关闭
+  - 环境: PREFIX/HOME/TMPDIR/LD_LIBRARY_PATH/LANG 等全部指向 rootfs
+    自身，终端侧注入的同类变量一律清洗（语言/驱动/音频零串扰）
+EOF
+}
+
+# ---------- 配置读取 ----------
+conf_read() { # <file> <key> [default]
+    local _v=""
+    [ -r "$1" ] && _v="$(sed -n "s/^$2=//p" "$1" | head -n 1 | tr -d '\r')"
+    if [ -z "$_v" ] && [ -n "${3:-}" ]; then _v="$3"; fi
+    printf '%s' "$_v"
+}
+
+# ============================================================
+# /opt 生态配置（v3.2.25，对齐 startwine.sh / startfex.sh 参考链路）
+# ============================================================
+# 用户安装的 wine 发行包（发行包风格）自带一套 /opt 布局：
+#   opt/conf/env.conf         运行环境开关（WINEESYNC/BOX64_* 等）
+#   （wine_path.conf 按用户要求 v3.2.26 起剔除：wine 目录由 LinBox
+#    槽位体系管理，不读包内声明）
+#   opt/conf/cores.conf       核绑定（PRIMARY_CORES/SECONDARY_CORES）
+#   opt/conf/path.conf、dynarec_*.conf   其余调优
+#   opt/locale.conf           语言（LC_ALL，参考脚本 export LC_ALL=...）
+#   opt/prefix/               前缀预置资产（drive_c/directx/fix-fonts
+#                             归档 + start/ 开始菜单 + marlett.ttf +
+#                             user.reg/system.reg/fix-services.reg）
+#   opt/dxvk1/                dxvk 归档；opt/virgl/virgl-enabled 跳过标记
+# 设备侧路径：rootfs/opt（发行包风格包落盘处）优先，
+# usr/opt（LinBox 自有槽位）兜底 —— 两处都检查。
+# 解析方式：逐行 KEY=VALUE 白名单提取（不 source 不 eval）——
+# 配置文件不能执行任意代码，也无法破坏容器隔离变量（WINEPREFIX/
+# PATH/DISPLAY/HOME 等），优先级：容器 env= > opt conf > 内置默认。
+OPT_ROOT=""
+OPT_CONF_KV=""
+
+# opt/conf 固定顺序（对齐 startfex.sh）+ 其余 *.conf 兜底（dynarec_* 等）
+load_opt_confs() { # [额外候选根目录（wine 槽位）...]
+    local _root _f _k _v _x
+    # v3.2.26：探测候选 = rootfs/opt（用户指定主路径）→ 额外传入的
+    # wine 槽位目录 → rootfs/usr/opt（旧布局）；判定条件放宽到
+    # conf/、locale.conf、prefix/、dxvk1/ 任一存在（App 侧
+    # WineEnvironment.optRoot 同源语义）。
+    local _cands="$RFS_ROOT/opt"
+    for _x in "$@"; do [ -n "$_x" ] && _cands="$_cands $_x"; done
+    _cands="$_cands $RFS_USR/opt"
+    # v3.3.39：conf 统一到 APK 内部（App 权威源）—— 兜底候选：/opt 生态
+    # 全部缺失时读 App 内部 linbox-conf/（assets 种子 + UI 编辑；App 每次
+    # 写入会写透同步到 /opt/conf，两链天然同值）。marker 检查同规则
+    #（linbox-conf/conf/ 恒存在）。prefix/dxvk1 等生态资产在此根不存在，
+    # 后续各步按既有守卫静默跳过 —— 仅 conf/locale.conf 生效，无副作用。
+    _cands="$_cands /data/data/com.linbox/files/linbox-conf"
+    for _root in $_cands; do
+        if [ -d "$_root/conf" ] || [ -f "$_root/locale.conf" ] \
+            || [ -d "$_root/prefix" ] || [ -d "$_root/dxvk1" ]; then
+            OPT_ROOT="$_root"; break
+        fi
+    done
+    if [ -z "$OPT_ROOT" ]; then
+        # v3.2.26：探测结果可见（终端 stdout + 会话日志双通道）
+        info "opt 生态: 未检测到（探测: rootfs/opt、wine 槽位、rootfs/usr/opt 均无 conf/locale.conf/prefix/dxvk1）"
+        return 0
+    fi
+    local _confs=""
+    # v3.2.26：wine_path.conf 按用户要求剔除（wine 目录由 LinBox 槽位体系管理）
+    for _f in env.conf cores.conf path.conf \
+              dynarec_fixmpeg.conf dynarec_active.conf; do
+        [ -r "$OPT_ROOT/conf/$_f" ] && _confs="$_confs $OPT_ROOT/conf/$_f"
+    done
+    for _f in "$OPT_ROOT"/conf/*.conf; do
+        [ -r "$_f" ] || continue
+        [ "$(basename "$_f")" = "wine_path.conf" ] && continue
+        case " $_confs " in *" $_f "*) ;; *) _confs="$_confs $_f" ;; esac
+    done
+    [ -n "$_confs" ] || { OPT_ROOT=""; return 0; }
+    # shellcheck disable=SC2086
+    OPT_CONF_KV="$(for _f in $_confs; do
+        sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$_f" \
+          | sed -n 's/^\(export \)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=\(.*\)$/\2=\3/p'
+    done)"
+    [ -n "$OPT_CONF_KV" ] || { OPT_ROOT=""; return 0; }
+    info "opt 生态配置: $OPT_ROOT（$(printf '%s\n' "$OPT_CONF_KV" | wc -l | tr -d ' ') 项）"
+    return 0
+}
+
+# 查询 opt conf 键值（无则空）
+opt_conf_value() { # <key>
+    [ -n "$OPT_CONF_KV" ] || return 0
+    printf '%s\n' "$OPT_CONF_KV" | sed -n "s/^$1=//p" | head -n 1
+}
+
+# 容器 env= 是否已显式设置某键（容器配置优先于 opt conf）
+cont_env_has() { # <key>
+    case " $(conf_read "$CONT_CONF" env "") " in *"$1="*) return 0 ;; esac
+    return 1
+}
+
+# opt/conf 的 BOX64_*/WINE* 白名单应用（不覆盖容器 env= 已设键）
+apply_opt_conf_env() {
+    local _k _v
+    [ -n "$OPT_CONF_KV" ] || return 0
+    # here-doc 而非管道 —— 循环必须留在当前 shell，export 才能存活
+    while IFS='=' read -r _k _v; do
+        [ -n "$_k" ] || continue
+        case "$_k" in
+            BOX64_*|WINEESYNC|WINEFSYNC|WINEDEBUG|WINEDLLOVERRIDES|WINEHIDE*)
+                cont_env_has "$_k" && continue
+                # shellcheck disable=SC2163
+                export "${_k}=${_v}" && log "opt conf: $_k=$_v"
+                ;;
+        esac
+    done <<EOF
+$OPT_CONF_KV
+EOF
+    # 核绑定变量（taskset 应用见 apply_taskset_cores）
+    if [ -z "${PRIMARY_CORES:-}" ]; then
+        _v="$(opt_conf_value PRIMARY_CORES)"
+        if [ -n "$_v" ]; then
+            export PRIMARY_CORES="$_v"
+            export SECONDARY_CORES="$(opt_conf_value SECONDARY_CORES)"
+            log "opt conf: PRIMARY_CORES=$_v"
+        fi
+    fi
+    return 0
+}
+
+# apply_box64_env 之后的 BOX64_* 二次应用：conf 值覆盖 LinBox 预设
+# （用户安装的 /opt 包调优优先于内置 preset），容器 env= 已设键仍最高
+# —— 容器 env= 的 BOX64_* 由 apply_box64_env 末尾专门分支兜底重放，
+# 此处 cont_env_has 再拦一道，三级优先：容器 env= > opt conf > 预设。
+apply_opt_conf_env_box64() {
+    [ -n "$OPT_CONF_KV" ] || return 0
+    local _k _v
+    # here-doc 而非管道 —— 循环必须留在当前 shell，export 才能存活
+    while IFS='=' read -r _k _v; do
+        [ -n "$_k" ] || continue
+        case "$_k" in
+            BOX64_*)
+                cont_env_has "$_k" && continue
+                # shellcheck disable=SC2163
+                export "${_k}=${_v}" && log "opt conf(覆盖预设): $_k=$_v"
+                ;;
+        esac
+    done <<EOF
+$OPT_CONF_KV
+EOF
+    return 0
+}
+
+# v3.4.6（用户："arm64ec 启动 wine 使用 wowbox64 模式时有些游戏没有声音，
+# 可能出现了冲突，或者 pulse 被屏蔽了"）：arm64ec 线 wowbox64 音频冲突修复。
+#
+# 背景：arm64ec 后端 = aarch64 wine 原生直跑（new WoW64），wine 的音频
+# unixlib（aarch64-unix/winepulse.so）原生 dlopen rootfs 的 arm64
+# libpulse —— 全程不经 box64。box64 在该后端只以一种形态参与：
+# HODLL/HODLL64=wowbox64.dll（进程内 box64-in-wow64，仿真器 DLL）。
+# 此时 BOX64_NOPULSE=0（box64 缺省，旧设备 conf 残留 export 亦为此值）
+# 允许 box64 在 wine 进程内加载/包装 pulse 库 —— 与 winepulse 的原生
+# libpulse 使用产生冲突（用户实测：部分游戏无声，"pulse 像被屏蔽"）。
+#
+# 修复：arm64ec 线显式 BOX64_NOPULSE=1（box64 官方语义：不加载
+# PulseAudio 库 —— native 与 x86_64 均不加载）。arm64ec 线的 x64/x86
+# Windows 代码经 wow64 thunk 走 wine 内建音频 → winepulse 原生链路，
+# 从不直接 dlopen unix libpulse，置 1 零副作用。
+#
+# 边界（顺序敏感）：
+# - 必须在 apply_opt_conf_env / apply_opt_conf_env_box64 之后执行 ——
+#   旧设备 App 内部 conf 残留 "export BOX64_NOPULSE=0"（ApkConfStore
+#   v3.4.6 迁移已注释，但终端侧 /opt/conf 仍可能有）会在此前覆盖；
+# - 容器 env= 已显式设置 BOX64_NOPULSE 时尊重用户值（cont_env_has，
+#   与 apply_opt_conf_env 同一道兜底）；
+# - box64 后端（x86_64 形态 wine）【不适用】：其 winepulse 是
+#   x86_64-unix .so，由 box64 仿真加载，pulse 走 box64 包装器转发到
+#   原生 arm64 libpulse —— 置 1 会直接断掉那条音频链路。arm64ec 守卫
+#   是硬边界。
+apply_arm64ec_audio_env() {
+    [ "$BACKEND" = "arm64ec" ] || return 0
+    if cont_env_has "BOX64_NOPULSE"; then
+        log "arm64ec 音频: 容器 env= 已显式设置 BOX64_NOPULSE，尊重用户值"
+        return 0
+    fi
+    # v3.4.8（回归 v3.4.6 的置 1 实验）：BOX64_NOPULSE=1 实测未解决
+    # wowbox64 部分游戏无声（用户 2026-11-12 二次反馈），且 winepulse 的
+    # arm64 unixlib 本就原生 dlopen libpulse、不经 box64 —— 根因在守护/
+    # machine-id/alsa 桥链路（本轮 audio_setup 已逐条补齐）。回归缺省：
+    # 不注入，并清掉生态 conf 残留的 export，恢复 box64 官方默认行为。
+    unset BOX64_NOPULSE
+    log "arm64ec 音频: BOX64_NOPULSE 不再注入（v3.4.6 置 1 实测无效已回归缺省；无声根因改由 machine-id/守护诊断链路治理）"
+    return 0
+}
+
+# opt/locale.conf → LC_ALL/LANG（参考脚本：export LC_ALL="$(cat /opt/locale.conf)"）
+apply_opt_locale() {
+    local _lc=""
+    [ -n "$OPT_ROOT" ] && [ -r "$OPT_ROOT/locale.conf" ] \
+        && _lc="$(head -n 1 "$OPT_ROOT/locale.conf" 2>/dev/null)"
+    _lc="$(printf '%s' "$_lc" | tr -d '[:space:]\"')"
+    _lc="${_lc%\'}"; _lc="${_lc#\'}"
+    [ -n "$_lc" ] || return 0
+    if printf '%s' "$_lc" | grep -Eq '^[A-Za-z]{2,3}(_[A-Za-z]{2,4})?(\.[A-Za-z0-9-]+)?(@[A-Za-z0-9-]+)?$'; then
+        export LC_ALL="$_lc"
+        export LANG="$_lc"
+        info "opt locale.conf → LC_ALL=$LC_ALL"
+    else
+        warn "opt/locale.conf 内容非法（$_lc），忽略"
+    fi
+    return 0
+}
+
+# 核绑定（参考脚本：taskset -c $PRIMARY_CORES）—— 本 shell 自亲和，
+# 所有子进程（wine/wineserver/游戏）自动继承；无 taskset 或核心号
+# 无效时静默退回系统调度（参考脚本同款告警语义，不阻断）。
+apply_taskset_cores() {
+    local _cores="${PRIMARY_CORES:-}"
+    [ -n "$_cores" ] || return 0
+    local _tsc
+    _tsc="$(command -v taskset 2>/dev/null)"
+    [ -x "$_tsc" ] || { log "PRIMARY_CORES=$_cores 但无 taskset（rootfs 未内置），跳过核绑定"; return 0; }
+    if "$_tsc" -p -c "$_cores" "$$" >/dev/null 2>&1; then
+        info "核绑定: taskset -p -c $_cores（wine 及全部子进程继承）"
+    else
+        log "taskset -p -c $_cores 失败（核心号越界/沙箱限制），保持系统调度"
+    fi
+    return 0
+}
+
+# ============================================================
+# 环境隔离（核心）—— 容器只认 rootfs 自己的一套
+# ============================================================
+isolate_env() {
+    # --- 1) 清洗终端侧注入的残留变量 ---
+    # LD_PRELOAD（termux-exec 等）会劫持 execve，wine/box64 必炸
+    unset LD_PRELOAD
+    # Termux 侧标识与路径全部作废（防止容器内脚本误判前缀）
+    unset TERMUX_VERSION TERMUX_APP_PACKAGE TERMUX_PREFIX TERMUX_MAIN_PACKAGE_FILENAME
+    unset TERMUX_APP__TERMUX__FILES_PREFIX 2>/dev/null || true
+
+    # --- 2) 前缀/临时目录/家目录 → rootfs 自己的 ---
+    export PREFIX="$RFS_USR"
+    export TMPDIR="$RFS_USR/tmp"
+    export HOME="$RFS_ROOT/home"
+    export XDG_RUNTIME_DIR="$RFS_USR/tmp"
+    export XDG_CONFIG_HOME="$HOME/.config"
+    export XDG_CACHE_HOME="$HOME/.cache"
+    export XDG_DATA_HOME="$HOME/.local/share"
+    mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" 2>/dev/null || true
+
+    # --- 3) 语言 → 容器自己的（container.conf lang=，默认 zh_CN）---
+    # 不再继承 Termux 会话的 LANG=en_US.UTF-8。
+    # 只设 LANG 不设 LC_ALL：bionic 无 locale 数据（rootfs 的
+    # locale-archive 只供 glibc 容器用），导出 LC_ALL 会触发 bash 每次启动
+    # 的 "warning: setlocale: LC_ALL: cannot change locale" 噪音；
+    # wine 按 LANG 识别界面语言已足够。
+    local _lang
+    _lang="$(conf_read "$CONT_CONF" lang "zh_CN.UTF-8")"
+    [ -n "$_lang" ] || _lang="zh_CN.UTF-8"
+    export LANG="$_lang"
+
+    # --- 4) 动态库搜索路径 → rootfs 优先 + 末位 /system/lib64 兜底 ---
+    # 注意：不追加继承值（Termux 侧 lib 会污染 Mesa/ARM 驱动符号解析）。
+    # v3.3.29：末位补 /system/lib64（上游参考 BionicProgramLauncher 同款
+    #   "rootDir/usr/lib:/system/lib64"）。根因（用户设备日志
+    #   wine-10arm-20261109-121003 实证）：wrapper 栈 ICD → libvulkan_
+    #   wrapper.so →（DT_NEEDED 绝对路径）/system/lib64/libnativewindow.so
+    #   → libbinder_ndk.so 按 soname 在 LD_LIBRARY_PATH 里搜 → 搜不到 →
+    #   Vulkan Loader "cannot find libbinder_ndk.so from verneed[2]" →
+    #   ICD 整体被忽略 → "Found no drivers" → DXVK vkCreateInstance 失败。
+    #   rootfs 路径全部在前，系统目录仅兜底 NDK 库，零符号污染。
+    #   仅 aarch64 追加：x86_64 形态走 glibc ld-linux，混入 bionic 系统
+    #   目录反而有解析风险（上游参考全程 arm64 也无此分支）。
+    local _lp="$RFS_USR/lib"
+    [ -d "$RFS_USR/local/lib" ] && _lp="$_lp:$RFS_USR/local/lib"
+    [ -d "$WINE_DIR/lib" ]      && _lp="$_lp:$WINE_DIR/lib"
+    [ -d "$RFS_USR/opt/lib" ]   && _lp="$_lp:$RFS_USR/opt/lib"
+    [ -d "$RFS_USR/opt/fex/lib" ] && _lp="$_lp:$RFS_USR/opt/fex/lib"
+    case "$(uname -m)" in
+        aarch64|arm64) [ -d /system/lib64 ] && _lp="$_lp:/system/lib64" ;;
+    esac
+    export LD_LIBRARY_PATH="$_lp"
+
+    # --- 5) PATH → rootfs 优先，App 前缀仅兜底（curl/zstd 等下载工具）---
+    export PATH="$RFS_USR/bin:$RFS_USR/local/bin:/system/bin:/system/xbin:$APP_PREFIX/bin"
+
+    # --- 6) X11：立即强制 :1（LINBOX_DISPLAY 可覆盖）---
+    # 不再沿用继承值：Termux 会话残留的空/错 DISPLAY 会让 wine
+    # 连错地方 → X11 黑屏。X 服务自启见 ensure_x11（主流程调用）。
+    export DISPLAY="${LINBOX_DISPLAY:-:1}"
+
+    # --- 7) XKB / Mesa 基础（rootfs 自带的一套）---
+    export XKB_CONFIG_ROOT="${XKB_CONFIG_ROOT:-$RFS_USR/share/X11/xkb}"
+    export MESA_SHADER_CACHE_DISABLE=false
+    export MESA_SHADER_CACHE_MAX_SIZE=512MB
+    export mesa_glthread=true
+    case "$(uname -m)" in
+        aarch64|arm64) export TU_DEBUG=noconform,sysmem ;;
+    esac
+
+    # --- 8) GStreamer（rootfs 自带的插件栈，wine winegstreamer 后端用）---
+    # 插件路径显式指向 rootfs，防 Termux 侧 GST 变量串扰；
+    # 注册表缓存 fork 在 Android 上偶发卡死，直接关掉（wine 一次性
+    # 加载，非长驻服务，重建注册表的代价可接受）。
+    if [ -d "$RFS_USR/lib/gstreamer-1.0" ]; then
+        export GST_PLUGIN_SYSTEM_PATH="$RFS_USR/lib/gstreamer-1.0"
+        export GST_REGISTRY_FORK=false
+    fi
+}
+
+# ============================================================
+# X 服务自启（v2.1 核心）—— 不再要求用户先手敲 linbox-x11 :1
+# ============================================================
+# DISPLAY 已由 isolate_env 强制 :1；此处检查对应 X socket，缺失则
+# 后台拉起内置 termux-x11（CmdEntryPoint，与 linbox-x11 同源），
+# 轮询等待 socket 就位（最多 ~10s，app_process 冷启动较慢）。
+# 注意：X 服务进程必须用 App 侧的 XDG_RUNTIME_DIR/TMPDIR（socket
+# 落在 App 侧 tmp/.X11-unix），不能用容器隔离后的 rootfs tmp ——
+# 故以子 shell 覆写后 exec，不污染当前进程的容器环境。
+ensure_x11() {
+    local _num _sock _log
+    _num="${DISPLAY#:}"; _num="${_num%%.*}"
+    case "$_num" in *[!0-9]*|"") _num="1"; export DISPLAY=":1" ;; esac
+    _sock="$X11_SOCK_DIR/X$_num"
+    [ -S "$_sock" ] && return 0
+    _log="$APP_PREFIX/tmp/linbox-x11-autostart.log"
+    mkdir -p "$APP_PREFIX/tmp" 2>/dev/null || true
+    info "X 服务无 socket X$_num，自动拉起内置 X 服务（显示号 :$_num）……"
+    if [ -x "$APP_PREFIX/bin/termux-x11" ]; then
+        ( export XDG_RUNTIME_DIR="$APP_PREFIX/tmp" TMPDIR="$APP_PREFIX/tmp"
+          export PATH="$APP_PREFIX/bin:/system/bin"
+          exec "$APP_PREFIX/bin/termux-x11" ":$_num" >>"$_log" 2>&1 ) &
+        disown 2>/dev/null || true
+    elif [ -x "$APP_PREFIX/bin/linbox-x11" ]; then
+        ( export XDG_RUNTIME_DIR="$APP_PREFIX/tmp" TMPDIR="$APP_PREFIX/tmp"
+          exec "$APP_PREFIX/bin/linbox-x11" ":$_num" >/dev/null 2>&1 ) &
+        disown 2>/dev/null || true
+    else
+        info "警告: 内置 X 客户端缺失（$APP_PREFIX/bin/termux-x11）——打开一次 LinBox 主界面完成组件迁移后重试"
+        return 1
+    fi
+    local _i=0
+    while [ "$_i" -lt 20 ]; do
+        [ -S "$_sock" ] && { info "X 服务就绪（socket X$_num，DISPLAY=:$_num）"; return 0; }
+        sleep 0.5 2>/dev/null || sleep 1
+        _i=$((_i + 1))
+    done
+    info "警告: X 服务拉起后 socket 未就绪（X$_num）——画面可能无法显示；排障: cat $_log 或 linbox-x11 doctor"
+    return 1
+}
+
+# ---------- wine 二进制 ELF 架构识别（v2.1，多形态多版本核心） ----------
+# 读 ELF 头 e_machine（偏移 18，2 字节小端）：
+#   b7 00 = aarch64（bionic-arm64ec / wine-arm64 形态，原生直接跑）
+#   3e 00 = x86_64（bionic-x86_64 / 普通Wine x86_64，经 box64/native）
+detect_wine_arch() { # $1=wine 二进制 → 回显 aarch64|x86_64|unknown
+    local _m
+    [ -f "$1" ] || { echo unknown; return; }
+    _m="$(dd if="$1" bs=1 skip=18 count=2 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')"
+    case "$_m" in
+        b700) echo aarch64 ;;
+        3e00) echo x86_64 ;;
+        *)    echo unknown ;;
+    esac
+}
+
+# ---------- 音频自持（rootfs 自带 PulseAudio，unix socket 隔离） ----------
+# v3.4.7（用户 2026-11-11："保证正常使用 pulse 或者 nopulse 使用 alsa，
+# 查看 rootfs 是不是没有相关编译构建"）：
+#   - audio=alsa 新档：守护照常拉起（alsa-plugins pulse 桥需要同一
+#     守护），PULSE_SERVER 照常注入（alsa 插件随 PULSE_SERVER 寻址）；
+#     wine 侧驱动选择由 App 注册表直写 [Software\Wine\Drivers] Audio=
+#     alsa（RootfsLauncher → WineRegistry.ensureAudioDriver），rootfs
+#     /etc/asound.conf 把 libasound 默认 PCM 全局指向 pulse 桥
+#     （v3.4.7 rootfs 新增 alsa-plugins 项目）。
+#   - pulse 档不变：winepulse（aarch64 原生 libpulse）→ 守护 →
+#     module-sles-sink。
+#   - 新增 pactl 诊断：守护就位后数 sink —— sinks=0（module-sles-sink
+#     没起来）即无声根因，日志一眼可见，用户"看日志"诉求直接可判。
+# v3.4.8（用户 2026-11-12："winecfg 里音频完整但部分游戏没声音，日志
+# 里找不到 etc/machine-id"）：
+#   - 守护拉起前先 ensure_machine_id（rootfs 从未带过 /etc/machine-id，
+#     wine/会话日志里 "Failed to open /etc/machine-id" 的出处；pulse
+#     守护初始化也读它）——缺文件时补 32 hex 稳定值。
+#   - 守护拉起失败时前台试跑收集 stderr 前 5 行进会话日志（原来静默
+#     >/dev/null，拉不起来只能猜）。
+audio_setup() {
+    local _audio
+    _audio="$(conf_read "$CONT_CONF" audio "pulse")"
+    case "$_audio" in
+        off|none|disabled)
+            # 整体关闭：清掉继承的 PULSE_SERVER，wine 走无声/disabled
+            unset PULSE_SERVER
+            export PULSE_SERVER=""
+            log "音频=关闭（audio=off）"
+            return 0
+            ;;
+        alsa)
+            # v3.4.7：alsa 档 —— 守护同源（alsa-plugins pulse 桥需要），
+            # wine 驱动侧由注册表 Audio=alsa 走 winealsa → libasound
+            # 默认 PCM → pulse 插件 → 守护 → sles-sink。
+            log "音频=ALSA→pulse桥（winealsa 经 /etc/asound.conf 全局默认 → alsa-plugins → 守护）"
+            ;;
+        pulse|*)
+            log "音频=PulseAudio（winepulse 原生链路 → 守护 → module-sles-sink）"
+            ;;
+    esac
+
+    # v3.4.8：先补 /etc/machine-id（音频档除 off 外都需要守护；守护与
+    # wine 侧若干库都会读它，rootfs 包从未生成过——日志里
+    # "Failed to open /etc/machine-id" 的出处。稳定值：取 boot_id
+    # 去连字符，兜底 /dev/urandom；幂等，已有内容不重写）。
+    ensure_machine_id
+
+    local _pa_bin="$RFS_USR/bin/pulseaudio"
+    local _pa_sock="$RFS_USR/tmp/pulse/native"
+
+    if [ -x "$_pa_bin" ]; then
+        # runtime 目录已在 isolate_env 指向 rootfs tmp
+        mkdir -p "$RFS_USR/tmp/pulse" 2>/dev/null || true
+        if [ ! -S "$_pa_sock" ]; then
+            # 首次：拉起 rootfs 自带 pulse（sles-sink 直连 Android 音频，
+            # unix socket 监听，与 Termux 侧 TCP 4713 互不相干）
+            "$_pa_bin" --start --exit-idle-time=-1 \
+                --disallow-exit=false >/dev/null 2>&1 || true
+            # 等待默认 unix socket 就位（default.pa 自带
+            # module-native-protocol-unix → $XDG_RUNTIME_DIR/pulse/native）
+            local _n=0
+            while [ "$_n" -lt 6 ]; do
+                [ -S "$_pa_sock" ] && break
+                sleep 0.5 2>/dev/null || sleep 1
+                _n=$((_n + 1))
+            done
+            if [ ! -S "$_pa_sock" ]; then
+                # v3.4.8：守护拉不起来不再是哑谜——前台试跑 3 秒收集
+                # stderr 前 5 行进会话日志（bionic 下常见死因：machine-id
+                # 旧根、动态库 soname 缺、default.pa 模块加载链）。
+                local _pa_err=""
+                _pa_err="$(timeout -s KILL 3 "$_pa_bin" -n --fail 2>&1 | head -5)" || true
+                [ -n "$_pa_err" ] && log "⚠ pulse 前台试跑诊断（前 5 行）: $(echo "$_pa_err" | tr '\n' ' ')"
+            fi
+        fi
+        if [ -S "$_pa_sock" ]; then
+            export PULSE_SERVER="unix:$_pa_sock"
+            # v3.4.7 音频链路诊断（用户"看日志"实证诉求）：pactl 数
+            # sink。守护在但 sinks=0 → module-sles-sink 未加载（加载失败
+            # / default.pa 缺行）→ 无论 wine 侧选 pulse 还是 alsa 桥都无
+            # 声 —— 此行让根因在会话日志里一眼可见。
+            local _sinks=""
+            if [ -x "$RFS_USR/bin/pactl" ]; then
+                _sinks="$(PULSE_SERVER="unix:$_pa_sock" "$RFS_USR/bin/pactl" \
+                    list sinks short 2>/dev/null | wc -l)"
+            fi
+            case "$_sinks" in
+                ''|0)
+                    log "⚠ 音频诊断: 守护在但无 sink（module-sles-sink 未加载）→ 本会话注定无声；对策: 重装含 pulseaudio 模块的 rootfs，或 linbox-container doctor"
+                    ;;
+                *)
+                    log "音频诊断: pulse 守护就绪（sinks=$_sinks — module-sles-sink 直连 Android 音频）"
+                    ;;
+            esac
+            return 0
+        fi
+        # rootfs pulse 没起来 → 显式 TCP 兜底（仍是 rootfs 自己的实例）
+        "$_pa_bin" --start --exit-idle-time=-1 \
+            --load="module-native-protocol-tcp port=4713 auth-ip-acl=127.0.0.1 auth-anonymous=1" \
+            >/dev/null 2>&1 || true
+        if bash -c '(exec 3<>/dev/tcp/127.0.0.1/4713) 2>/dev/null'; then
+            export PULSE_SERVER="127.0.0.1:4713"
+            return 0
+        fi
+        info "警告: rootfs PulseAudio 未就绪（音频可能无声；linbox-container doctor 查看）"
+        export PULSE_SERVER="unix:$_pa_sock"
+        return 0
+    fi
+
+    # rootfs 未内置 pulseaudio（老 rootfs 包）→ 最后才借道 App 侧 TCP 4713
+    export PULSE_SERVER="${PULSE_SERVER:-127.0.0.1:4713}"
+}
+
+# v3.4.8：rootfs /etc/machine-id 补齐（wine 会话日志里
+# "Failed to open /etc/machine-id, error No such file or directory"
+# 的出处——rootfs 包从未生成过该文件；pulseaudio 守护初始化与
+# wine 侧库都会读）。缺它时补一个 32 hex 稳定值：优先 /proc/sys/
+# kernel/random/boot_id（去连字符，重启内稳定），兜底 /dev/urandom。
+# 幂等：已有内容（≥8 字节）不重写——machine-id 变更会使 pulse 的
+# cookie/流标识失效产生小抖动。同步 var/lib/dbus/machine-id。
+ensure_machine_id() {
+    local _mid="$RFS_ROOT/etc/machine-id"
+    if [ -s "$_mid" ]; then
+        return 0
+    fi
+    local _id=""
+    _id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d ' -' | cut -c1-32)"
+    if [ "${#_id}" -ne 32 ]; then
+        _id="$(head -c 16 /dev/urandom 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n' | cut -c1-32)"
+    fi
+    if [ "${#_id}" -ne 32 ]; then
+        return 0
+    fi
+    mkdir -p "$RFS_ROOT/etc" "$RFS_ROOT/var/lib/dbus" 2>/dev/null || true
+    printf '%s\n' "$_id" >"$_mid" 2>/dev/null || true
+    [ -s "$_mid" ] && cp -f "$_mid" "$RFS_ROOT/var/lib/dbus/machine-id" 2>/dev/null || true
+    log "machine-id: 已补齐 rootfs/etc/machine-id（pulse/dbus 初始化就绪；此前守护与 wine 侧报缺失）"
+    return 0
+}
+
+# ---------- 后端探测 ----------
+WINE_DIR="$RFS_USR/opt/wine"                 # 当前容器选择的 wine 目录
+WINE_ARCH="unknown"                          # 槽位 wine 的 ELF 架构（v2.1）
+WINE_HANGOVER="$RFS_USR/opt/bin/wine"        # aarch64 wine（旧版 hangover 兼容路径）
+BOX64_BIN=""
+FEX_BIN="$RFS_USR/opt/fex/bin/FEXInterpreter"
+WINE_X86="$WINE_DIR/bin/wine"                # 槽位 wine 二进制（box64/fex/native/arm64ec 用）
+
+for _c in "$RFS_USR/local/bin/box64" "$RFS_USR/bin/box64" "$APP_PREFIX/bin/box64"; do
+    if [ -x "$_c" ]; then BOX64_BIN="$_c"; break; fi
+done
+
+backend_list() {
+    echo "available backends:"
+    # --list-backends 可能在容器/槽位解析前调用，此处兜底检测架构
+    [ "$WINE_ARCH" = "unknown" ] && WINE_ARCH="$(detect_wine_arch "$WINE_X86")"
+    if [ -x "$WINE_X86" ]; then
+        case "$WINE_ARCH" in
+            aarch64) echo "  [OK] arm64ec-wine: $WINE_X86（aarch64 原生，new WoW64）" ;;
+            x86_64)  echo "  [OK] x86_64-wine : $WINE_X86" ;;
+            *)       echo "  [OK] wine        : $WINE_X86（架构: $WINE_ARCH）" ;;
+        esac
+    else
+        echo "  [--] 槽位 wine 未安装（linbox-container install-wine <类别|URL|包>）"
+    fi
+    [ -n "$BOX64_BIN" ] && echo "  [OK] box64       : $BOX64_BIN" || echo "  [--] box64 未安装"
+    [ -x "$WINE_HANGOVER" ] && echo "  [OK] hangover    : $WINE_HANGOVER（旧版兼容路径）" || echo "  [--] hangover（旧版路径）未安装"
+    [ -x "$FEX_BIN" ]   && echo "  [OK] fexcore     : $FEX_BIN"   || echo "  [--] fexcore 未安装（FEX-Emu 暂无 bionic 官方构建，安装后自动启用）"
+}
+
+# 依架构、槽位 wine 的 ELF 形态与可用组件推导 auto 后端：
+#   aarch64 设备 + aarch64 wine → arm64ec（原生，无模拟开销）
+#   aarch64 设备 + x86_64  wine → box64（有 box64 时）
+#   兜底旧版 hangover 路径（/usr/opt/bin/wine）
+auto_backend() {
+    local _arch
+    _arch="$(uname -m)"
+    case "$_arch" in
+        x86_64)
+            [ -x "$WINE_X86" ] && { echo "native"; return; }
+            ;;
+        aarch64|arm64)
+            if [ -x "$WINE_X86" ]; then
+                case "$WINE_ARCH" in
+                    aarch64) echo "arm64ec"; return ;;
+                    x86_64)  [ -n "$BOX64_BIN" ] && { echo "box64"; return; } ;;
+                esac
+            fi
+            if [ -x "$WINE_HANGOVER" ]; then
+                echo "hangover"; return
+            fi
+            ;;
+    esac
+    echo ""
+}
+
+# ---------- 容器解析 ----------
+resolve_container() {
+    CONT_NAME="${LINBOX_CONTAINER:-}"
+    if [ -n "${CONT_NAME:-}" ]; then return; fi
+    CONT_NAME="$(conf_read "$CONF_GLOBAL" default_container "")"
+    [ -n "$CONT_NAME" ] || die "未指定容器。用法: linbox-wine --container <name> <wine 参数...>，或先执行 linbox-container create"
+}
+
+load_container() {
+    [ -n "${CONT_NAME:-}" ] || die "容器名为空"
+    CONT_DIR="$CONT_ROOT/$CONT_NAME"
+    [ -d "$CONT_DIR" ] || die "容器不存在: $CONT_NAME（linbox-container list 查看）"
+    CONT_CONF="$CONT_DIR/container.conf"
+    WINEPREFIX="$CONT_DIR/prefix"
+    mkdir -p "$WINEPREFIX" "$LOG_DIR"
+    export WINEPREFIX
+}
+
+# ---------- Wine 多版本解析 ----------
+# 容器 wine= 目录名（/usr/opt/<名>）或绝对路径；空 → 全局 default_wine → /usr/opt/wine
+resolve_wine_dir() {
+    local _w
+    _w="$(conf_read "$CONT_CONF" wine "")"
+    if [ -n "$_w" ]; then
+        case "$_w" in
+            /*) WINE_DIR="$_w" ;;
+            *)  WINE_DIR="$RFS_USR/opt/$_w" ;;
+        esac
+    else
+        local _d
+        _d="$(conf_read "$CONF_GLOBAL" default_wine "")"
+        if [ -n "$_d" ]; then
+            WINE_DIR="$RFS_USR/opt/$_d"
+        else
+            # v3.2.26（用户要求）：wine_path.conf 剔除 —— wine 目录一律
+            # 由 LinBox 槽位体系管理，无显式选择时回退主槽位。
+            WINE_DIR="$RFS_USR/opt/wine"
+        fi
+    fi
+    WINE_X86="$WINE_DIR/bin/wine"
+    # v3.2.0：布局自愈须先于 detect —— 悬空 bin/wine 的 10.17+ 原始包
+    # 会让 detect 失败；物化副本包 detect 正常但必炸 ntdll。两种都先治。
+    repair_wine_layout
+    WINE_ARCH="$(detect_wine_arch "$WINE_X86")"
+}
+
+# ---------- v3.2.0：wine 10.17+ loader 布局自愈 ----------
+# 根因（wine 10.18 loader/main.c 实证）：上游把 loader 装进
+# lib/wine/<arch>-unix/（与 ntdll.so 同目录），loader 的 main() 优先
+# try_dlopen(/proc/self/exe)：按【自身真实所在目录】找 dir/ntdll.so。
+# v3.1.6 曾把 lib 侧 loader 复制成 bin/wine —— 副本的 /proc/self/exe
+# 在 bin/，dlopen 找 bin/ntdll.so 必失败（设备实测 hangover-10.18 两
+# 形态 "could not load ntdll.so"）。修法：bin/wine 及被规整过的 bin
+# 工具换回【相对符号链接】指回 lib 侧 loader —— /proc/self/exe 经内核
+# 解析符号链接回到 lib 目录，ntdll.so 就在旁边；argv[0] 保留 bin/…
+# 路径，check_command_line() 按 basename 分发不变（App 侧
+# WineLayoutRepair.kt 同款逻辑，两端同源自愈）。旧布局（lib 侧无
+# loader）零改动。幂等。
+repair_wine_layout() {
+    local _arch_dir _tool _f _tgt
+    # v3.2.3：停用 wine-preloader（先于布局检测 —— 旧布局包同样必须生效；
+    # 旧布局 bin/wine 为真实 ELF，不走下方 arch 循环）。preloader_exec()
+    # 找不到 bin/ 下入口时走官方兕底 execv(argv[1], argv+1) 直连 loader
+    # （即 HAVE_WINE_PRELOADER 未定义时的上游行为）。真实 ELF 与符号
+    # 链接统一改名停用，可逆、幂等；与 App 侧 WineLayoutRepair.kt 同款
+    # （两端同源自愈，此处不再重建链接）。
+    for _pl in wine-preloader wine64-preloader; do
+        if [ -e "$WINE_DIR/bin/$_pl" ] || [ -L "$WINE_DIR/bin/$_pl" ]; then
+            rm -f "$WINE_DIR/bin/$_pl.linbox-disabled"
+            if mv "$WINE_DIR/bin/$_pl" "$WINE_DIR/bin/$_pl.linbox-disabled" 2>/dev/null; then
+                info "已停用 bin/$_pl（Android 直连 loader：preloader_exec 的 ENOENT 官方兕底）"
+            fi
+        fi
+    done
+
+    # 找 lib/wine/*-unix/wine（10.17+ 布局特征；旧布局不存在 → 直接返回）
+    for _arch_dir in "$WINE_DIR"/lib/wine/*-unix; do
+        [ -x "$_arch_dir/wine" ] || continue
+        _tgt="../lib/wine/$(basename "$_arch_dir")/wine"
+        if [ "$(readlink "$WINE_DIR/bin/wine" 2>/dev/null)" != "$_tgt" ]; then
+            rm -f "$WINE_DIR/bin/wine"
+            ln -s "$_tgt" "$WINE_DIR/bin/wine" 2>/dev/null || {
+                warn "bin/wine → $_tgt 符号链接重建失败，若 wine 报 could not load ntdll.so 请重装该包"
+                return 0
+            }
+            info "已自愈 bin/wine → $_tgt（wine 10.17+ loader 布局；旧物化副本找 bin/ntdll.so 必败）"
+        fi
+        # bin 工具：两跳符号链接（→ bin/wine → lib loader）；绝不能是副本
+        for _tool in wineboot winecfg reg regedit regsvr32 msiexec rundll32; do
+            _f="$WINE_DIR/bin/$_tool"
+            [ -e "$_f" ] || continue
+            if [ "$(readlink "$_f" 2>/dev/null)" != "wine" ]; then
+                rm -f "$_f"
+                ln -s "wine" "$_f" 2>/dev/null || true
+            fi
+        done
+        break   # 只处理第一个命中形态目录（单形态包）
+    done
+    return 0
+}
+
+# ---------- 显示模式握手（对齐 glibc-runner -d/-v/-f） ----------
+# 容器 conf: dmode=off|d|v|f + screen=native|WxH
+# 握手文件:  $APP_PREFIX/tmp/.linbox-x11-res（App 侧 X11ResolutionLink 消费）
+apply_display_mode() {
+    local _dmode _screen
+    _dmode="$(conf_read "$CONT_CONF" dmode "off")"
+    _screen="$(conf_read "$CONT_CONF" screen "native")"
+
+    case "$_dmode:$_screen" in
+        d:*x*|v:*x*|f:*x*)
+            # WxH 校验
+            case "$_screen" in
+                *[!0-9x]*|"") _screen="native" ;;
+            esac
+            if [ "$_screen" != "native" ]; then
+                printf '%s\n' "$_screen" > "$APP_PREFIX/tmp/.linbox-x11-res" 2>/dev/null || true
+                DMODE_RESOLUTION="$_screen"
+                return 0
+            fi
+            ;;
+    esac
+    # off / native / 非法值：跟随窗口
+    printf 'native\n' > "$APP_PREFIX/tmp/.linbox-x11-res" 2>/dev/null || true
+    DMODE_RESOLUTION=""
+}
+
+# ---------- 显示模式虚拟化（v2.3 核心修复，wine >=10 环境必开） ----------
+# 根因链（设备日志 CubeMap.exe 实证）：LinBox 的 X 服务（termux-x11/
+# libXlorie）不支持 RandR 动态模式切换（分辨率由 .linbox-x11-res 握手
+# 文件调整），而 wine 10+ 重构后的显示栈在 explorer 初始化显示设置时经
+# x11drv 调 RandR 设模式 → NtUserChangeDisplaySettings 返回 -2
+# （DISP_CHANGE_BADMODE）→ 模式表未写入注册表 → 游戏进程
+# NtUserEnumDisplaySettings 连续报 "display mode not found" → DXUT/D3D
+# 枚举不到任何显示模式 → D3D 设备创建失败弹错——所有游戏全挂。
+# wine 上游为无 RandR 环境提供 EmulateModeset 开关（win32u/sysparams.c
+# 读 HKCU\Software\Wine\X11 Driver\EmulateModeset）：开启后模式切换
+# 在 win32u 内虚拟化成功（不触 X 驱动），枚举返回当前模式。
+# 幂等写入；以 WINEPREFIX 下的标记文件避免每次启动重复起 wine reg。
+ensure_emulate_modeset() {
+    local _marker="$WINEPREFIX/.linbox-emulate-modeset"
+    [ -f "$_marker" ] && return 0
+    info "写入 EmulateModeset=Y（显示模式虚拟化——修复游戏枚举不到显示模式/设备创建失败）……"
+    if wine_run reg add 'HKCU\Software\Wine\X11 Driver' /v EmulateModeset /t REG_SZ /d Y /f >/dev/null 2>&1; then
+        touch "$_marker" 2>/dev/null || true
+    else
+        info "警告: EmulateModeset 写入失败（wine 未就绪？下次启动自动重试）"
+    fi
+}
+
+# dmode=v 的注册表蓝底桌面清理（对齐 glibc-runner -f）
+clear_wine_blue_desktop() {
+    local _wine="$1"   # 已按后端包装的可执行调用函数名不适用——直接用 wine_run
+    wine_run reg delete 'HKCU\Software\Wine\Explorer' /v Desktop /f >/dev/null 2>&1 || true
+    wine_run reg delete 'HKCU\Software\Wine\Explorer\Desktops' /f >/dev/null 2>&1 || true
+}
+
+# ---------- Mesa / GPU 运行时（rootfs 自己的驱动栈） ----------
+apply_gpu_env() {
+    local _gallium _arch
+    _arch="$(uname -m)"
+    _gallium="$(conf_read "$CONT_CONF" gallium auto)"
+    if [ "$_gallium" = "auto" ]; then
+        case "$_arch" in
+            aarch64|arm64) _gallium="freedreno" ;;
+            *)             _gallium="llvmpipe" ;;
+        esac
+    fi
+    case "$_gallium" in
+        zink)
+            export GALLIUM_DRIVER=zink
+            export ZINK_DESCRIPTORS=lazy
+            export ZINK_DEBUG=compact
+            # v3.3.37（上游同款）：Turnip 崩溃规避仅 noconform；
+            # kopper 禁用 —— zink 不自建 X11 swapchain，呈现交给 wine 的
+            # GLX/X11 路径（闪屏/帧率不稳的来源之一）。
+            [ -z "${TU_DEBUG:-}" ] && export TU_DEBUG=noconform
+            [ -z "${LIBGL_KOPPER_DISABLE:-}" ] && export LIBGL_KOPPER_DISABLE=true
+            ;;
+        freedreno)
+            export GALLIUM_DRIVER=freedreno
+            ;;
+        llvmpipe|softpipe)
+            export GALLIUM_DRIVER="$_gallium"
+            export LIBGL_ALWAYS_SOFTWARE=1
+            ;;
+    esac
+}
+
+# ---------- Vulkan 用户驱动（v3.3.20 上游实现 DriverPackages 全语义） ----------
+# 容器 conf 的 wrapper / turnip 键（App 图形驱动页"Vulkan 驱动"同款）：
+#   wrapper=<slot>  → usr/share/linbox-wrapper/drivers/<slot>/icd.json
+#   turnip=<tar名>  → 同一驱动库（/opt/wrapper、/opt/tz 的 zip/tar 由
+#                     此处兜底安装）
+# 都未选 = Mesa 内置 Turnip（loader 默认搜索 rootfs 的 icd.d，不注入）。
+# 每个驱动一个独立目录（.so + 自生成 ICD + meta），rootfs 任何文件不被
+# 覆盖 —— turnip 与 wrapper 并列选择、多版本共存、切换零文件读写。
+#
+# v3.3.20（用户实测反馈："切换 wrapper 依旧无法使用，也无法安装 yuzu 类
+# 驱动"—— 两处根因修复，对齐 上游实现 DriverPackages + setDriverById）：
+#  1) 安装：yuzu/adpkg 的 zip 包此前【完全无法装】（兜底安装只认 tar，
+#     meta.json 的 libraryName 定位也缺）—— 现在 zip（unzip/busybox/
+#     bsdtar 三级回退）与 tar(.gz/.xz/.bz2/.zst) 通吃，meta.json 的
+#     libraryName 优先（vulkan.purple.so 这类 adpkg 命名也认）；
+#  2) 激活：wrapper 栈（libvulkan_wrapper.so）此前只注入
+#     VK_ICD_FILENAMES —— wrapper 生态的 .so 从 env 读四件套
+#     （ADRENOTOOLS_DRIVER_PATH/NAME/HOOKS_PATH/REDIRECT_DIR），
+#     缺 HOOKS_PATH 时 adrenotools 报 "Couldn't preload the hook
+#     implementation"、hook 链建立失败 → wrapper dlopen 后零 ICD 生效
+#     （DXVK 报 VK_KHR_surface not supported 黑屏）。现在：
+#     * wrapper 栈模式：ICD→wrapper，同包/路由的 turnip 走
+#       ADRENOTOOLS_DRIVER_PATH/NAME，hooks 目录随 ADRENOTOOLS_HOOKS_PATH
+#       注入（libmain_hook.so 所在的 wrapper slot 目录），temp 目录预建；
+#     * android 平台裸 turnip（无 libxcb = 无 X11 WSI，yuzu/Adrenotools
+#       型构建）：自动找已装 wrapper 栈槽位路由（ICD 换 wrapper 的，
+#       turnip 经 adrenotools 注入），与 App 侧 activationFor 同语义；
+#     * glibc 构建（依赖 libc.so.6）：bionic 原生 wine 无法加载，安装期
+#       拒装、激活期跳过（App identifyElf 同款判定，tr+grep 启发式实现）。
+# 激活 = VK_ICD_FILENAMES + LD_LIBRARY_PATH 前插驱动目录（+ GL zink 联动）。
+DRIVERS_ROOT="$RFS_USR/share/linbox-wrapper/drivers"
+
+vk_slot_dirname() { # <slot> → 安全目录名（App safeSlotName 同款）
+    local _d
+    _d="$(printf '%s' "$1" | sed -e 's/\.\(zip\|tar\|tar\.\(gz\|xz\|bz2\|zst\)\)$//' \
+        -e 's/[^A-Za-z0-9._+-]/-/g')"
+    _d="${_d#"${_d%%[!.-]*}"}"   # 去头部 .-
+    _d="${_d%"${_d##*[!.-]}"}"   # 去尾部 .-
+    [ -n "$_d" ] || _d="driver"
+    printf '%s' "$_d" | head -c 64
+}
+
+# ELF ABI 启发式（App identifyElf 的 shell 等价）：.dynstr 的 NUL 分隔
+# 字符串里精确匹配 —— libc.so.6=glibc / libc.so=bionic；两者同现或同缺
+# = unknown。激活/安装双闸（glibc 在 bionic 原生 wine 进程 dlopen 必败）。
+vk_so_abi() { # <so文件> → bionic|glibc|unknown
+    local _f="$1" _b=0 _g=0
+    [ -f "$_f" ] || { echo "unknown"; return; }
+    if tr '\0' '\n' < "$_f" 2>/dev/null | grep -qx 'libc.so.6'; then _g=1; fi
+    if tr '\0' '\n' < "$_f" 2>/dev/null | grep -qx 'libc.so'; then _b=1; fi
+    if [ "$_g" = 1 ] && [ "$_b" = 0 ]; then echo "glibc"; return; fi
+    if [ "$_b" = 1 ] && [ "$_g" = 0 ]; then echo "bionic"; return; fi
+    echo "unknown"
+}
+
+# X11 WSI 启发式：DT_NEEDED 无 libxcb 系 = android 平台构建（需 wrapper 路由）
+vk_so_has_x11wsi() { # <so文件> → 0/1
+    tr '\0' '\n' < "$1" 2>/dev/null | grep -q '^libxcb' && return 0
+    return 1
+}
+
+vk_driver_install() { # <slot> <zip|tar包> <dir名> —— 装进独立目录
+    local _slot="$1" _pkg="$2" _dir="$3"
+    local _stage="$RFS_USR/tmp/linbox-driver-install-$_dir"
+    local _base _so _lib _f _dest _abi
+    rm -rf "$_stage" && mkdir -p "$_stage"
+    # 解压工具在 rootfs 内：PATH 前插 rootfs bin（tar 的压缩程序同理）
+    local _opath="${PATH:-/system/bin}"
+    export PATH="$RFS_USR/bin:$RFS_USR/local/bin:$_opath"
+    case "$_pkg" in
+        *.zip)
+            if command -v unzip >/dev/null 2>&1; then
+                unzip -q -o "$_pkg" -d "$_stage" >/dev/null 2>&1 || {
+                    export PATH="$_opath"; rm -rf "$_stage"
+                    info "警告: 驱动包 $_pkg 解压失败（Vulkan 走 Mesa 内置）"; return 1; }
+            elif command -v busybox >/dev/null 2>&1 && busybox unzip --help >/dev/null 2>&1; then
+                busybox unzip -q -o "$_pkg" -d "$_stage" >/dev/null 2>&1 || {
+                    export PATH="$_opath"; rm -rf "$_stage"
+                    info "警告: 驱动包 $_pkg 解压失败（Vulkan 走 Mesa 内置）"; return 1; }
+            elif command -v bsdtar >/dev/null 2>&1; then
+                bsdtar -xf "$_pkg" -C "$_stage" >/dev/null 2>&1 || {
+                    export PATH="$_opath"; rm -rf "$_stage"
+                    info "警告: 驱动包 $_pkg 解压失败（Vulkan 走 Mesa 内置）"; return 1; }
+            else
+                export PATH="$_opath"; rm -rf "$_stage"
+                info "警告: 无 unzip/bsdtar，无法解压 zip 驱动包（pkg install unzip，或用 App 图形驱动页安装）"
+                return 1
+            fi
+            ;;
+        *)
+            if ! tar -xf "$_pkg" -C "$_stage" --unlink-first 2>/dev/null; then
+                export PATH="$_opath"; rm -rf "$_stage"
+                info "警告: 驱动包 $_pkg 解压失败（Vulkan 走 Mesa 内置）"
+                return 1
+            fi
+            ;;
+    esac
+    export PATH="$_opath"
+
+    _base="$_stage"
+    # 剥壳：唯一顶层目录且根级无文件 → 下钻一层（usr 是布局本体不剥）
+    if [ ! -d "$_stage/usr" ]; then
+        local _ndirs _nfiles _topdir
+        _ndirs="$(find "$_stage" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | wc -l)"
+        _nfiles="$(find "$_stage" -mindepth 1 -maxdepth 1 -type f ! -name '.*' 2>/dev/null | wc -l)"
+        if [ "$_ndirs" = "1" ] && [ "$_nfiles" = "0" ]; then
+            _topdir="$(find "$_stage" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -n 1)"
+            [ "$(basename "$_topdir")" != "usr" ] && _base="$_topdir"
+        fi
+    fi
+
+    # 定位驱动 so：A) rootfs 布局 usr/lib；B) meta.json libraryName
+    #（v3.3.20：yuzu/adpkg zip 的首选路径，vulkan.purple.so 命名也认）；
+    # C) 根级裸包（libvulkan*.so / vulkan.*.so / wrapper 栈）
+    _so=""
+    if [ -d "$_base/usr/lib" ]; then
+        _so="$(find "$_base/usr/lib" -maxdepth 1 -name 'libvulkan_wrapper.so' -type f 2>/dev/null | head -n 1)"
+        [ -z "$_so" ] && _so="$(find "$_base/usr/lib" -maxdepth 1 -name 'libvulkan*.so' -type f 2>/dev/null | head -n 1)"
+        [ -z "$_so" ] && _so="$(find "$_base/usr/lib" -maxdepth 1 -name 'vulkan.*.so' -type f 2>/dev/null | head -n 1)"
+    fi
+    if [ -z "$_so" ] && [ -f "$_base/meta.json" ]; then
+        _lib="$(sed -n 's/.*"libraryName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_base/meta.json" | head -n 1)"
+        [ -n "$_lib" ] && [ -f "$_base/$_lib" ] && _so="$_base/$_lib"
+    fi
+    if [ -z "$_so" ]; then
+        _so="$(find "$_base" -maxdepth 1 -name 'libvulkan_wrapper.so' -type f 2>/dev/null | head -n 1)"
+        [ -z "$_so" ] && _so="$(find "$_base" -maxdepth 1 -name 'libvulkan*.so' -type f 2>/dev/null | head -n 1)"
+        [ -z "$_so" ] && _so="$(find "$_base" -maxdepth 1 -name 'vulkan.*.so' -type f 2>/dev/null | head -n 1)"
+    fi
+    if [ -z "$_so" ]; then
+        info "警告: 驱动包 $_pkg 内未找到 Vulkan 驱动库（libvulkan*.so / vulkan.*.so / libvulkan_wrapper.so）"
+        rm -rf "$_stage"
+        return 1
+    fi
+
+    # ABI 门禁（App identifyElf 同语义）：glibc 构建在 bionic 原生 wine
+    # 进程 dlopen 必败（libc.so.6 无处可寻）→ 拒装，不再产出"选了必黑屏"的槽位
+    _abi="$(vk_so_abi "$_so")"
+    if [ "$_abi" = "glibc" ]; then
+        rm -rf "$_stage"
+        info "警告: 驱动 $_slot 为 glibc 构建（DT_NEEDED 含 libc.so.6），bionic 原生 wine 无法加载 —— 拒绝安装"
+        info "  出路: ① bionic 构建的 turnip 包 ② 或含 libvulkan_wrapper.so 的 wrapper 栈包（bionic 驱动经 adrenotools 路由）"
+        return 1
+    fi
+    if [ "$_abi" = "unknown" ]; then
+        rm -rf "$_stage"
+        info "警告: 无法识别驱动 $_slot 的 ABI（依赖表既无 libc.so 也无 libc.so.6）—— 拒绝安装"
+        return 1
+    fi
+
+    # 落位独立目录：驱动 so + 附属 .so（+ rootfs 布局的 share/vulkan json）
+    _dest="$DRIVERS_ROOT/$_dir"
+    rm -rf "$_dest" && mkdir -p "$_dest"
+    if [ -d "$_base/usr/lib" ]; then
+        find "$_base/usr/lib" -maxdepth 1 -name '*.so' -type f -exec cp -p {} "$_dest/" \; 2>/dev/null
+        [ -d "$_base/usr/share/vulkan/icd.d" ] \
+            && find "$_base/usr/share/vulkan/icd.d" -maxdepth 1 -name '*.json' -type f -exec cp -p {} "$_dest/" \; 2>/dev/null
+    else
+        find "$_base" -maxdepth 1 -name '*.so' -type f -exec cp -p {} "$_dest/" \; 2>/dev/null
+    fi
+
+    # 自生成 ICD（宿主绝对路径，不信任包内 json）+ meta
+    local _iswrapper=0 _drvlib=""
+    [ "$(basename "$_so")" = "libvulkan_wrapper.so" ] && _iswrapper=1
+    if [ "$_iswrapper" = "0" ]; then
+        _drvlib="$(basename "$_so")"
+    elif [ -f "$_base/meta.json" ]; then
+        # wrapper 栈包内可能配对 turnip 本体（meta 的 driverLibrary；本 shell
+        # 兜底安装路径仅 rootfs 布局包会出现，扁平包一般纯 wrapper）
+        _drvlib=""
+    fi
+    cat > "$_dest/icd.json" <<ICDEOF
+{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "api_version": "1.4.0",
+        "library_path": "$_dest/$(basename "$_so")"
+    }
+}
+ICDEOF
+    printf '{\n    "name": "%s",\n    "libraryName": "%s",\n    "driverLibrary": "%s",\n    "platform": "bionic",\n    "wrapperStack": %s,\n    "sourceFile": "%s",\n    "installedAt": %s\n}\n' \
+        "$_slot" "$(basename "$_so")" "$_drvlib" "$_iswrapper" "$(basename "$_pkg")" "$(date +%s 2>/dev/null || echo 0)" \
+        > "$_dest/meta.json"
+    rm -rf "$_stage"
+    info "Vulkan 驱动 $_slot 已安装 → $_dest（独立目录，Mesa 不受影响；$([ "$_iswrapper" = 1 ] && echo wrapper 栈 || echo turnip 直挂)）"
+    return 0
+}
+
+apply_vk_driver() {
+    local _slot _dir _icd _tar _f _srcdir _lib _basename _abi
+    _slot="$(conf_read "$CONT_CONF" wrapper "")"
+    [ -n "$_slot" ] && [ "$_slot" != "off" ] && [ "$_slot" != "auto" ] \
+        || _slot="$(conf_read "$CONT_CONF" turnip "")"
+    [ -n "$_slot" ] && [ "$_slot" != "off" ] && [ "$_slot" != "auto" ] || return 0
+
+    # ---- v3.3.32：系统专有驱动档（wrapper=system，App 图形驱动页同款）----
+    # ICD → 任一已装 wrapper 栈；不注入 ADRENOTOOLS_DRIVER_* ——
+    # libvulkan_wrapper.so 自身回退加载 /system/lib64/libvulkan.so
+    #（设备厂商专有驱动：高通 Adreno 系统驱动 / 联发科 Mali 同通路；
+    # 上游参考 的 "System" 选项同语义）。栈未安装时给可照做的出路
+    #（终端侧无法读 APK 资产 —— 在 App 图形驱动页选一次即自动安装）。
+    if [ "$_slot" = "system" ]; then
+        local _wdir="" _w _g
+        for _w in "$DRIVERS_ROOT"/*/; do
+            [ -f "$_w/libvulkan_wrapper.so" ] && [ -f "$_w/icd.json" ] && { _wdir="${_w%/}"; break; }
+        done
+        if [ -n "$_wdir" ]; then
+            ensure_ndk_deps   # v3.3.29：NDK 依赖前置解析（libbinder_ndk 链）
+            export VK_ICD_FILENAMES="$_wdir/icd.json"
+            export LD_LIBRARY_PATH="$_wdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export ADRENOTOOLS_HOOKS_PATH="$_wdir"
+            info "系统专有驱动激活: wrapper 栈（$(basename "$_wdir")）→ wrapper 回退系统 /system/lib64/libvulkan.so（高通/联发科厂商专有驱动；X11 WSI 由 wrapper 提供，v3.3.32）"
+        else
+            info "警告: 系统驱动档需要 wrapper 栈（当前未安装）—— 在 App 图形驱动页选一次『系统驱动（高通/联发科专有）』即自动安装内置栈（APK 资产，终端侧无法自解）；本次 Vulkan 走 Mesa 内置"
+        fi
+        # GL 侧 zink 联动（与下方主路径同款）
+        _g="$(conf_read "$CONT_CONF" gallium auto)"
+        case "$_g" in
+            auto|" "|""|zink)
+                export MESA_LOADER_DRIVER_OVERRIDE=zink
+                export GALLIUM_DRIVER=zink
+                export ZINK_DESCRIPTORS="${ZINK_DESCRIPTORS:-lazy}"
+                export ZINK_DEBUG="${ZINK_DEBUG:-compact}"
+                export TU_DEBUG="${TU_DEBUG:-noconform}"
+                ;;
+        esac
+        return 0
+    fi
+
+    _dir="$(vk_slot_dirname "$_slot")"
+    local _dirfull="$DRIVERS_ROOT/$_dir"
+    _icd="$_dirfull/icd.json"
+
+    # 兜底安装：slot 未安装而 /opt/wrapper、/opt/tz、/opt/yuzu 有对应
+    # zip/tar 包 → 装进独立目录（App 图形驱动页 ➕ 是主入口，此处保证
+    # 终端/旧容器可用；v3.3.37 起专有驱动包独立 /opt/yuzu 目录）
+    if [ ! -f "$_icd" ]; then
+        _tar=""
+        for _srcdir in wrapper tz yuzu; do
+            for _f in "$RFS_ROOT/opt/$_srcdir/$_slot."*; do
+                [ -f "$_f" ] || continue
+                _tar="$_f"; break 2
+            done
+        done
+        if [ -n "$_tar" ]; then
+            vk_driver_install "$_slot" "$_tar" "$_dir" || return 0
+        else
+            info "警告: Vulkan 驱动 $_slot 未安装且 /opt 内无对应包（Vulkan 走 Mesa 内置）"
+            return 0
+        fi
+    fi
+    [ -f "$_icd" ] || return 0
+
+    # ICD 目标库（自生成 ICD 为绝对路径；相对路径按 slot 目录解析）
+    _lib="$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_icd" | head -n 1)"
+    [ -n "$_lib" ] || return 0
+    case "$_lib" in
+        /*) ;;
+        *) _lib="$DRIVERS_ROOT/$_dir/$_lib" ;;
+    esac
+    [ -f "$_lib" ] || return 0
+    _basename="$(basename "$_lib")"
+
+    # ABI 复核（防手改 ICD / 旧槽位）
+    _abi="$(vk_so_abi "$_lib")"
+    if [ "$_abi" = "glibc" ]; then
+        info "警告: Vulkan 驱动 $_slot 为 glibc 构建（bionic 原生 wine 无法加载），回退 Mesa 内置"
+        return 0
+    fi
+
+    if [ "$_basename" = "libvulkan_wrapper.so" ]; then
+        # ---- wrapper 栈模式（上游实现 setDriverById + wrapper_icd 同款）----
+        # ICD→libvulkan_wrapper.so；turnip 本体（同包 meta.driverLibrary）
+        # 经 ADRENOTOOLS_* 注入；hooks 目录（libmain_hook.so 等所在）=
+        # wrapper slot 目录；temp 目录为 adrenotools patched .so 落盘位
+        #（wrapper 内部拼 <driverPath>/temp，上游实现 vulkan.c 同款）
+        ensure_ndk_deps   # v3.3.29：NDK 依赖前置解析（libbinder_ndk 链）
+        local _drv=""
+        _drv="$(sed -n 's/.*"driverLibrary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$DRIVERS_ROOT/$_dir/meta.json" 2>/dev/null | head -n 1)"
+        export VK_ICD_FILENAMES="$_icd"
+        export LD_LIBRARY_PATH="$_dirfull${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export ADRENOTOOLS_HOOKS_PATH="$_dirfull"
+        if [ -n "$_drv" ] && [ -f "$_dirfull/$_drv" ]; then
+            # v3.3.28：尾斜杠对齐上游参考（setDriverById 拼法 dir + "/"）
+            export ADRENOTOOLS_DRIVER_PATH="$_dirfull/"
+            export ADRENOTOOLS_DRIVER_NAME="$_drv"
+            mkdir -p "$_dirfull/temp" 2>/dev/null || true
+            info "Vulkan 驱动激活: $_slot（wrapper 栈 + adrenotools 加载 $_drv，hooks=$_dirfull；X11 WSI 由 wrapper 提供）"
+        else
+            info "Vulkan 驱动激活: $_slot（wrapper 栈，未配对 turnip 本体 → wrapper 走系统 GPU 驱动，hooks=$_dirfull）"
+        fi
+    elif vk_so_has_x11wsi "$_lib"; then
+        # ---- X11 平台构建（libxcb 直挂）：DXVK 交换链可直接创建 ----
+        ensure_ndk_deps   # v3.3.30：系统库直通（防桩遮蔽，幂等）
+        export VK_ICD_FILENAMES="$_icd"
+        export LD_LIBRARY_PATH="$_dirfull${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        info "Vulkan 驱动激活: $_slot（X11 平台构建直挂，bionic ✓）"
+    else
+        # ---- android 平台裸 turnip（yuzu/Adrenotools 型，无 X11 WSI）----
+        # 直挂必黑屏（VK_KHR_surface 不支持）—— 找已装 wrapper 栈槽位路由
+        #（App activationFor 同语义）：ICD 换 wrapper 的，turnip 走
+        # ADRENOTOOLS_*，X11 WSI 由 wrapper 的 xcb 侧提供
+        local _wdir="" _w
+        for _w in "$DRIVERS_ROOT"/*/; do
+            [ -f "$_w/libvulkan_wrapper.so" ] && [ -f "$_w/icd.json" ] && { _wdir="${_w%/}"; break; }
+        done
+        if [ -n "$_wdir" ]; then
+            ensure_ndk_deps   # v3.3.29：NDK 依赖前置解析（libbinder_ndk 链）
+            export VK_ICD_FILENAMES="$_wdir/icd.json"
+            export LD_LIBRARY_PATH="$_dirfull:$_wdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export ADRENOTOOLS_DRIVER_PATH="$_dirfull/"
+            export ADRENOTOOLS_DRIVER_NAME="$_basename"
+            export ADRENOTOOLS_HOOKS_PATH="$_wdir"
+            mkdir -p "$_dirfull/temp" 2>/dev/null || true
+            info "Vulkan 驱动激活: $_slot（android 平台构建 → 经 $(basename "$_wdir") 的 wrapper 栈路由 + adrenotools 加载 $_basename；X11 WSI 由 wrapper 提供）"
+        else
+            export VK_ICD_FILENAMES="$_icd"
+            export LD_LIBRARY_PATH="$_dirfull${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            info "警告: Vulkan 驱动 $_slot 为 android 平台构建（无 X11 WSI）且未装 wrapper 栈 —— DXVK 交换链可能失败"
+            info "  出路: 装一个含 libvulkan_wrapper.so 的 wrapper 栈包（自动路由）或换 X11 平台构建包"
+            info "Vulkan 驱动激活: $_slot（直挂，无路由）"
+        fi
+    fi
+    # GL 侧 zink 联动（auto/空/zink 档）
+    local _g
+    _g="$(conf_read "$CONT_CONF" gallium auto)"
+    case "$_g" in
+        auto|" "|""|zink)
+            export MESA_LOADER_DRIVER_OVERRIDE=zink
+            export GALLIUM_DRIVER=zink
+            export ZINK_DESCRIPTORS="${ZINK_DESCRIPTORS:-lazy}"
+            export ZINK_DEBUG="${ZINK_DEBUG:-compact}"
+            export TU_DEBUG="${TU_DEBUG:-noconform}"
+            ;;
+    esac
+}
+
+# ---------- 用户附加环境 + DLL 覆盖 ----------
+apply_extra_env() {
+    local _extra
+    _extra="$(conf_read "$CONT_CONF" env "")"
+    if [ -n "$_extra" ]; then
+        # shellcheck disable=SC2086
+        export $_extra
+    fi
+    # v3.3.34（用户："启动参数加 hodll=libwow64fex.dll 好像没有真正运行"）：
+    # wine 读【大写】HODLL/HODLL64 —— 用户在 env= 写小写 hodll=/hodll64=
+    # 时 export 出的是小写变量，wine 永远读不到。此处归一：小写已设且
+    # 大写未设 → 提升为大写（App 原生链 WineEnvironment 同款语义）。
+    [ -n "${hodll:-}" ]    && [ -z "${HODLL:-}" ]    && export HODLL="$hodll"
+    [ -n "${hodll64:-}" ]  && [ -z "${HODLL64:-}" ]  && export HODLL64="$hodll64"
+    local _ovr
+    _ovr="$(conf_read "$CONT_CONF" dxoverrides "")"
+    [ -n "$_ovr" ] && export WINEDLLOVERRIDES="${_ovr}${WINEDLLOVERRIDES:+:$WINEDLLOVERRIDES}"
+}
+
+# ---------- Android 沙箱安全默认 + arm64ec 仿真器 DLL（v3.1.4） ----------
+apply_android_safe_env() {
+    # fsync 的 futex_waitv 能力探测在 Android 上被 seccomp 以 SIGSYS
+    # 击杀（proton 树退出码 159 根因；构建侧已加 __ANDROID__ 守卫根治，
+    # 此处环境默认再兜一层 —— 旧版 wine 包没打守卫时也能活）；esync 依赖
+    # /dev/shm 与 eventfd，沙箱内行为不可预期。默认双禁（上游
+    # 上游项目 同款），用户 extra env 可覆盖（apply_extra_env 在后面执行）。
+    # v3.3.37：WINEESYNC 0→1（对齐上游参考 XServerDisplayActivity
+    # :1748-1751 未设即强制 1）：同为 bionic 直跑环境，esync 是线程密集型
+    # 32 位 D3D9 游戏的主帧率供应商；fd 上限不够时 extra env 写
+    # WINEESYNC=0 一键回退。WINEFSYNC 保持 0（futex_waitv 必被 seccomp
+    # SIGSYS 击杀，构建侧 __ANDROID__ 守卫 + 此处兑底双保险）。
+    [ -z "${WINEFSYNC:-}" ] && export WINEFSYNC=0
+    [ -z "${WINEESYNC:-}" ] && export WINEESYNC=1
+    # v3.2.8：userfaultfd 写监视探测（wine 10/proton_10.0 树 virtual_init
+    # 无条件调 kernel_writewatch_init → 裸 syscall(__NR_userfaultfd)，
+    # aarch64 nr 374）不在 Android 应用 seccomp 白名单 → SIGSYS(31) →
+    # 退出码 159 —— proton arm64ec "打印一行 heap-tagging 后秒退"的真正
+    # 根因（fsync 守卫早已生效仍 159 的原因）。wine 10 树自带本变量开关
+    # （virtual.c: getenv("WINE_DISABLE_KERNEL_WRITEWATCH")），置 1 跳过
+    # 探测；wine 11 树不读它（编译期已排除），导出零副作用。旧包免重装。
+    [ -z "${WINE_DISABLE_KERNEL_WRITEWATCH:-}" ] && export WINE_DISABLE_KERNEL_WRITEWATCH=1
+    # v3.3.35：winedbg 崩溃挂死修复（设备日志 wine-10-20261109 实证：
+    # 仙剑四页错误 → wine 拉起 syswow64\winedbg.exe —— 调试器本身也是
+    # 32 位 wow64 进程再经 FEX 转译，崩溃路径拖长且弹调试窗口，用户
+    # 视角“游戏卡死”。winedbg=d 置 disabled：未处理异常时 wine 打印
+    # 异常行后进程直接退出；容器 dxoverrides（apply_extra_env）前插，
+    # 用户写 winedbg=n,b 在最前可恢复调试器。
+    [ -z "${WINEDLLOVERRIDES:-}" ] && export WINEDLLOVERRIDES="winedbg=d"
+    # v3.3.37：DXVK 真激活（App 侧 WineEnvironment.applyDxvkEnv 同款）——
+    # v3.2.27 撤销全部 DllOverrides 后，wine 默认加载序（builtin 优先）
+    # 从未真正加载过解压进 windows/ 的 DXVK DLL；dxvk 槽位非 off 时
+    # 注入 D3D/DXGI 全家 native,builtin（上游参考 WineUtils.java:141
+    # 同款）。仅用户未显式设置时生效，extra env/dxoverrides 仍最高优。
+    if [ -z "${WINEDLLOVERRIDES:-}" ] || [ "${WINEDLLOVERRIDES}" = "winedbg=d" ]; then
+        _dxvk="$(conf_read "$CONT_CONF" dxvk auto)"
+        case "$_dxvk" in
+            off|"") ;;
+            *)
+                export WINEDLLOVERRIDES="d3d8,d3d9,d3d10,d3d10_1,d3d10core,d3d11,d3d12,d3d12core,ddraw,dxgi=native,builtin;winedbg=d"
+                info "DXVK 激活：D3D/DXGI 全家 native,builtin（不覆盖则 wine 默认序永不加载 DXVK；winedbg=d 兜底保留）"
+                ;;
+        esac
+    fi
+    # v3.4.2【HODLL 对齐参考源码】：默认【不】注入 HODLL/HODLL64 ——
+    # wine 侧（0010/0011 补丁）无 HODLL 时的内部缺省即 libwow64fex/
+    # libarm64ecfex（hangover 树自带缺省），fex 运行默认直接 wine exe。
+    # 只有用户显式选择才注入：env= 写 HODLL=/HODLL64=（apply_extra_env
+    # 的小写归一已处理）或启动命令行前置 HODLL=xxx。v3.3.34/v3.4.0 的
+    # 默认注入已撤销 —— 会在用户未选择时改写 32 位模拟层（用户实测
+    # 「性能更差了」的直接嫌疑源）。
+    # 取值对齐上游发行包（LaunchPlan 二选一）：HODLL=libwow64fex.dll
+    # 或 HODLL=wowbox64.dll（部分 32 位游戏需要后者 box64-in-wow64；
+    # App 侧勾选 FEX模式/wowbox64模式 即等价写入 env= —— 脚本路径用户
+    # 手写 env= HODLL=wowbox64.dll 同效）。dll 缺席请勿注入（32 位进程
+    # 死于 c0000135，不如留给 wine 内部缺省）。
+}
+
+# ---------- v3.3.37：全局性能基线（上游参考 容器出厂调优串移植） ----------
+# App 侧 WineEnvironment.applyPerfBaselineEnv 同款语义（DefaultVersion.
+# ENV_VARS + XServerDisplayActivity:2431-2441 + DXVKConfigDialog:152-194），
+# box64 / arm64ec 两条线共用；全部"未设才导出"—— opt conf（apply_opt_
+# conf_env 在后）与容器 env=（apply_extra_env 在后）均可逐项覆盖。
+apply_perf_baseline_env() {
+    # Mesa / 呈现（闪屏对策：mailbox 防撕裂 + 低延迟）
+    [ -z "${MESA_VK_WSI_PRESENT_MODE:-}" ] && export MESA_VK_WSI_PRESENT_MODE=mailbox
+    [ -z "${MESA_NO_ERROR:-}" ]            && export MESA_NO_ERROR=1
+    [ -z "${MESA_DEBUG:-}" ]               && export MESA_DEBUG=silent
+    [ -z "${ZINK_DESCRIPTORS:-}" ]         && export ZINK_DESCRIPTORS=lazy
+    [ -z "${ZINK_DEBUG:-}" ]               && export ZINK_DEBUG=compact
+    # DXVK（异步管线编译 + 状态缓存持久化 + 零日志）
+    [ -z "${DXVK_DISABLE_TIMELINE_SEMAPHORES:-}" ] && export DXVK_DISABLE_TIMELINE_SEMAPHORES=1
+    [ -z "${DXVK_ASYNC:-}" ]        && export DXVK_ASYNC=1
+    [ -z "${DXVK_GPLASYNCCACHE:-}" ] && export DXVK_GPLASYNCCACHE=1
+    [ -z "${DXVK_LOG_LEVEL:-}" ]    && export DXVK_LOG_LEVEL=none
+    [ -z "${DXVK_HUD:-}" ]          && export DXVK_HUD=0
+    if [ -z "${DXVK_STATE_CACHE_PATH:-}" ]; then
+        mkdir -p "${HOME%/}/.cache/dxvk-state" 2>/dev/null
+        export DXVK_STATE_CACHE_PATH="${HOME%/}/.cache/dxvk-state"
+    fi
+    # wine 行为（BionicProgramLauncherComponent:294-308 同款）+ fixme 洪流静默
+    [ -z "${WINEDEBUG:-}" ] && export WINEDEBUG=-all
+    [ -z "${WINE_GST_NO_GL:-}" ] && export WINE_GST_NO_GL=1
+    [ -z "${WINE_NO_DUPLICATE_EXPLORER:-}" ] && export WINE_NO_DUPLICATE_EXPLORER=1
+    [ -z "${WINE_DISABLE_FULLSCREEN_HACK:-}" ] && export WINE_DISABLE_FULLSCREEN_HACK=1
+    [ -z "${GST_PLUGIN_FEATURE_RANK:-}" ] \
+        && export GST_PLUGIN_FEATURE_RANK="ximagesink:3000,avdec_wmav1:512,avdec_wmav2:512,avdec_wmapro:512"
+    info "性能基线生效（mailbox 呈现 + GL NO_ERROR + DXVK 异步/状态缓存 + WINEDEBUG=-all；conf/env 可覆盖）"
+}
+
+# ---------- v3.3.35：arm64ec 线性能档位（FEX_ 前缀环境变量） ----------
+apply_fex_preset_env() {
+    # v3.4.3【FEX 预设 JSON 对齐】：四档 15 项 FEX_* 与 assets
+    # builtin/fex_presets.json（用户提供的 assets-ck 资产；App 侧
+    # WineEnvironment.applyFexPresetEnv 运行时读同一文件，上游发行包
+    # FEXPresetManager/LaunchPlan.buildEnv:226-228 同款表）逐项一致 ——
+    # 脚本路径无 APK assets 可读，表按 JSON 展开内联。
+    # 旧表每档仅 2-3 项：performance 档的 TSOENABLED=0（标量 TSO 关）/
+    # SMC_CHECKS=none（自修改代码检测关）/ VOLATILEMETADATA=0/
+    # HALFBARRIERTSOENABLED=0 才是 FEX 转译吞吐主旋钮，全部补齐；
+    # 稳定/兼容档旧「VECTORTSO=1 反向兜底」撤销（JSON 稳定档靠
+    # TSOENABLED=1 + HALFBARRIER=1 + SMC=mtrack 兜底）；
+    # X87REDUCEDPRECISION 按 JSON 全档 0（上游注明 may result in
+    # rendering bugs，上游发行包 四档全不开）。
+    # 未设才导出（opt conf / 容器 env= 在后仍可覆盖）；未知变量名被旧
+    # FEX 构建忽略，零副作用。仅 aarch64 形态（arm64ec 线，不经 box64）。
+    [ "${WINE_ARCH:-}" != "aarch64" ] && return 0
+    local _preset
+    _preset="$(conf_read "$CONT_CONF" preset performance)"
+    case "$_preset" in
+        stability)
+            [ -z "${FEX_TSOENABLED:-}" ]                  && export FEX_TSOENABLED=1
+            [ -z "${FEX_VECTORTSOENABLED:-}" ]            && export FEX_VECTORTSOENABLED=0
+            [ -z "${FEX_HALFBARRIERTSOENABLED:-}" ]       && export FEX_HALFBARRIERTSOENABLED=1
+            [ -z "${FEX_MEMCPYSETTSOENABLED:-}" ]         && export FEX_MEMCPYSETTSOENABLED=0
+            [ -z "${FEX_X87REDUCEDPRECISION:-}" ]         && export FEX_X87REDUCEDPRECISION=0
+            [ -z "${FEX_MULTIBLOCK:-}" ]                  && export FEX_MULTIBLOCK=0
+            [ -z "${FEX_MAXINST:-}" ]                     && export FEX_MAXINST=5000
+            [ -z "${FEX_HOSTFEATURES:-}" ]                && export FEX_HOSTFEATURES=off
+            [ -z "${FEX_SMALLTSCSCALE:-}" ]               && export FEX_SMALLTSCSCALE=1
+            [ -z "${FEX_SMC_CHECKS:-}" ]                  && export FEX_SMC_CHECKS=mtrack
+            [ -z "${FEX_VOLATILEMETADATA:-}" ]            && export FEX_VOLATILEMETADATA=1
+            [ -z "${FEX_MONOHACKS:-}" ]                   && export FEX_MONOHACKS=1
+            [ -z "${FEX_HIDEHYPERVISORBIT:-}" ]           && export FEX_HIDEHYPERVISORBIT=0
+            [ -z "${FEX_DISABLEL2CACHE:-}" ]              && export FEX_DISABLEL2CACHE=0
+            [ -z "${FEX_DYNAMICL1CACHE:-}" ]              && export FEX_DYNAMICL1CACHE=0
+            info "性能档 arm64ec 线生效（FEX 预设 JSON·stability 档）：15 项完整注入（TSO 全开 + SMC=mtrack 兜底）"
+            ;;
+        compatibility)
+            [ -z "${FEX_TSOENABLED:-}" ]                  && export FEX_TSOENABLED=1
+            [ -z "${FEX_VECTORTSOENABLED:-}" ]            && export FEX_VECTORTSOENABLED=0
+            [ -z "${FEX_HALFBARRIERTSOENABLED:-}" ]       && export FEX_HALFBARRIERTSOENABLED=1
+            [ -z "${FEX_MEMCPYSETTSOENABLED:-}" ]         && export FEX_MEMCPYSETTSOENABLED=0
+            [ -z "${FEX_X87REDUCEDPRECISION:-}" ]         && export FEX_X87REDUCEDPRECISION=0
+            [ -z "${FEX_MULTIBLOCK:-}" ]                  && export FEX_MULTIBLOCK=1
+            [ -z "${FEX_MAXINST:-}" ]                     && export FEX_MAXINST=5000
+            [ -z "${FEX_HOSTFEATURES:-}" ]                && export FEX_HOSTFEATURES=off
+            [ -z "${FEX_SMALLTSCSCALE:-}" ]               && export FEX_SMALLTSCSCALE=1
+            [ -z "${FEX_SMC_CHECKS:-}" ]                  && export FEX_SMC_CHECKS=mtrack
+            [ -z "${FEX_VOLATILEMETADATA:-}" ]            && export FEX_VOLATILEMETADATA=1
+            [ -z "${FEX_MONOHACKS:-}" ]                   && export FEX_MONOHACKS=1
+            [ -z "${FEX_HIDEHYPERVISORBIT:-}" ]           && export FEX_HIDEHYPERVISORBIT=0
+            [ -z "${FEX_DISABLEL2CACHE:-}" ]              && export FEX_DISABLEL2CACHE=0
+            [ -z "${FEX_DYNAMICL1CACHE:-}" ]              && export FEX_DYNAMICL1CACHE=0
+            info "性能档 arm64ec 线生效（FEX 预设 JSON·compatibility 档）：15 项完整注入（标量 TSO 开）"
+            ;;
+        intermediate)
+            [ -z "${FEX_TSOENABLED:-}" ]                  && export FEX_TSOENABLED=1
+            [ -z "${FEX_VECTORTSOENABLED:-}" ]            && export FEX_VECTORTSOENABLED=0
+            [ -z "${FEX_HALFBARRIERTSOENABLED:-}" ]       && export FEX_HALFBARRIERTSOENABLED=1
+            [ -z "${FEX_MEMCPYSETTSOENABLED:-}" ]         && export FEX_MEMCPYSETTSOENABLED=0
+            [ -z "${FEX_X87REDUCEDPRECISION:-}" ]         && export FEX_X87REDUCEDPRECISION=0
+            [ -z "${FEX_MULTIBLOCK:-}" ]                  && export FEX_MULTIBLOCK=1
+            [ -z "${FEX_MAXINST:-}" ]                     && export FEX_MAXINST=5000
+            [ -z "${FEX_HOSTFEATURES:-}" ]                && export FEX_HOSTFEATURES=off
+            [ -z "${FEX_SMALLTSCSCALE:-}" ]               && export FEX_SMALLTSCSCALE=1
+            [ -z "${FEX_SMC_CHECKS:-}" ]                  && export FEX_SMC_CHECKS=mtrack
+            [ -z "${FEX_VOLATILEMETADATA:-}" ]            && export FEX_VOLATILEMETADATA=1
+            [ -z "${FEX_MONOHACKS:-}" ]                   && export FEX_MONOHACKS=0
+            [ -z "${FEX_HIDEHYPERVISORBIT:-}" ]           && export FEX_HIDEHYPERVISORBIT=0
+            [ -z "${FEX_DISABLEL2CACHE:-}" ]              && export FEX_DISABLEL2CACHE=0
+            [ -z "${FEX_DYNAMICL1CACHE:-}" ]              && export FEX_DYNAMICL1CACHE=0
+            info "性能档 arm64ec 线生效（FEX 预设 JSON·intermediate 档）：15 项完整注入"
+            ;;
+        performance|*)
+            [ -z "${FEX_TSOENABLED:-}" ]                  && export FEX_TSOENABLED=0
+            [ -z "${FEX_VECTORTSOENABLED:-}" ]            && export FEX_VECTORTSOENABLED=0
+            [ -z "${FEX_HALFBARRIERTSOENABLED:-}" ]       && export FEX_HALFBARRIERTSOENABLED=0
+            [ -z "${FEX_MEMCPYSETTSOENABLED:-}" ]         && export FEX_MEMCPYSETTSOENABLED=0
+            [ -z "${FEX_X87REDUCEDPRECISION:-}" ]         && export FEX_X87REDUCEDPRECISION=0
+            [ -z "${FEX_MULTIBLOCK:-}" ]                  && export FEX_MULTIBLOCK=1
+            [ -z "${FEX_MAXINST:-}" ]                     && export FEX_MAXINST=5000
+            [ -z "${FEX_HOSTFEATURES:-}" ]                && export FEX_HOSTFEATURES=off
+            [ -z "${FEX_SMALLTSCSCALE:-}" ]               && export FEX_SMALLTSCSCALE=1
+            [ -z "${FEX_SMC_CHECKS:-}" ]                  && export FEX_SMC_CHECKS=none
+            [ -z "${FEX_VOLATILEMETADATA:-}" ]            && export FEX_VOLATILEMETADATA=0
+            [ -z "${FEX_MONOHACKS:-}" ]                   && export FEX_MONOHACKS=1
+            [ -z "${FEX_HIDEHYPERVISORBIT:-}" ]           && export FEX_HIDEHYPERVISORBIT=0
+            [ -z "${FEX_DISABLEL2CACHE:-}" ]              && export FEX_DISABLEL2CACHE=0
+            [ -z "${FEX_DYNAMICL1CACHE:-}" ]              && export FEX_DYNAMICL1CACHE=0
+            info "性能档 arm64ec 线生效（FEX 预设 JSON·performance 档）：15 项完整注入（TSO 全关 + SMC=none + VOLATILEMETADATA=0 —— 转译吞吐主旋钮）"
+            ;;
+    esac
+    # v3.3.37：FEX Config.json（上游参考 FEXCoreManager.java:110-118/241-243
+    # 实证通道）：libwow64fex/libarm64ecfex 读 $HOME/.fex-emu/Config.json——
+    # FEX_* 环境变量在部分构建上不生效，配置文件是参考实现验证过的通道，
+    # 双通道保险。v3.4.3：键值与 fex_presets.json 同源（11 键全量），
+    # 幂等。
+    local _json
+    case "$_preset" in
+        stability)      _json='{"Config":{"TSOEnabled":"1","VectorTSOEnabled":"0","HalfBarrierTSOEnabled":"1","MemcpySetTSOEnabled":"0","X87ReducedPrecision":"0","Multiblock":"0","DisableL2Cache":"0","DynamicL1Cache":"0","MaxInst":"5000","SmallTSCScale":"1","VolatileMetadata":"1"}}' ;;
+        compatibility)  _json='{"Config":{"TSOEnabled":"1","VectorTSOEnabled":"0","HalfBarrierTSOEnabled":"1","MemcpySetTSOEnabled":"0","X87ReducedPrecision":"0","Multiblock":"1","DisableL2Cache":"0","DynamicL1Cache":"0","MaxInst":"5000","SmallTSCScale":"1","VolatileMetadata":"1"}}' ;;
+        intermediate)   _json='{"Config":{"TSOEnabled":"1","VectorTSOEnabled":"0","HalfBarrierTSOEnabled":"1","MemcpySetTSOEnabled":"0","X87ReducedPrecision":"0","Multiblock":"1","DisableL2Cache":"0","DynamicL1Cache":"0","MaxInst":"5000","SmallTSCScale":"1","VolatileMetadata":"1"}}' ;;
+        performance|*)  _json='{"Config":{"TSOEnabled":"0","VectorTSOEnabled":"0","HalfBarrierTSOEnabled":"0","MemcpySetTSOEnabled":"0","X87ReducedPrecision":"0","Multiblock":"1","DisableL2Cache":"0","DynamicL1Cache":"0","MaxInst":"5000","SmallTSCScale":"1","VolatileMetadata":"0"}}' ;;
+    esac
+    if mkdir -p "${HOME%/}/.fex-emu" 2>/dev/null; then
+        if [ ! -f "${HOME%/}/.fex-emu/Config.json" ] \
+            || [ "$(cat "${HOME%/}/.fex-emu/Config.json" 2>/dev/null)" != "$_json" ]; then
+            printf '%s\n' "$_json" > "${HOME%/}/.fex-emu/Config.json" 2>/dev/null \
+                && info "FEX 配置: ~/.fex-emu/Config.json 已写入（${_preset} 档，11 键全量 —— 与 fex_presets.json 同源）"
+        fi
+    fi
+    # JIT 磁盘缓存（二次启动免重编译；参考实现 Proton11 容器默认）
+    [ -z "${FEX_DISKCACHE:-}" ] && export FEX_DISKCACHE=1
+}
+
+apply_box64_env() {
+    local _preset _wul
+    _preset="$(conf_read "$CONT_CONF" preset performance)"
+    export BOX64_LOG=0
+    export BOX64_NOBANNER=1
+    export BOX64_DYNAREC_TRACE=0
+    # v3.3.37（上游参考 BionicProgramLauncherComponent:427-438 同款）：
+    # dynarec 显式开启 + GLX 桥接（缺 X11GLX 时 GLX 走死路）。
+    [ -z "${BOX64_DYNAREC:-}" ] && export BOX64_DYNAREC=1
+    [ -z "${BOX64_X11GLX:-}" ]  && export BOX64_X11GLX=1
+    # v3.2.24（用户问题 3，对齐 startwine.sh / startfex.sh 参考链路）：
+    #   export BOX64_PATH=$WINE_PATH/bin
+    #   export BOX64_LD_LIBRARY_PATH=$WINEPATH/lib/wine/i386-unix:$WINEPATH/lib/wine/x86_64-unix
+    # ① BOX64_PATH：wine（box64 仿真）exec 子进程（wineserver/wineboot/
+    #   安装器再拉起的 x86_64 子进程）时，box64 在这里找 x86_64 目标 ——
+    #   $WINE_DIR/bin 不在 PATH，缺它部分子进程拉不起（参考脚本的核心
+    #   导出之一）。仅目录存在时写入。
+    if [ -d "$WINE_DIR/bin" ]; then
+        export BOX64_PATH="$WINE_DIR/bin"
+    fi
+    # ② wine 槽位自身的 unix 库目录：wine 的 unix 侧 .so 由 box64 仿真
+    #   加载时优先在自己的 lib/wine/<arch>-unix 里解析（参考脚本原样
+    #   导出的两个目录），前插到闭包目录之前。
+    if [ -d "$WINE_DIR/lib/wine/i386-unix" ] || [ -d "$WINE_DIR/lib/wine/x86_64-unix" ]; then
+        _wul=""
+        [ -d "$WINE_DIR/lib/wine/i386-unix" ]   && _wul="$WINE_DIR/lib/wine/i386-unix"
+        [ -d "$WINE_DIR/lib/wine/x86_64-unix" ] && _wul="${_wul:+$_wul:}$WINE_DIR/lib/wine/x86_64-unix"
+        export BOX64_LD_LIBRARY_PATH="$_wul${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+    fi
+    # v3.1.4：wine 发行包自带的 x86_64-bionic 依赖闭包（opt/<wine>/lib/
+    # x86_64-bionic，CI 打包步骤 8.5a 注入）—— aarch64 rootfs 只有
+    # aarch64 库，x86_64 形态 wine 的 unix .so（及其 DT_NEEDED：
+    # libpulse/libasound/libX11/libandroid-shmem/gstreamer…）由 box64
+    # 仿真加载，只能从这个私有目录找，缺它 wine 直接 "Symbol ... not
+    # found" 起不来。gstreamer 插件同步指向包内 x86_64 版（rootfs 里
+    # 的是 aarch64，x86_64 libgstreamer 加载不了）。
+    if [ -d "$WINE_DIR/lib/x86_64-bionic" ]; then
+        export BOX64_LD_LIBRARY_PATH="$WINE_DIR/lib/x86_64-bionic${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+        if [ -d "$WINE_DIR/lib/x86_64-bionic/gstreamer-1.0" ]; then
+            export GST_PLUGIN_SYSTEM_PATH="$WINE_DIR/lib/x86_64-bionic/gstreamer-1.0"
+        fi
+    else
+        # v3.2.0：闭包缺失诊断（设备实测 proton10-x86_64 旧包仍报
+        # "Symbol shm_open not found"）—— 旧包没有 x86_64-bionic 目录，
+        # 环境变量救不了缺文件，把“请重装 v3.1.4+ 构建的 wine 包”直接
+        # 写进会话日志，不再让用户对着 box64 报错猜原因。
+        warn "该 wine 包缺少 lib/x86_64-bionic 依赖闭包（v3.1.4 之前构建的旧包）"
+        warn "→ box64 加载 wine unix .so 时将报 Symbol shm_open not found；请用新 CI 重跑 build-wine-bionic（x86_64 形态）并重装该包"
+    fi
+    # x86_64 glibc 运行库（rootfs 自带 usr/lib/x86_64-linux-gnu，由
+    # bionic-rootfs 的 glibc-x86_64 配方安装）：本 wine 是 bionic 链接、
+    # 不需要它；但容器内跑常规 glibc x86_64 Linux 程序时，box64 会在
+    # BOX64_LD_LIBRARY_PATH 各目录里找 libc/ld-linux —— 缺它则直接报
+    # "cannot open shared object file"。仅在目录存在时追加，不干扰纯
+    # bionic 环境。
+    if [ -d "$RFS_USR/lib/x86_64-linux-gnu" ]; then
+        export BOX64_LD_LIBRARY_PATH="$RFS_USR/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+    fi
+    # v3.2.5：glibc 形态 box64 的加载器自检 —— CI 构建的 box64 是
+    # glibc 链接 ELF（PT_INTERP 已被配方 patchelf 指到 rootfs 内的
+    # ld-linux-aarch64.so.1，运行库由 glibc-aarch64 配方/随包提供）。
+    # 加载器缺失时 exec 直接 ENOENT（"not found"），会话零输出即死
+    # —— 把结论前置进日志，不再让用户对着空输出猜原因。
+    # （.interp 字符串出现在二进制头部，grep 即判形态；bionic 形态
+    #  box64 不含该字符串，零打扰。）
+    if [ -n "$BOX64_BIN" ] && [ -f "$BOX64_BIN" ] \
+        && grep -aq "ld-linux-aarch64.so.1" "$BOX64_BIN" 2>/dev/null \
+        && [ ! -e "$RFS_USR/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" ]; then
+        warn "box64 为 glibc 形态，但 rootfs 缺少 $RFS_USR/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+        warn "→ exec 将以 ENOENT 失败（表现为零输出/退出码 127）；执行 linbox-container install-box64 <新版 tar.gz>（含 glibc 运行库）或重建 rootfs"
+    fi
+    # v3.4.3【box64 预设 JSON 对齐】：四档 11 项 BOX64_* 与 assets
+    # builtin/box64_presets.json（assets-ck 资产，App 侧
+    # WineEnvironment.applyBox64Env 运行时读同一文件；上游发行包
+    # Box64PresetManager/LaunchPlan.buildEnv:237-242 同款表）逐项一致 ——
+    # 补齐旧表缺的 BOX64_AVX 与 BOX64_UNITYPLAYER（稳定/兼容档 1，
+    # 进阶/性能档 0）。两处 LinBox 定稿覆写保留：
+    #  - SAFEFLAGS 恒 0：v3.3.21 用户设备定稿（Adreno 740 / Android 15
+    #    实测 1/2 触发 ntdll 早期 SIGSEGV；JSON 档位值 2/2/2/1 不适用
+    #    本机 —— 崩溃具地址空间布局随机性，与 SAFEFLAGS 无关，0 是
+    #    实测稳定值）；
+    #  - PERFORMANCE 档补 BOX64_MMAP32=1（上游同款）；
+    #  - +BOX64_PREFER_EMULATED=1（上游发行包 x86_64 线同款：优先仿真库）。
+    # 容器 env= 的 BOX64_* 覆盖机制不变（下方 case 块）。
+    case "$_preset" in
+        stability)
+            export BOX64_DYNAREC_SAFEFLAGS=0
+            export BOX64_DYNAREC_FASTNAN=0
+            export BOX64_DYNAREC_FASTROUND=0
+            export BOX64_DYNAREC_X87DOUBLE=1
+            export BOX64_DYNAREC_BIGBLOCK=0
+            export BOX64_DYNAREC_STRONGMEM=2
+            export BOX64_DYNAREC_FORWARD=128
+            export BOX64_DYNAREC_CALLRET=0
+            export BOX64_DYNAREC_WAIT=0
+            export BOX64_AVX=0
+            export BOX64_UNITYPLAYER=1
+            export BOX64_PREFER_EMULATED=1
+            ;;
+        compatibility)
+            export BOX64_DYNAREC_SAFEFLAGS=0
+            export BOX64_DYNAREC_FASTNAN=0
+            export BOX64_DYNAREC_FASTROUND=0
+            export BOX64_DYNAREC_X87DOUBLE=1
+            export BOX64_DYNAREC_BIGBLOCK=0
+            export BOX64_DYNAREC_STRONGMEM=1
+            export BOX64_DYNAREC_FORWARD=128
+            export BOX64_DYNAREC_CALLRET=0
+            export BOX64_DYNAREC_WAIT=1
+            export BOX64_AVX=0
+            export BOX64_UNITYPLAYER=1
+            export BOX64_PREFER_EMULATED=1
+            ;;
+        intermediate)
+            export BOX64_DYNAREC_SAFEFLAGS=0
+            export BOX64_DYNAREC_FASTNAN=1
+            export BOX64_DYNAREC_FASTROUND=0
+            export BOX64_DYNAREC_X87DOUBLE=1
+            export BOX64_DYNAREC_BIGBLOCK=1
+            export BOX64_DYNAREC_STRONGMEM=0
+            export BOX64_DYNAREC_FORWARD=128
+            export BOX64_DYNAREC_CALLRET=0
+            export BOX64_DYNAREC_WAIT=1
+            export BOX64_AVX=0
+            export BOX64_UNITYPLAYER=0
+            export BOX64_PREFER_EMULATED=1
+            ;;
+        performance|*)
+            export BOX64_DYNAREC_SAFEFLAGS=0
+            export BOX64_DYNAREC_FASTNAN=1
+            export BOX64_DYNAREC_FASTROUND=1
+            export BOX64_DYNAREC_X87DOUBLE=0
+            export BOX64_DYNAREC_BIGBLOCK=3
+            export BOX64_DYNAREC_STRONGMEM=0
+            export BOX64_DYNAREC_FORWARD=512
+            export BOX64_DYNAREC_CALLRET=1
+            export BOX64_DYNAREC_WAIT=1
+            export BOX64_AVX=0
+            export BOX64_UNITYPLAYER=0
+            export BOX64_MMAP32=1
+            export BOX64_PREFER_EMULATED=1
+            ;;
+    esac
+    # 容器 env 中允许覆盖 BOX64_*
+    local _extra
+    _extra="$(conf_read "$CONT_CONF" env "")"
+    case "$_extra" in *BOX64_*) export $_extra ;; esac
+}
+
+# ---------- 后端执行 ----------
+pick_backend() {
+    BACKEND="$(conf_read "$CONT_CONF" backend auto)"
+    if [ "$BACKEND" = "auto" ] || [ -z "$BACKEND" ]; then
+        BACKEND="$(auto_backend)"
+        [ -n "$BACKEND" ] || die "没有可用后端：既无 x86_64 wine + box64，也无 arm64ec/hangover wine。运行 'linbox-container doctor' 查看详情"
+    fi
+    case "$BACKEND" in
+        box64)
+            [ -n "$BOX64_BIN" ] || die "box64 未安装（linbox-container doctor）"
+            [ -x "$WINE_X86" ]  || die "x86_64 wine 未安装：先执行 linbox-container install-wine（wine-catalog 可看在线构建）"
+            [ "$WINE_ARCH" != "aarch64" ] || die "所选 wine 是 aarch64/arm64ec 形态，box64 后端不适用——backend 改 arm64ec 或 auto"
+            ;;
+        arm64ec)
+            [ -x "$WINE_X86" ] || die "arm64ec wine 未安装：linbox-container install-wine bionic-arm64ec（wine-catalog 查看在线构建）"
+            [ "$WINE_ARCH" = "aarch64" ] || die "所选 wine 不是 aarch64 形态（当前: ${WINE_ARCH:-unknown}）——arm64ec 后端需要 bionic-arm64ec 构建"
+            ;;
+        hangover)
+            [ -x "$WINE_HANGOVER" ] || die "hangover wine 不在 $WINE_HANGOVER（aarch64 rootfs 构建时含 hangover-wine；新方案建议 install-wine bionic-arm64ec）"
+            ;;
+        fexcore)
+            [ -x "$FEX_BIN" ]   && [ -e "$FEX_BIN" ] || die "FEXInterpreter 不在 $FEX_BIN。FEX-Emu 尚无官方 bionic 构建：可将自建 FEX 安装到 $RFS_USR/opt/fex/"
+            [ -x "$WINE_X86" ] || die "x86_64 wine 未安装：先执行 linbox-container install-wine"
+            ;;
+        native)
+            [ -x "$WINE_X86" ] || die "x86_64 wine 未安装"
+            ;;
+        *) die "未知后端: $BACKEND（可选 box64/hangover/fexcore/native/auto）" ;;
+    esac
+    # 旧版内置 hangover 兜底提示：/usr/opt/bin/wine 是 rootfs 打包时的旧
+    # 构建（早于 CI 的 gstreamer/esync/显示设置修复），仅作保底。槽位
+    # wine（/usr/opt/<名>，install-wine 安装）缺失时才会走到这里。
+    if [ "$BACKEND" = "hangover" ]; then
+        info "提示: 当前使用 rootfs 内置旧版 hangover wine（$WINE_HANGOVER）——建议安装 CI 构建的新版 wine：linbox-container install-wine <wine tar.gz>"
+    fi
+}
+
+# wine_run：非 exec 的后端包装调用（供 reg 清理 / wineboot 用）
+wine_run() {
+    case "$BACKEND" in
+        box64)    "$BOX64_BIN" "$WINE_X86" "$@" ;;
+        native|arm64ec) "$WINE_X86" "$@" ;;
+        hangover) "$WINE_HANGOVER" "$@" ;;
+        fexcore)  "$FEX_BIN" "$WINE_X86" "$@" ;;
+    esac
+}
+
+# 宿主 wineserver 直连调用（wineserver 是真实 Unix ELF，不经 wine loader）
+wine_server_call() { # <args...>
+    local _bin
+    case "$BACKEND" in
+        box64|native|fexcore|arm64ec) _bin="$(dirname "$WINE_X86")/wineserver" ;;
+        hangover)                     _bin="$(dirname "$WINE_HANGOVER")/wineserver" ;;
+    esac
+    case "$BACKEND" in
+        box64)    "$BOX64_BIN" "$_bin" "$@" ;;
+        native|arm64ec|hangover) "$_bin" "$@" ;;
+        fexcore)  "$FEX_BIN" "$_bin" "$@" ;;
+    esac
+}
+
+# ============================================================
+# /opt/prefix 前缀预置资产注入（v3.2.25，参考 startwine.sh 前缀构建段）
+# ============================================================
+# 参考链路（startwine.sh 301-369 行）：wineboot 初始化后解压 /opt/prefix
+# 下的预置资产并导入注册表：
+#   drive_c.tar.xz / directx.tar.xz → drive_c/
+#   start/* → ProgramData/Microsoft/Windows/Start Menu
+#   marlett.ttf → windows/Fonts
+#   user.reg / system.reg / fix-services.reg → wine regedit 导入
+#   fix-fonts.tar.xz → windows/
+#   /opt/dxvk1/*.tar.gz → windows/（virgl 启用时跳过）
+#   .update-timestamp=disable（防重跑标记，参考脚本同款）
+# 仅在 /opt/prefix 存在（发行包风格 wine 发行包）时生效；幂等
+# （.linbox-opt-prefix 标记）；任一步失败仅告警不阻断（与参考脚本
+# 容错语义一致）。App 侧容器流程（WineRegistry.bootstrapOptPrefix）
+# 同源双保险 —— 两端各自幂等，先到先应用。
+opt_extract_into() { # <dstDir> <label> [候选归档...]
+    local _dst="$1" _label="$2"; shift 2
+    local _f _tar
+    [ -d "$_dst" ] || mkdir -p "$_dst" 2>/dev/null || { warn "无法创建目录 $_dst，跳过 $_label"; return 1; }
+    for _f in "$@"; do
+        [ -f "$_f" ] || continue
+        _tar="$(command -v tar 2>/dev/null)"
+        [ -x "$_tar" ] || { warn "无 tar 可用，跳过 $_label"; return 1; }
+        if "$_tar" -xf "$_f" -C "$_dst" 2>/dev/null; then
+            info "解压 $_label → ${_dst#$RFS_ROOT}"
+            return 0
+        fi
+        # toybox tar 无 xz 支持时的兜底：xzcat 管道
+        if command -v xzcat >/dev/null 2>&1 \
+            && xzcat "$_f" 2>/dev/null | "$_tar" -x -C "$_dst" 2>/dev/null; then
+            info "解压 $_label（xzcat 管道）→ ${_dst#$RFS_ROOT}"
+            return 0
+        fi
+        warn "解压失败: $(basename "$_f")（tar 无该压缩支持）"
+        return 1
+    done
+    return 0   # 候选都不存在：可选资产，静默
+}
+
+bootstrap_opt_prefix() {
+    local _pd
+    if [ -z "$OPT_ROOT" ]; then
+        info "跳过 /opt/prefix 注入: 未检测到 /opt 生态（rootfs/opt、wine 槽位、rootfs/usr/opt）"
+        return 0
+    fi
+    _pd="$OPT_ROOT/prefix"
+    [ -d "$_pd" ] || { info "跳过 /opt/prefix 注入: $OPT_ROOT 无 prefix/ 目录（仅应用 conf/locale.conf）"; return 0; }
+    if [ ! -f "$WINEPREFIX/system.reg" ]; then
+        info "跳过 /opt/prefix 注入: 前缀未就绪（system.reg 缺失，wineboot 未成功；下次启动重试）"
+        return 0
+    fi
+    local _marker="$WINEPREFIX/.linbox-opt-prefix"
+    [ -f "$_marker" ] && return 0
+
+    info "检测到 /opt/prefix 预置资产（$_pd），开始注入……"
+    local _c="$WINEPREFIX/drive_c" _f _r
+
+    # ① drive_c / directx 归档（.tar.xz / .txz / .tar 双后缀候选）
+    opt_extract_into "$_c" drive_c \
+        "$_pd/drive_c.tar.xz" "$_pd/drive_c.txz" "$_pd/drive_c.tar" || true
+    opt_extract_into "$_c" directx \
+        "$_pd/directx.tar.xz" "$_pd/directx.txz" "$_pd/directx.tar" || true
+
+    # ② 开始菜单快捷方式（wine 前缀标准路径为 ProgramData）
+    if [ -d "$_pd/start" ]; then
+        local _sm="$_c/ProgramData/Microsoft/Windows/Start Menu"
+        mkdir -p "$_sm" 2>/dev/null || true
+        if cp -r "$_pd/start/." "$_sm/" 2>/dev/null; then
+            info "开始菜单快捷方式 → ${_sm#$RFS_ROOT}"
+        fi
+    fi
+
+    # ③ marlett 字体
+    [ -f "$_pd/marlett.ttf" ] && cp -f "$_pd/marlett.ttf" "$_c/windows/Fonts/" 2>/dev/null || true
+
+    # ④ 注册表导入（user / system / fix-services）
+    for _r in user.reg system.reg fix-services.reg; do
+        [ -f "$_pd/$_r" ] || continue
+        info "导入注册表: $_r"
+        wine_run regedit "$_pd/$_r" >/dev/null 2>&1 \
+            || warn "regedit $_r 导入失败（下次启动不重试，可手动: wine regedit $_pd/$_r）"
+    done
+
+    # ⑤ fix-fonts 归档 → windows/
+    opt_extract_into "$_c/windows" fix-fonts \
+        "$_pd/fix-fonts.tar.xz" "$_pd/fix-fonts.txz" "$_pd/fix-fonts.tar" || true
+
+    # ⑥ dxvk（virgl 启用时跳过 —— 参考脚本同款条件）
+    if [ ! -e "$OPT_ROOT/virgl/virgl-enabled" ] && [ -d "$OPT_ROOT/dxvk1" ]; then
+        for _f in "$OPT_ROOT"/dxvk1/*.tar.gz "$OPT_ROOT"/dxvk1/*.tgz; do
+            [ -f "$_f" ] || continue
+            info "安装 dxvk: $(basename "$_f")"
+            opt_extract_into "$_c/windows" dxvk "$_f" || true
+            break
+        done
+    fi
+
+    # ⑦ 强制 wineserver 落盘注册表（参考脚本 wineserver -k 同款）
+    wine_server_call -w >/dev/null 2>&1 || true
+    wine_server_call -k >/dev/null 2>&1 || true
+
+    touch "$_marker" 2>/dev/null || true
+    echo disable > "$WINEPREFIX/.update-timestamp" 2>/dev/null || true
+    info "/opt/prefix 预置资产注入完成"
+    return 0
+}
+
+# v3.3.28：终止 prefix 内的 tabtip.exe（触摸键盘辅助进程）。
+#   实现说明：wine PE 进程在 /proc 下以宿主进程形态存在，cmdline 含
+#   "tabtip.exe" 字样（loader argv / Z: 路径），/proc 扫描 + kill 兜底
+#   不依赖 taskkill（省一次 wine 进程拉起，~数百毫秒）；不匹配自身
+#   （linbox-wine 自身 cmdline 无 tabtip）。幂等、零匹配零动作。
+linbox_kill_tabtip() {
+    local _p _cmd _killed=0
+    for _p in /proc/[0-9]*; do
+        [ -r "$_p/cmdline" ] || continue
+        _cmd="$(tr '\0' ' ' < "$_p/cmdline" 2>/dev/null)"
+        case "$_cmd" in
+            *tabtip.exe*)
+                # 跳过自身与父链（防 cmdline 意外包含字符串的场景）
+                case "$_cmd" in
+                    *linbox-wine*) continue ;;
+                esac
+                if kill -9 "${_p#/proc/}" 2>/dev/null; then
+                    _killed=$((_killed+1))
+                fi
+                ;;
+        esac
+    done
+    [ "$_killed" -gt 0 ] && info "已终止 $_killed 个 tabtip.exe（其 UIA/WM_GETOBJECT 查询会触发部分老 32 位游戏崩溃）"
+    return 0
+}
+
+# v3.3.29：会话级 tabtip.exe 压制守护。
+#   v3.3.28 的会话启动前一次性 kill 实证无效（用户设备日志
+#   wine-10arm-20261109-120811：崩溃快照里 00000110 tabtip.exe 仍在运行、
+#   且其线程 0114 正在发 oleacc/uiautomation 查询 —— tabtip 由 wine 会话
+#   启动链路在 boot 后才拉起，启动前扫杀必然扑空）。改为后台守护：
+#   wineserver 存活期间每 3s 扫杀一次新拉起的 tabtip.exe，wineserver
+#   退出或 20 分钟上限后自行退出。脚本 exec wine 后守护子壳孤儿化，
+#   生命周期天然与会话绑定，无泄漏。
+linbox_tabtip_watchdog() {
+    (
+        _n=0
+        while [ "$_n" -lt 400 ]; do
+            _srv=0
+            for _p in /proc/[0-9]*; do
+                [ -r "$_p/cmdline" ] || continue
+                _cmd="$(tr '\0' ' ' < "$_p/cmdline" 2>/dev/null)"
+                case "$_cmd" in
+                    *wineserver*) _srv=1 ;;
+                    *tabtip.exe*)
+                        case "$_cmd" in
+                            *linbox-wine*) ;;
+                            *) kill -9 "${_p#/proc/}" 2>/dev/null || true ;;
+                        esac
+                        ;;
+                esac
+            done
+            [ "$_srv" = "1" ] || break
+            sleep 3
+            _n=$((_n+1))
+        done
+    ) >/dev/null 2>&1 &
+    return 0
+}
+
+# v3.3.29：wrapper 栈 NDK 依赖前置解析（第二层保险）。
+#   依赖链：libvulkan_wrapper.so → libnativewindow.so → libbinder_ndk.so。
+#   bionic linker（init_verneed）校验：libnativewindow.so 的 verneed 条目
+#   引用的库必须以其 soname 出现在其已加载子依赖中，否则报
+#   "cannot find libbinder_ndk.so from verneed[2] in DT_NEEDED list" →
+#   ICD 整体被 Vulkan Loader 忽略 → "Found no drivers"（用户设备日志
+#   wine-10arm-20261109-121003 实证，v3.3.28 的 /system/lib64 只在 App
+#   层设置、被 isolate_env 重建丢弃，本轮已补脚本层 + 本兜底双保险）。
+#   做法：rootfs/usr/lib 缺哪个 NDK 库就软链哪个（目标 /system/lib64）。
+#   bionic 按 realpath 取 basename 兜底 soname → 软链不破坏 soname 匹配；
+#   rootfs/usr/lib 在 LD_LIBRARY_PATH 首位 → soname 搜索首选命中，使
+#   libbinder_ndk.so 成为 libnativewindow.so 的子依赖，verneed 通过。
+#   已有实体文件（rootfs CI 的 libandroid-stub 平台代理等）则跳过不动。
+ensure_ndk_deps() {
+    # v3.3.30：修 wrapper/yuzu 驱动“装了选了但不能用”（用户 2026-11-09
+    # 18:25 日志 + bionic 源码链实证）。
+    #
+    # 根因：rootfs 的 libandroid-stub 代理桩 libbinder_ndk.so（pulseaudio
+    # 依赖 libOpenSLES 代理而随包进 rootfs/usr/lib；构建时 -o 直出、无
+    # -Wl,-soname → 无 DT_SONAME；App targetSdk≥23 时 bionic 不做
+    # basename 回退 → soinfo 的 soname 为空）位于 LD_LIBRARY_PATH 首段，
+    # 先于末位 /system/lib64 —— wine 进程 dlopen wrapper ICD 时，系统
+    # /system/lib64/libnativewindow.so（libvulkan_wrapper.so 的
+    # DT_NEEDED）自身的 verneed 子依赖按 soname "libbinder_ndk.so"
+    # 在直接子依赖里匹配 → 命中的是桩（soname 空）→ 落空 → bionic
+    # VersionTracker::init_verneed 报：
+    #   cannot find "libbinder_ndk.so" from verneed[2] in DT_NEEDED
+    #   list for "/system/lib64/libnativewindow.so"
+    # → ICD dlopen 失败 → loader 忽略 → "Found no drivers!" →
+    # DXVK 报 VK_KHR_surface not supported（游戏黑屏/退出）。
+    # v3.3.29 的本函数只补“缺失名”（[ -e ] && continue 跳过已存在
+    # 的桩）—— 桩仍在遮蔽，因此没修好。
+    #
+    # 修法：建 rootfs/usr/lib/linbox-syslibs/ 系统库直通目录，内放指向
+    # /system/lib64 真身的 symlink，前插 LD_LIBRARY_PATH —— 真身带正确
+    # soname + verdef，verneed 闭环；rootfs 桩原位保留（pulseaudio 的
+    # OpenSLES 代理链不受影响）。同场景（Termux 生态 libandroid-stub
+    # 桩遮蔽）在 DSH-Kxxy 项目有 A/B 实测佐证。
+    # 仅 aarch64（x86_64 形态走 glibc ld-linux，不碰 bionic 目录）。
+    case "$(uname -m)" in
+        aarch64|arm64) ;;
+        *) return 0 ;;
+    esac
+    [ -d /system/lib64 ] || return 0
+
+    # 直通清单：只收平台专属名（rootfs 不会有同名真库）；故意不收
+    # libandroid.so / libmediandk.so / libOpenSLES.so —— 这三个名是
+    # rootfs 桩的职责面（按名命中桩 → 桩再经隔离 namespace 转发真身），
+    # 换成真身反而会把 libhwui/libgui 整条系统链拽进进程（DSH-Kxxy
+    # R1 实测踩坑）。
+    local _pt="$RFS_USR/lib/linbox-syslibs" _n _made=0
+    mkdir -p "$_pt" 2>/dev/null || return 0
+    for _n in libbinder_ndk.so libnativewindow.so libhardware.so \
+              libsync.so libcutils.so; do
+        [ -f "/system/lib64/$_n" ] || continue
+        ln -sf "/system/lib64/$_n" "$_pt/$_n" 2>/dev/null && _made=$((_made+1))
+    done
+    # 清理 v3.3.29 遗留：曾把系统库 symlink 进 rootfs/lib 本体 ——
+    # 与桩共存时无益（桩是实体文件不受影响），撤掉回归纯路径解析。
+    # 只删 symlink，不动实体（桩/真库都不是 symlink）。
+    for _n in libbinder_ndk.so libnativewindow.so libandroid.so \
+              libmediandk.so libOpenSLES.so; do
+        [ -L "$RFS_USR/lib/$_n" ] && rm -f "$RFS_USR/lib/$_n" 2>/dev/null
+    done
+    [ "$_made" -gt 0 ] || return 0
+    # 幂等前插（已在首位则不重复）
+    case ":${LD_LIBRARY_PATH}:" in
+        *":$_pt:"*) ;;
+        *) export LD_LIBRARY_PATH="$_pt${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+    esac
+    if [ -e "$RFS_USR/lib/libbinder_ndk.so" ]; then
+        info "系统库直通: libbinder_ndk.so 等前插 /system/lib64 真身（绕开 rootfs 代理桩的 verneed 断链 —— wrapper/yuzu 驱动 dlopen 修复）"
+    else
+        info "系统库直通: libbinder_ndk.so 等 → /system/lib64（wrapper 栈链路依赖闭环）"
+    fi
+    return 0
+}
+
+# v3.3.30：按目标 exe 注入 DXVK 兼容补丁（无需重建 wine/rootfs 包）。
+# 背景：仙剑奇侠传四（PAL4，2007，CEGUI + D3D9 + mss32）在 arm64ec
+# 新 WoW64 下进主菜单后游戏代码 page fault（0x006941b5 cmpl $3,
+# 0x10(%eax)，用户 2026-11-09 18:24 日志）—— 老游戏依赖 D3D9 的
+# x87 浮点语义（NaN/denorm 传播），GPU 侧返回值异常 → CEGUI 布局
+# 计算出野指针。DXVK 的 d3d9.floatEmulation=Strict 是这类
+# 2000 年代国产/日产 DX9 游戏崩溃的标准解。
+# 实现：命中已知问题游戏 → 合成 conf（/opt/dxvk.conf 全量 + 追加
+# 覆盖）写入前缀，DXVK_CONFIG_FILE 指向它 —— 仅命中启动生效，
+# 其它游戏零影响。dxvk_appfix_conf <exe路径>：输出合成 conf 路径，
+# 未命中输出空。
+dxvk_appfix_conf() {
+    local _exe="$1" _base="$RFS_ROOT/opt/dxvk.conf"
+    local _out="$WINEPREFIX/.linbox-dxvk-appfix.conf"
+    case "$(printf '%s' "$_exe" | tr '[:upper:]' '[:lower:]')" in
+        *仙剑*|*pal4*)
+            mkdir -p "$WINEPREFIX" 2>/dev/null || true
+            {
+                [ -r "$_base" ] && cat "$_base"
+                # v3.3.38：+presentInterval=1（闪屏根治：IMMEDIATE 呈现无消隐
+                # 同步，lorie 读到半刷新帧即上屏 = 持续闪屏；PAL4 60fps 级
+                # RPG 垂直同步零感知代价；追加在后，后值覆盖 dxvk.conf 的 -1）
+                printf '\n# LinBox appfix（仙剑奇侠传四：D3D9 浮点语义 + 呈现节流，v3.3.30 / v3.3.38 增补）\nd3d9.floatEmulation = Strict\nd3d9.presentInterval = 1\n'
+            } > "$_out" 2>/dev/null || return 1
+            printf '%s' "$_out"
+            ;;
+        *) return 0 ;;
+    esac
+    return 0
+}
+
+# apply_dxvk_appfix "$@"（run_wine 参数）：扫参里的 *.exe，命中则注入
+apply_dxvk_appfix() {
+    local _a _exe="" _conf
+    for _a in "$@"; do
+        case "$_a" in
+            *.exe|*.EXE) _exe="$_a"; break ;;
+        esac
+    done
+    [ -n "$_exe" ] || return 0
+    _conf="$(dxvk_appfix_conf "$_exe")"
+    [ -n "$_conf" ] || return 0
+    export DXVK_CONFIG_FILE="$_conf"
+    info "DXVK 兼容补丁: $(basename "$_exe") → d3d9.floatEmulation=Strict + presentInterval=1（浮点语义 + 闪屏 FIFO 呈现，仅本次启动生效）"
+    # v3.3.38【arm64ec 崩溃根治】：FEX x87 精度联动。仙剑四游戏本体 x87
+    # 指令由 FEX 解释（arm64ec 线），PERFORMANCE 档 X87ReducedPrecision=1
+    #（64 位精算）恰是野指针崩溃的第二供应商（wine-10 日志 EAX=0x052ae3c7
+    # 错位指针实证）—— floatEmulation=Strict 只管 DXVK 侧，两边必须同时拉
+    # 回 80 位全精度。仅 FEX 读该文件，非 FEX 场景无副作用；下一次非仙剑四
+    # 会话 fex_config 按预设改回，无跨容器污染。
+    case "$(printf '%s' "$_exe" | tr '[:upper:]' '[:lower:]')" in
+        *仙剑*|*pal4*)
+            local _fexConf="${HOME:-$RFS_ROOT/home}/.fex-emu/Config.json"
+            if [ -f "$_fexConf" ] && grep -q '"X87ReducedPrecision":"1"' "$_fexConf" 2>/dev/null; then
+                sed -i 's/"X87ReducedPrecision":"1"/"X87ReducedPrecision":"0"/' "$_fexConf" 2>/dev/null \
+                    && info "FEX 兼容补丁: X87ReducedPrecision=1→0（仙剑四引擎依赖 x87 80 位中间精度；其他容器下次启动自动恢复预设）"
+            fi
+            ;;
+    esac
+    # v3.3.33：仙剑四附加兼容 —— 该游戏 2007 引擎存在多核竞态崩溃（社区
+    # 共识，任务管理器单核亲和为标准解）；未配置 PRIMARY_CORES 时本 shell
+    # 自亲和单核（wine 及全部子进程继承），用户配置优先。
+    case "$(printf '%s' "$_exe" | tr '[:upper:]' '[:lower:]')" in
+        *仙剑*|*pal4*)
+            if [ -z "${PRIMARY_CORES:-}" ]; then
+                export PRIMARY_CORES="0"
+                apply_taskset_cores
+                info "仙剑四兼容: 未配置核心，已自动单核（CPU核心 配置可覆盖；多核竞态崩溃规避）"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+run_wine() {
+    # 纯日志：前缀状态观测（只读探测，不改任何流程）
+    log "run_wine: 前缀 system.reg $([ -f "$WINEPREFIX/system.reg" ] && echo 已存在 || echo 不存在-将首次初始化)"
+    # v3.3.30：按目标 exe 注入 DXVK 兼容补丁（仙剑四 floatEmulation；
+    # 早于下方所有 exec 分支 —— 桌面包裹/直连形态都能命中）
+    apply_dxvk_appfix "$@"
+    # tabtip 拦截（v3.3.29 重构）：主流程派发前已统一执行
+    # linbox_kill_tabtip + linbox_tabtip_watchdog（会话级压制），此处不再
+    # 重复调用。根因说明见 linbox_tabtip_watchdog 函数注释。
+    # wineserver：真实 Unix ELF 宿主程序 → 直连宿主二进制（box64 形态包装）
+    if [ "${1:-}" = "wineserver" ]; then
+        local _bin
+        case "$BACKEND" in
+            box64|native|fexcore|arm64ec) _bin="$(dirname "$WINE_X86")/wineserver" ;;
+            hangover)                     _bin="$(dirname "$WINE_HANGOVER")/wineserver" ;;
+        esac
+        shift
+        case "$BACKEND" in
+            box64)    exec "$BOX64_BIN" "$_bin" "$@" ;;
+            native|arm64ec|hangover) exec "$_bin" "$@" ;;
+            fexcore)  exec "$FEX_BIN" "$_bin" "$@" ;;
+        esac
+    fi
+    # wineboot（v3.1.4 修正）：wine ≤9.18/proton 树的 bin/wineboot 是
+    # shell 脚本（box64 读不到 ELF 头，脚本原生 exec 又绕开 box64 →
+    # ENOEXEC “not executable: 64-bit ELF file”），wine 9.19+ 是指向
+    # loader 的符号链接 —— 统一经 wine loader 执行（check_command_line
+    # 按 argv[0] basename 分发到 wineboot.exe，官方机制）。
+    if [ "${1:-}" = "wineboot" ]; then
+        shift
+        case "$BACKEND" in
+            box64)    exec "$BOX64_BIN" "$WINE_X86" wineboot "$@" ;;
+            native|arm64ec) exec "$WINE_X86" wineboot "$@" ;;
+            hangover) exec "$WINE_HANGOVER" wineboot "$@" ;;
+            fexcore)  exec "$FEX_BIN" "$WINE_X86" wineboot "$@" ;;
+        esac
+    fi
+    # 首次运行自动初始化前缀（wineboot -i；v3.1.4 经 loader + 退出码校验）
+    if [ ! -f "$WINEPREFIX/system.reg" ]; then
+        info "首次使用，初始化 wine 前缀: $WINEPREFIX"
+        local _wb_rc=0
+        case "$BACKEND" in
+            box64)    "$BOX64_BIN" "$WINE_X86" wineboot -i || _wb_rc=$? ;;
+            native|arm64ec) "$WINE_X86" wineboot -i || _wb_rc=$? ;;
+            hangover) "$WINE_HANGOVER" wineboot -i || _wb_rc=$? ;;
+            fexcore)  "$FEX_BIN" "$WINE_X86" wineboot -i || _wb_rc=$? ;;
+        esac
+        if [ "$_wb_rc" != "0" ]; then
+            warn "wineboot -i 失败（退出码 $_wb_rc；159=SIGSYS/旧包 fsync 探测，1=加载失败）"
+            warn "→ 请用 v3.1.4+ 构建的 wine 包（fsync 守卫 + 自包含依赖库）"
+            # v3.3.33：139（SIGSEGV）且 box64 后端 → ntdll 早期初始化的
+            # "R15 高 32 位丢失"型随机崩溃（地址空间布局依赖，v3.3.21 已记载；
+            # 用户 box64-0.3.8 日志复现）→ BOX64_DYNAREC=0（解释器，确定性
+            # 执行）兜底重跑一次；前缀构建是一次性分钟级路径，慢可接受。
+            if [ "$_wb_rc" = "139" ] && [ "$BACKEND" = "box64" ]; then
+                warn "wineboot 段错误（139，box64 dynarec 地址空间布局型随机崩溃）→ 以 BOX64_DYNAREC=0（解释器模式）兜底重跑……"
+                BOX64_DYNAREC=0 "$BOX64_BIN" "$WINE_X86" wineboot -i
+                _wb_rc=$?
+                log "解释器模式兜底 wineboot 退出码=$_wb_rc"
+                [ "$_wb_rc" = "0" ] || warn "兜底仍失败 —— 建议换用新版 box64（LinBox CI 已构建 v0.4.4+，linbox-container install-box64）"
+            fi
+        fi
+        log "wineboot -i 退出码=$_wb_rc"
+        echo
+        # v3.3.20（用户问题 3）：proton 树 wine.inf 的游戏 AppDefaults hack
+        # 兜底清除 —— Valve 树的 wine.inf.in 带 31 条 Steam 游戏兼容 hack
+        #（ActOfWar/BlackOps3/DIRT5/ffxvi/RDR2 等），wineboot 后全部打进
+        # user.reg。新 wine 包构建期已剔除（build.sh strip_wineinf_appdefaults），
+        # 存量包由此处文件级清除（与 App 侧 WineRegistry.sanitizeAppDefaults
+        # 同语义）。幂等：干净前缀零动作。
+        if [ -f "$WINEPREFIX/user.reg" ] \
+            && grep -q '^\[Software\\\\Wine\\\\AppDefaults\\\\' "$WINEPREFIX/user.reg" 2>/dev/null; then
+            local _ur="$WINEPREFIX/user.reg" _urt="$_ur.linbox-cleanup" _n
+            _n="$(grep -c '^\[Software\\\\Wine\\\\AppDefaults\\\\' "$_ur" 2>/dev/null || echo 0)"
+            awk '
+                /^\[Software\\\\Wine\\\\AppDefaults\\\\/ { skip=1; next }
+                /^\[/ { skip=0 }
+                !skip { print }
+            ' "$_ur" > "$_urt" 2>/dev/null
+            if [ -s "$_urt" ] && mv -f "$_urt" "$_ur" 2>/dev/null; then
+                info "已清除 user.reg 的 ${_n} 个游戏 AppDefaults 注册表块（proton wine.inf 的 Steam 游戏 hack，Android 上无用）"
+            else
+                rm -f "$_urt" 2>/dev/null
+                warn "AppDefaults 注册表清除写回失败（跳过，不影响使用）"
+            fi
+        fi
+    fi
+    # /opt/prefix 预置资产注入（v3.2.25；参考 startwine.sh 前缀构建段：
+    # wineboot 后解压 /opt/prefix 资产 + 注册表导入 + dxvk。幂等标记，
+    # /opt/prefix 不存在时零动作）
+    bootstrap_opt_prefix
+    # 显示模式虚拟化（幂等；必须先于一切 wine 子命令——explorer 初始化
+    # 显示设置时就需要它，否则模式表写不进注册表，游戏全部报错）
+    ensure_emulate_modeset
+    # dmode=f：启动前清除注册表 wine 蓝底桌面（强制窗口直出）
+    if [ "$DMODE" = "f" ] && [ -n "$DMODE_RESOLUTION" ]; then
+        clear_wine_blue_desktop
+    fi
+    # dmode=v：wine 虚拟桌面（explorer /desktop）
+    if [ "$DMODE" = "v" ] && [ -n "$DMODE_RESOLUTION" ]; then
+        case "$BACKEND" in
+            box64)    exec "$BOX64_BIN" "$WINE_X86" explorer "/desktop=LinBox,$DMODE_RESOLUTION" "$@" ;;
+            native|arm64ec) exec "$WINE_X86" explorer "/desktop=LinBox,$DMODE_RESOLUTION" "$@" ;;
+            hangover) exec "$WINE_HANGOVER" explorer "/desktop=LinBox,$DMODE_RESOLUTION" "$@" ;;
+            fexcore)  exec "$FEX_BIN" "$WINE_X86" explorer "/desktop=LinBox,$DMODE_RESOLUTION" "$@" ;;
+        esac
+    fi
+    # v3.1.7 无 WM 补偿：其余模式（off/d，即"跟随窗口/固定分辨率"）也统一
+    # 包 wine 虚拟桌面 —— LinBox 内置 X 服务（libXlorie）没有窗口管理器，
+    # 裸窗口模式下 wine 顶层窗口全部堆在 (0,0)、点击坐标错位、整体上移。
+    # 桌面尺寸取当前 X 屏幕（App 侧 X11Surface 持续落盘 .linbox-x11-screen；
+    # 终端链路早于落盘时退 1280x720）。dmode=f（窗口直出）不包。
+    if [ "$DMODE" != "f" ] && [ "${1:-}" != "explorer" ]; then
+        local _vdesk="$(linbox_vdesk_resolution)"
+        log "无 WM 补偿: explorer /desktop=LinBox,$_vdesk"
+        case "$BACKEND" in
+            box64)    exec "$BOX64_BIN" "$WINE_X86" explorer "/desktop=LinBox,$_vdesk" "$@" ;;
+            native|arm64ec) exec "$WINE_X86" explorer "/desktop=LinBox,$_vdesk" "$@" ;;
+            hangover) exec "$WINE_HANGOVER" explorer "/desktop=LinBox,$_vdesk" "$@" ;;
+            fexcore)  exec "$FEX_BIN" "$WINE_X86" explorer "/desktop=LinBox,$_vdesk" "$@" ;;
+        esac
+    fi
+    case "$BACKEND" in
+        box64)    exec "$BOX64_BIN" "$WINE_X86" "$@" ;;
+        native|arm64ec) exec "$WINE_X86" "$@" ;;
+        hangover) exec "$WINE_HANGOVER" "$@" ;;
+        fexcore)  exec "$FEX_BIN" "$WINE_X86" "$@" ;;
+    esac
+}
+
+# v3.1.7：当前 X 屏幕尺寸（虚拟桌面几何）—— 实时落盘值 → 默认。
+linbox_vdesk_resolution() {
+    local _f="${APP_PREFIX:-/data/data/com.linbox/files/usr}/tmp/.linbox-x11-screen"
+    if [ -r "$_f" ]; then
+        local _v="$(head -c 32 "$_f" 2>/dev/null | tr -d '[:space:]')"
+        case "$_v" in
+            [0-9]*x[0-9]*) echo "$_v"; return ;;
+        esac
+    fi
+    echo "1280x720"
+}
+
+# v3.3.20：驱动包安装入口（linbox-container install-driver 的实现载体；
+# 亦可在终端直接 `linbox-wine --install-driver <zip|tar|URL>`）。复用
+# vk_driver_install 的全套语义（zip/tar 通吃 + meta.json libraryName +
+# ABI 门禁 + 自生成 ICD/meta），与 App 图形驱动页 ➕ 安装同款落位。
+linbox_wine_install_driver() { # <文件|URL> [槽位名]
+    local _src="$1" _slot="${2:-}" _f _tmp=0
+    [ -n "$_src" ] || { die "--install-driver 需要 <zip|tar(.gz/.xz/.bz2/.zst)|URL> [槽位名]"; }
+    case "$_src" in
+        http://*|https://*)
+            _f="$RFS_USR/tmp/linbox-dl/$(basename "$_src" | sed 's/[?].*//')"
+            mkdir -p "$(dirname "$_f")"
+            if command -v curl >/dev/null 2>&1; then
+                curl -L --fail --connect-timeout 20 -o "$_f" "$_src" || { die "下载失败: $_src"; }
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q -O "$_f" "$_src" || { die "下载失败: $_src"; }
+            else
+                die "需要 curl 或 wget（pkg install curl）"
+            fi
+            _tmp=1
+            ;;
+        *)
+            _f="$_src"
+            [ -f "$_f" ] || { die "文件不存在: $_f"; }
+            ;;
+    esac
+    [ -n "$_slot" ] || _slot="$(basename "$_f")"
+    local _dir
+    _dir="$(vk_slot_dirname "$_slot")"
+    if vk_driver_install "$_slot" "$_f" "$_dir"; then
+        [ "$_tmp" = 1 ] && rm -f "$_f"
+        echo
+        echo "已装槽位: $_dir"
+        echo "启用: linbox-container driver select <容器> $_dir   （或 App 图形驱动页选择）"
+        return 0
+    fi
+    [ "$_tmp" = 1 ] && rm -f "$_f"
+    return 1
+}
+
+# ---------- 主入口 ----------
+CMD="${1:-}"
+[ -n "$CMD" ] || { version; echo; usage; exit 0; }
+
+case "$CMD" in
+    help|--help|-h)
+        usage
+        exit 0
+        ;;
+    --container)
+        shift
+        [ -n "${1:-}" ] || die "--container 需要容器名"
+        export LINBOX_CONTAINER="$1"
+        shift
+        ;;
+    --list-backends|--backends)
+        backend_list
+        exit 0
+        ;;
+    --install-driver)
+        # v3.3.20：驱动包安装（不需要容器；linbox-container install-driver 委托至此）
+        shift
+        linbox_wine_install_driver "$@"
+        exit $?
+        ;;
+    --debug)
+        # 诊断模式：seh（崩溃/异常）、模块加载、vulkan/wgl 错误全开，
+        # 排障时把输出整体发回即可定位（用法: linbox-wine --debug <exe路径>）
+        shift
+        [ -n "${1:-}" ] || die "--debug 需要跟 wine 参数（例如: linbox-wine --debug <exe路径>）"
+        export WINEDEBUG="${WINEDEBUG:-+seh,+module,err+vulkan,err+wgl}"
+        ;;
+    --version|-V)
+        version
+        exit 0
+        ;;
+esac
+
+resolve_container
+load_container
+load_opt_confs
+apply_opt_locale
+resolve_wine_dir
+# v3.2.26：wine 槽位目录确定后补一遍 /opt 探测 —— 发行包风格包把
+# conf/prefix 打进 wine 目录树（与 bin/ 平级）时，首轮（rootfs/opt）落空
+# 而槽位命中的场景。命中且首轮未命中时重新应用 locale。
+if [ -z "$OPT_ROOT" ]; then
+    load_opt_confs "$WINE_DIR"
+    [ -n "$OPT_ROOT" ] && apply_opt_locale
+fi
+DMODE="$(conf_read "$CONT_CONF" dmode "off")"
+DMODE_RESOLUTION=""
+
+# 顺序关键：隔离 → 显示握手 → 音频 → GPU → Android 安全默认 → /opt 生态
+# 配置（v3.2.25：覆盖安全默认，但容器 env= 仍在其后可覆盖）→ 附加环境 →
+# X 服务自启 → 后端 → 核绑定
+isolate_env
+apply_display_mode
+audio_setup
+apply_gpu_env
+apply_vk_driver
+apply_android_safe_env
+apply_perf_baseline_env
+apply_fex_preset_env
+apply_opt_conf_env
+apply_extra_env
+ensure_x11
+pick_backend
+case "$BACKEND" in box64|fexcore) apply_box64_env ;; esac
+apply_opt_conf_env_box64
+apply_arm64ec_audio_env
+apply_taskset_cores
+
+info "容器=$CONT_NAME 后端=$BACKEND wine形态=${WINE_ARCH:-?} DISPLAY=$DISPLAY WINEPREFIX=$WINEPREFIX"
+[ -n "$DMODE_RESOLUTION" ] && info "显示模式 dmode=$DMODE 分辨率=$DMODE_RESOLUTION（X11 握手已写入）"
+info "环境: PREFIX=$PREFIX HOME=$HOME LANG=$LANG 音频=${PULSE_SERVER:-（关）}"
+log "$(version)"
+log "会话开始 $(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '?') 内核=$(uname -m 2>/dev/null) pid=$$"
+log "派发: 后端=$BACKEND wine目录=$WINE_DIR 参数: $*"
+# v3.3.29：会话级 tabtip 压制 —— 先清残留（v3.3.28），再挂会话期守护
+#（tabtip 由 wine 会话启动链路在 boot 后拉起，启动前扫杀扑空，见
+# linbox_tabtip_watchdog 注释；两条防线互补，wineserver 退出即自止）
+linbox_kill_tabtip
+linbox_tabtip_watchdog
+info "tabtip 会话级压制已挂载（启动前清残留 + wineserver 存活期每 3s 扫杀）"
+run_wine "$@"

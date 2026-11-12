@@ -1,0 +1,22 @@
+# linbox: dbghelp build-id 调试符号查找路径 → rootfs 前缀（wine ≤9.x 树形态）。
+# 0001-fix-paths.patch 的 dbghelp/module.c hunk 针对 hangover-11.16 树的
+# image_locate_build_id_target_in_dir() 调用形态；wine 9.x 官方树该函数
+# 尚不存在，等价逻辑是直接 malloc(sizeof(L"/usr/lib/debug/.build-id/")+…)
+# + wcscpy 两条硬编码字面量 —— 本变体按 9.x 形态替换同一组路径。
+# 其余 hunks（crypt32/dbghelp macho/server dosdevices y: 等）在 9.x 树
+# 均可正常应用（偏移自适应），无需变体。
+--- a/dlls/dbghelp/module.c
++++ b/dlls/dbghelp/module.c
+@@ -671,11 +671,11 @@
+     fmap_link = HeapAlloc(GetProcessHeap(), 0, sizeof(*fmap_link));
+     if (!fmap_link) return NULL;
+
+-    p = malloc(sizeof(L"/usr/lib/debug/.build-id/") +
++    p = malloc(sizeof(L"@TERMUX_PREFIX@/lib/debug/.build-id/") +
+                (idlen * 2 + 1) * sizeof(WCHAR) + sizeof(L".debug"));
+     if (!p) goto fail;
+-    wcscpy(p, L"/usr/lib/debug/.build-id/");
++    wcscpy(p, L"@TERMUX_PREFIX@/lib/debug/.build-id/");
+     z = p + wcslen(p);
+     if (idlen)
+     {

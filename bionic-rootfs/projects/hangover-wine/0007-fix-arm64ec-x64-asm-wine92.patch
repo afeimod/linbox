@@ -1,0 +1,309 @@
+# linbox: wine-9.x arm64ec PE 构建 x86 asm 误激活修复集（v3.2.4）
+#
+# 【根因】llvm-mingw 的 arm64ec 目标【同时预定义 __arm64ec__ 和 __x86_64__】
+# （不预定义 __aarch64__）。wine-9.x 树大量 `#ifdef __x86_64__` 分支因此
+# 在 arm64ec 编译趟被激活：x86 AT&T 内联汇编（pushq/movq/fnstcw/lock;xchg、
+# 'c'/'a'/'q' 约束等）送入 ARM64 代码生成器 → "unknown token in expression"
+# / "invalid input constraint" 连片报错 → CI run#36 official-9.2 arm64ec
+# 构建在 ~28 分钟（主 make 首批 PE 编译）阵亡。
+#
+# 【修复】逐站点对齐上游 wine-10/11 已落地的同款修法（hangover-11.16 源码
+# 逐处核对）：
+#   * include/winnt.h __fastfail：aarch64/arm64ec 分支前置 + x86 分支保持
+#     int $0x29（wine-11.16 上游形态逐字一致）
+#   * include/winnt.h InterlockedExchange/Pointer：+|| defined(__clang__)
+#     （clang 报 __GNUC__=4，原子内建分支被跳过 → 落入 xchg 内联汇编）
+#   * kernelbase/loader.c GetProcAddress、kernelbase/debug.c RaiseException：
+#     移植上游 ARM64EC 专用 naked 实现（stp/ldp + .seh_proc，调用
+#     #get_proc_address / #RtlRaiseException）
+#   * kernel32/module.c：EC 版 get_proc_address_wrapper naked 实现
+#   * vcomp/main.c、oleaut32/typelib.c、oleaut32/vartype.c、rpcrt4/
+#     ndr_stubless.c×5、rpcrt4/cproxy.c、msvcrt/string.c、d3d8/d3d9
+#     device.c：`#elif defined(__x86_64__)` → `&& !defined(__arm64ec__)`
+#     （EC 走 #else 的 C 通用实现；上游 11.x 已把这些 x64 asm 移入带
+#     `#pragma makedep arm64ec_x64` 的 thunks.c 用 x86_64 编译器单独编）
+#
+# 【验证】llvm-mingw-20251202（CI 同款，clang 21.1.7）本地逐文件编译 +
+#     全树 77 个含 __x86_64__ 引用的源文件预处理扫描：修复后 EC 编译趟
+#     x86 内联汇编字符串归零（cpu_x86_64.c 的 "pushq %%%s" 为运行期生成
+#     代码的 printf 模板数据，非编译器汇编，无需处理；wow64/ 目录
+#     configure 按 enable_wow64=aarch64,x86_64 对 EC 架构整体禁用，
+#     同样不参与 EC 编译）。
+#
+# 【v3.2.12 修正】本补丁 __fastfail hunk 自 v3.2.4 起有既有 bug：分支
+#     重排时 x86 分支（#elif __x86_64__ || __i386__）的体误留了 ARM64 代码
+#     （x0 寄存器 + brk #0xf003）而丢失 int $0x29 —— i386 编译趟的
+#     __fastfail 真实调用者（wbemprox/mshtml/ntdll/wined3d 等）必炸
+#     "unknown register name 'x0' in asm"（llvm-mingw-20251202 本地实证）。
+#     arm64ec/aarch64 趟走前置首分支不受影响，wine 9.7 arm64ec 排障时
+#     因编译趟顺序（arm64ec 在 i386 前）先炸于 __cpuid/x64 汇编而未暴露。
+#     修复必须内联在本 hunk（而非 0007e 追加）：CI 的 locale 排序会把
+#     0007c/d/e 系列排在 0007 之前应用，追加式 hunk 的上下文（依赖本
+#     hunk 已应用）在 CI 里永不命中。
+#
+# 【互斥】本补丁锚点均为 wine-9.x 形态；hangover-11.16 树（上游已自带
+#     各 EC 分支/已迁移 thunks.c）hunk 全部不命中 → 静默跳过；proton_10.0
+#     树 winnt.h 三 hunk 实测命中（同受益，v3.2.12 起输出全架构正确形态），
+#     thunks 类 hunk 不命中，与 9998/9999 系列同款树形态互斥机制。
+#
+--- a/include/winnt.h
++++ b/include/winnt.h
+@@ -7091,7 +7091,7 @@ static FORCEINLINE LONGLONG WINAPI Inter
+ static FORCEINLINE LONG WINAPI InterlockedExchange( LONG volatile *dest, LONG val )
+ {
+     LONG ret;
+-#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
++#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+ #elif defined(__i386__) || defined(__x86_64__)
+     __asm__ __volatile__( "lock; xchgl %0,(%1)"
+@@ -7150,7 +7150,7 @@ static FORCEINLINE LONGLONG WINAPI Inter
+ static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *dest, void *val )
+ {
+     void *ret;
+-#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7))
++#if (__GNUC__ > 4) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || defined(__clang__)
+     ret = __atomic_exchange_n( dest, val, __ATOMIC_SEQ_CST );
+ #elif defined(__x86_64__)
+     __asm__ __volatile__( "lock; xchgq %0,(%1)" : "=r" (ret) :"r" (dest), "0" (val) : "memory" );
+@@ -7226,11 +7226,11 @@ static FORCEINLINE void WriteNoFence( LO
+ 
+ static FORCEINLINE DECLSPEC_NORETURN void __fastfail(unsigned int code)
+ {
+-#if defined(__x86_64__) || defined(__i386__)
+-    for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
+-#elif defined(__aarch64__)
+-    register ULONG_PTR val __asm__("x0") = code;
+-    for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
++#if defined(__aarch64__) || defined(__arm64ec__)
++    register ULONG_PTR val __asm__("x0") = code;
++    for (;;) __asm__ __volatile__( "brk #0xf003" :: "r" (val) : "memory" );
++#elif defined(__x86_64__) || defined(__i386__)
++    for (;;) __asm__ __volatile__( "int $0x29" :: "c" ((ULONG_PTR)code) : "memory" );
+ #elif defined(__arm__)
+     register ULONG_PTR val __asm__("r0") = code;
+     for (;;) __asm__ __volatile__( "udf #0xfb" :: "r" (val) : "memory" );
+--- a/dlls/kernelbase/loader.c
++++ b/dlls/kernelbase/loader.c
+@@ -430,7 +430,23 @@ BOOL WINAPI DECLSPEC_HOTPATCH GetModuleH
+  *     GetProcAddress   (kernelbase.@)
+  */
+ 
+-#ifdef __x86_64__
++#ifdef __arm64ec__
++FARPROC WINAPI __attribute__((naked)) GetProcAddress( HMODULE module, LPCSTR function )
++{
++    asm( ".seh_proc \"#GetProcAddress\"\n\t"
++         "stp x29, x30, [sp, #-48]!\n\t"
++         ".seh_save_fplr_x 48\n\t"
++         ".seh_endprologue\n\t"
++         "stp d0, d1, [sp, #16]\n\t"
++         "stp d2, d3, [sp, #32]\n\t"
++         "bl \"#get_proc_address\"\n\t"
++         "ldp d0, d1, [sp, #16]\n\t"
++         "ldp d2, d3, [sp, #32]\n\t"
++         "ldp x29, x30, [sp], #48\n\t"
++         "ret\n\t"
++         ".seh_endproc" );
++}
++#elif defined(__x86_64__)
+ /*
+  * Work around a Delphi bug on x86_64.  When delay loading a symbol,
+  * Delphi saves rcx, rdx, r8 and r9 to the stack.  It then calls
+--- a/dlls/kernel32/module.c
++++ b/dlls/kernel32/module.c
+@@ -295,7 +295,23 @@ FARPROC get_proc_address( HMODULE hModul
+     return fp;
+ }
+ 
+-#ifdef __x86_64__
++#ifdef __arm64ec__
++FARPROC __attribute__((naked)) get_proc_address_wrapper( HMODULE module, LPCSTR function )
++{
++    asm( ".seh_proc \"get_proc_address_wrapper\"\n\t"
++         "stp x29, x30, [sp, #-48]!\n\t"
++         ".seh_save_fplr_x 48\n\t"
++         ".seh_endprologue\n\t"
++         "stp d0, d1, [sp, #16]\n\t"
++         "stp d2, d3, [sp, #32]\n\t"
++         "bl \"get_proc_address\"\n\t"
++         "ldp d0, d1, [sp, #16]\n\t"
++         "ldp d2, d3, [sp, #32]\n\t"
++         "ldp x29, x30, [sp], #48\n\t"
++         "ret\n\t"
++         ".seh_endproc" );
++}
++#elif defined(__x86_64__)
+ /*
+  * Work around a Delphi bug on x86_64.  When delay loading a symbol,
+  * Delphi saves rcx, rdx, r8 and r9 to the stack.  It then calls
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -313,7 +313,33 @@ void WINAPI DECLSPEC_HOTPATCH OutputDebu
+ /*******************************************************************
+  *           RaiseException  (kernelbase.@)
+  */
+-#if defined(__x86_64__)
++#ifdef __arm64ec__
++void __attribute__((naked)) RaiseException( DWORD code, DWORD flags, DWORD count, const ULONG_PTR *args )
++{
++    asm( ".seh_proc RaiseException\n\t"
++         "stp x29, x30, [sp, #-0xb0]!\n\t"
++         ".seh_save_fplr_x 0xb0\n\t"
++         ".seh_endprologue\n\t"
++         "and w1, w1, #0x01\n\t"        /* EXCEPTION_NONCONTINUABLE */
++         "stp w0, w1, [sp, #0x10]\n\t"  /* ExceptionCode, ExceptionFlags */
++         "adr x4, RaiseException\n\t"
++         "stp xzr, x4, [sp, #0x18]\n\t" /* ExceptionRecord, ExceptionAddress */
++         "mov w5, #0x0f\n\t"            /* EXCEPTION_MAXIMUM_PARAMETERS */
++         "cmp w2, w5\n\t"
++         "csel w2, w2, w5, lo\n\t"
++         "str x2, [sp, #0x28]\n\t"      /* NumberParameters */
++         "cbz x3, 1f\n\t"
++         "lsl w2, w2, #3\n\t"
++         "add x0, sp, #0x30\n\t"        /* ExceptionInformation */
++         "mov x1, x3\n\t"               /* args */
++         "bl \"#memcpy\"\n"
++         "1:\tadd x0, sp, #0x10\n\t"    /* rec */
++         "bl \"#RtlRaiseException\"\n\t"
++         "ldp x29, x30, [sp], #0xb0\n\t"
++         "ret\n\t"
++         ".seh_endproc" );
++}
++#elif defined(__x86_64__)
+ /* Some DRMs depend on RaiseException not altering non-volatile registers. */
+ __ASM_GLOBAL_FUNC( RaiseException,
+                    ".byte 0x48,0x8d,0xa4,0x24,0x00,0x00,0x00,0x00\n\t" /* hotpatch prolog */
+--- a/dlls/vcomp/main.c
++++ b/dlls/vcomp/main.c
+@@ -168,7 +168,7 @@ __ASM_GLOBAL_FUNC( _vcomp_fork_call_wrap
+                    __ASM_CFI(".cfi_same_value %ebp\n\t")
+                    "ret" )
+ 
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ extern void CDECL _vcomp_fork_call_wrapper(void *wrapper, int nargs, void **args);
+ __ASM_GLOBAL_FUNC( _vcomp_fork_call_wrapper,
+@@ -289,7 +289,7 @@ static void CDECL _vcomp_fork_call_wrapp
+ 
+ #endif
+ 
+-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
++#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
+ 
+ static inline char interlocked_cmpxchg8(char *dest, char xchg, char compare)
+ {
+--- a/dlls/oleaut32/typelib.c
++++ b/dlls/oleaut32/typelib.c
+@@ -6457,7 +6457,7 @@ HRESULT WINAPI DispCallFunc( void* pvIns
+     return S_OK;
+ }
+ 
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ extern DWORD_PTR CDECL call_method( void *func, int nb_args, const DWORD_PTR *args );
+ extern double CDECL call_double_method( void *func, int nb_args, const DWORD_PTR *args );
+--- a/dlls/oleaut32/vartype.c
++++ b/dlls/oleaut32/vartype.c
+@@ -3496,7 +3496,7 @@ HRESULT WINAPI VarCyFromR4(FLOAT fltIn,
+  */
+ HRESULT WINAPI VarCyFromR8(double dblIn, CY* pCyOut)
+ {
+-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
++#if defined(__GNUC__) && (defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__)))
+   /* This code gives identical results to Win32 on Intel.
+    * Here we use fp exceptions to catch overflows when storing the value.
+    */
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -1002,7 +1002,7 @@ LONG_PTR CDECL ndr_client_call( PMIDL_ST
+     return RetVal;
+ }
+ 
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ __ASM_GLOBAL_FUNC( NdrClientCall2,
+                    "subq $0x28,%rsp\n\t"
+@@ -1096,7 +1096,7 @@ __ASM_GLOBAL_FUNC(call_server_func,
+     __ASM_CFI(".cfi_def_cfa %esp,4\n\t")
+     __ASM_CFI(".cfi_same_value %ebp\n\t")
+     "ret" )
+-#elif defined __x86_64__
++#elif defined __x86_64__ && !defined __arm64ec__
+ LONG_PTR __cdecl call_server_func(SERVER_ROUTINE func, unsigned char * args, unsigned int stack_size);
+ __ASM_GLOBAL_FUNC( call_server_func,
+                    "pushq %rbp\n\t"
+@@ -1912,7 +1912,7 @@ cleanup:
+     return status;
+ }
+ 
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ __ASM_GLOBAL_FUNC( NdrAsyncClientCall,
+                    "subq $0x28,%rsp\n\t"
+@@ -2254,7 +2254,7 @@ LONG_PTR CDECL ndr64_client_call( MIDL_S
+     return 0;
+ }
+ 
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ __ASM_GLOBAL_FUNC( NdrClientCall3,
+                    "subq $0x28,%rsp\n\t"
+@@ -2316,7 +2316,7 @@ LONG_PTR CDECL ndr64_async_client_call(
+     return 0;
+ }
+ 
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ __ASM_GLOBAL_FUNC( Ndr64AsyncClientCall,
+                    "subq $0x28,%rsp\n\t"
+--- a/dlls/rpcrt4/cproxy.c
++++ b/dlls/rpcrt4/cproxy.c
+@@ -90,7 +90,7 @@ __ASM_GLOBAL_FUNC(call_stubless_func,
+     ".long " __ASM_NAME("call_stubless_func") "-1f\n" \
+     "1:\n\t"
+ 
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ extern void call_stubless_func(void);
+ __ASM_GLOBAL_FUNC(call_stubless_func,
+--- a/dlls/msvcrt/string.c
++++ b/dlls/msvcrt/string.c
+@@ -2785,7 +2785,7 @@ int __cdecl memcmp(const void *ptr1, con
+     return memcmp_blocks(p1, p2, n);
+ }
+ 
+-#if defined(__i386__) || defined(__x86_64__)
++#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+ 
+ #ifdef __i386__
+ 
+--- a/dlls/d3d9/device.c
++++ b/dlls/d3d9/device.c
+@@ -4614,7 +4614,7 @@ static const struct wined3d_device_paren
+ 
+ static void setup_fpu(void)
+ {
+-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
++#if defined(__GNUC__) && (defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__)))
+     WORD cw;
+     __asm__ volatile ("fnstcw %0" : "=m" (cw));
+     cw = (cw & ~0xf3f) | 0x3f;
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -3649,7 +3649,7 @@ static const struct wined3d_device_paren
+ 
+ static void setup_fpu(void)
+ {
+-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
++#if defined(__GNUC__) && (defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__)))
+     WORD cw;
+     __asm__ volatile ("fnstcw %0" : "=m" (cw));
+     cw = (cw & ~0xf3f) | 0x3f;

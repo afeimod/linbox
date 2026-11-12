@@ -1,0 +1,37 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH 3/7] LinBox box64: Android RELR tags in elfparser.c (v0.3.2..v0.4.1 layout)
+
+Legacy-layout twin of 0002. The v0.3.x..v0.4.1 elfparser.c nests the
+dynamic-tag switch one level DEEPER (16-space case indent inside the
+extra { } block wrapping the DT_* loop), while 0002 carries the v0.4.2+
+12-space form. Authored and dry-run verified against v0.3.8 exactly.
+
+Applied with --fuzz=0 (box64 build.sh custom_patch since v3.3.34): with the
+default fuzz=2, 0002's hunk can fuzzy-misplace the DT_ANDROID_RELR case under
+case DT_VERDEFNUM on v0.3.8 (sandbox-verified corruption) - the strict gate
+makes 0002/0003 self-select by exact layout match, one of the two always
+applies (and 0004 covers elfparser32.c on every tag since v0.3.2).
+
+Without the alias, NDK lld's DT_ANDROID_RELR (0x6fffe000/0x6fffe001/
+0x6fffe003) packed relocations are silently skipped -> bionic wine
+x86_64-unix/ntdll.so keeps raw .data self-pointers -> wineboot SIGSEGV
+(see 0002's full writeup).
+---
+diff --git a/src/elfs/elfparser.c b/src/elfs/elfparser.c
+--- a/src/elfs/elfparser.c
++++ b/src/elfs/elfparser.c
+@@ -225,3 +225,4 @@
+                 case DT_RELR:
++                case 0x6fffe000:  // DT_ANDROID_RELR (LinBox: bionic RELR tags, same encoding)
+                     h->relr = ptr;
+                     break;
+@@ -228,3 +229,4 @@
+                 case DT_RELRSZ:
++                case 0x6fffe001:  // DT_ANDROID_RELRSZ
+                     h->relrsz = val;
+                     break;
+@@ -231,3 +232,4 @@
+                 case DT_RELRENT:
++                case 0x6fffe003:  // DT_ANDROID_RELRENT
+                     h->relrent = val;
+                     break;

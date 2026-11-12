@@ -1,0 +1,115 @@
+# linbox: wine-9.7 arm64ec wbemprox __cpuid / mshtml ifacewrap EC 排除（v3.2.12）
+#
+# 【根因】CI official-9.7 arm64ec 实测（日志 wine-build-log-arm64ec (9).zip）：
+# 主 make 于 dlls/wbemprox/arm64ec-windows/builtin.o 阵亡 ——
+#     dlls/wbemprox/builtin.c:3391:5: error: call to undeclared function '__cpuid'
+#     note: did you mean 'do_cpuid'?
+# wine-9.7 wbemprox/builtin.c 的 do_cpuid 以
+#     #if defined(__i386__) || defined(__x86_64__)
+#       __cpuid( p, ax );
+#     #else
+#       FIXME("\n");
+#     #endif
+# 分派 —— llvm-mingw arm64ec 目标同时预定义 __arm64ec__ 与 __x86_64__
+# （不预定义 __aarch64__；与 0007 头注一致的 clang 21 AArch64Targets.cpp
+# getTargetDefines 实证）→ EC 编译趟落入 x86 分支；而 __cpuid 内建函数
+# 本身是 x86 专属 —— wine-9.7 include/msvcrt/intrin.h:20 的守卫
+#     #if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+# 明确排除了 EC（上游自己承认这个组合），x86_64 宏与 intrin 可用性
+# 错位 → 隐式声明即炸。
+#
+# 同款时序隐患：dlls/mshtml/ifacewrap.c 的 DEFINE_WRAPPER_FUNC 以
+#     #ifdef __i386__      → 32 位 asm
+#     #elif defined(__x86_64__) → movq 8(%rcx),%rcx … x64 AT&T 汇编
+#     #else               → C 存根（E_NOTIMPL）
+# 分派，无 arm64ec 排除 → EC 趟（__x86_64__ 已定义）激活 x64 汇编 →
+# clang ARM64 代码生成器报 "<inline asm>:10:8: error: unexpected token
+# in argument list"（llvm-mingw-20251202 clang 21.1.7 本地逐文件复现，
+# 21 errors 连片）。文件在字母序（m）上早于 wbemprox（w），CI 本轮
+# 日志未见其报错属 make -j 调度时序未达；修复 wbemprox 后必为下一个
+# 阻断点 —— 一并排除，避免"修一个等 CI 30 分钟再炸下一个"。
+#
+# 【修复】两处均对齐 wine 树内既有的 EC 排除手法（0007 系列 /
+# intrin.h 同款）：
+#   * wbemprox：do_cpuid 守卫追加 && !defined(__arm64ec__)，EC 趟落
+#     #else 的 FIXME 存根 —— 与原生 ARM/ARM64 趟行为一致（do_cpuid
+#     在非 x86 上本就是 FIXME 空桩；WMI Win32_Processor 的 CPUID 数据
+#     本就不采集，无功能回归）；
+#   * mshtml：DEFINE_WRAPPER_FUNC 的 __x86_64__ 分支追加 EC 排除，
+#     EC 趟落 #else 的 C 存根（ERR + E_NOTIMPL）—— 与原生 ARM64 PE
+#     趟（aarch64-windows，一直走 #else 编译）行为完全一致。该包装器
+#     仅用于"包裹无法识别的外部接口"（保留 COM 身份），存根化后此类
+#     接口方法调用返回 E_NOTIMPL —— 与 ARM 原生 wine 同级，可接受。
+#
+# 【互斥】锚点为 wine-9.7 形态（do_cpuid 无 static + 3390 行三行守卫 /
+# ifacewrap 的 movl 4(%esp) 32 位模板）：
+#   * wine-9.2：两文件形态逐字相同（本地 diff 实证 IDENTICAL）→ 同样
+#     命中，官方 9.2 arm64ec 构建同样受益（9.2 的 CI 从未走到这两个
+#     文件或同样受 -j 调度影响，预防性修复）；
+#   * proton_10.0 / wine-10+ / hangover-11.16：上游已迁 thunks.c /
+#     自带 EC 分支 → 不命中，静默跳过（与 0007c/0007d 同款互斥机制）。
+#
+# 【验证】llvm-mingw-20251202（CI 同款，clang 21.1.7）+ wine-9.7 全补丁
+#     树本地逐文件编译：修复前 builtin.o（__cpuid 隐式声明）/ ifacewrap.o
+#     （inline asm 21 errors）双双失败，修复后两目标 0 error 通过；同批
+#     复测 vcomp/math/string/ndr_stubless/cstub/cproxy/loader/debug/
+#     module/thread/relay/setjmp/handler4/except/vartype/typelib/
+#     device×2/process/unwind/cpu_x86_64/dinput 等 30 个 EC 趟对象均
+#     无回归。
+# 【修复 3】include/winnt.h YieldProcessor —— 第三类形态：公共头内联函数，
+# EC 趟（__x86_64__ 已定义）激活 "rep; nop"（x86 pause），ARM64 代码生成器
+# 报 unrecognized instruction mnemonic。FORCEINLINE 未被调用不生成代码，
+# 故只有真实调用者阵亡：dlls/wined3d/cs.c（自旋等待）、dlls/ntdll/sync.c、
+# dlls/ntoskrnl.exe/sync.c（条件自旋）。EC 修法不是落空桩而是走 ARM 分支
+# 的 "dmb ishst; yield" —— EC 本就运行在 ARM64 硬件上，yield 是正确语义。
+# 【修复 4】dlls/rsaenh/tomcrypt.h ROR —— 第四类形态：x86 专属内联汇编
+# 【约束】'c'（rcx/cl）。守卫 defined(__GNUC__) && (defined(__i386__) ||
+# defined(__x86_64__)) 在 EC 趟命中（__x86_64__ 已定义）→ "invalid input
+# constraint 'c' in asm"（ARM64 无 'c' 约束）。全 dll 八个对象连片阵亡
+# （aes/des/implglue/mpi/rc2/rc4/rsa/rsaenh，均 include tomcrypt.h）。
+# EC 排除后落 #else 的 C 宏旋转（通用实现，语义等价）。
+--- a/dlls/rsaenh/tomcrypt.h
++++ b/dlls/rsaenh/tomcrypt.h
+@@ -95,6 +95,6 @@
+           ((unsigned long)((y)[3] & 255)); }
+
+-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(INTEL_CC)
++#if defined(__GNUC__) && (defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))) && !defined(INTEL_CC)
+
+ static inline unsigned ROR(unsigned word, int i)
+ {
+--- a/include/winnt.h
++++ b/include/winnt.h
+@@ -7352,9 +7352,9 @@
+ static FORCEINLINE void YieldProcessor(void)
+ {
+ #ifdef __GNUC__
+-#if defined(__i386__) || defined(__x86_64__)
++#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+     __asm__ __volatile__( "rep; nop" : : : "memory" );
+-#elif defined(__arm__) || defined(__aarch64__)
++#elif defined(__arm__) || defined(__aarch64__) || defined(__arm64ec__)
+     __asm__ __volatile__( "dmb ishst\n\tyield" : : : "memory" );
+ #else
+     __asm__ __volatile__( "" : : : "memory" );
+--- a/dlls/wbemprox/builtin.c
++++ b/dlls/wbemprox/builtin.c
+@@ -3388,6 +3388,6 @@ done:
+ void do_cpuid( unsigned int ax, int *p )
+ {
+-#if defined(__i386__) || defined(__x86_64__)
++#if (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
+     __cpuid( p, ax );
+ #else
+     FIXME("\n");
+--- a/dlls/mshtml/ifacewrap.c
++++ b/dlls/mshtml/ifacewrap.c
+@@ -95,7 +95,7 @@
+         "movl 0(%eax), %eax\n\t"                \
+         "jmp *" #off "(%eax)\n\t")
+
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+
+ #define DEFINE_WRAPPER_FUNC(n, x, off)          \
+     HRESULT WINAPI wrapper_func_##n(IUnknown*); \

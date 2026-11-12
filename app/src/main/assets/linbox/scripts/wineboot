@@ -1,0 +1,4 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# LinBox wineboot 包装器（APK assets 自动部署，勿手改）
+# 等价: linbox-wine wineboot [args]（-i 初始化/更新前缀，容器自持环境）
+exec /data/data/com.linbox/files/rootfs/usr/bin/linbox-wine wineboot "$@"

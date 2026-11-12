@@ -8,6 +8,7 @@ import android.view.View
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.LayoutCoordinates
+import com.linbox.core.window.WindowFocusHook
 
 /**
  * Compose 1.6.x 移除了 [LayoutCoordinates.boundsInWindow]（positionInWindow 等
@@ -44,7 +45,7 @@ internal fun LayoutCoordinates.boundsInWindowCompat(): Rect {
  *    累积 → 随机出现手势僵死/事件错乱，门禁协程饿死 → "触控板逻辑丢失、
  *    恢复触摸点击、鼠标不动"。
  * 3. 【菜单即触即关】focusable Popup 收到 ACTION_OUTSIDE 即 dismiss ——
- *    右键菜单已在主窗口内渲染规避（见 TrackpadLayer 头注释）。
+ *    属菜单自身实现问题，另行修复（DesktopContextMenu v2.20 改主窗口内渲染）。
  *
  * ## v2.20 架构（对齐 termux-x11 的 TouchInputHandler）
  *
@@ -70,7 +71,7 @@ internal fun LayoutCoordinates.boundsInWindowCompat(): Rect {
  */
 object TrackpadRouter {
 
-    // ===== 配置（由壳层 LinBoxShell 的 SideEffect 同步） =====
+    // ===== 配置（DesktopEnvironment 的 SideEffect 同步） =====
 
     /** 触控板模式总开关（settingsStore.mouseControlMode == "trackpad"） */
     @Volatile
@@ -84,10 +85,10 @@ object TrackpadRouter {
     @Volatile
     var density: Float = 3f
 
-    /** 双指轻点 / 长按右键 → 呼出右键菜单（原桌面直连；现壳层不使用，保留钩子） */
+    /** 双指轻点 / 长按右键 → 呼出右键菜单（DesktopEnvironment 直连 openContextMenu） */
     var onContextMenu: ((Offset) -> Unit)? = null
 
-    /** 被拦截的真实手指事件的通知（原桌面接自动锁屏；现壳层不使用） */
+    /** 被拦截的真实手指事件的通知（DesktopEnvironment 接 AutoLockController） */
     var onUserInteraction: (() -> Unit)? = null
 
     // ===== 直通区注册表（窗口坐标 px；虚拟键盘面板 / 手柄工具条等登记） =====
@@ -99,7 +100,13 @@ object TrackpadRouter {
         if (rect == null) passthroughRects.remove(key) else passthroughRects[key] = rect
     }
 
-    private fun isPassthrough(x: Float, y: Float): Boolean {
+    /**
+     * (x,y)（窗口坐标）是否落在某个直通区（虚拟键盘面板 / 手柄工具条 /
+     * 手柄设置窗等"浮在窗口层之上的直触 UI"）。
+     * v3.2.2 起公开 —— WindowFocusHook 据此跳过浮层区域的窗口置前
+     * （敲键盘按键不应把键盘底下的应用窗口顶到前面）。
+     */
+    fun isPassthrough(x: Float, y: Float): Boolean {
         for (r in passthroughRects.values) {
             if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true
         }
@@ -107,7 +114,7 @@ object TrackpadRouter {
     }
 
     /**
-     * 模式切换退出触控板时调用（壳层 LinBoxShell 同步 enabled 前调用）：
+     * 模式切换退出触控板时调用（DesktopEnvironment 同步 enabled 前调用）：
      * 撤销进行中的手势会话，释放未完成的注入拖拽流（防"幽灵长按"）。
      */
     fun onDisabled() {
@@ -152,6 +159,10 @@ object TrackpadRouter {
 
         // 直通区（虚拟键盘面板 / 手柄元素 / 工具条 / 设置面板）：真实手指直触
         if (isPassthrough(ev.x, ev.y)) return false
+        // v3.2.23（用户问题 4）：手柄元素/悬浮球本体按命中矩形直通 ——
+        // 此前元素未注册直通区，触控板模式下按手柄键会被当成手势
+        //（指针移动/在指针处合成点击）误击穿到底下窗口
+        if (com.linbox.core.input.gamepad.GamepadController.isOverPadUi(ev.x, ev.y)) return false
 
         if (view == null || view!!.rootView !== view) {
             view = activity.window.decorView
@@ -289,8 +300,16 @@ object TrackpadRouter {
                     MouseController.press(false)
                     TrackpadController.injectDragUp(v, cursor.x, cursor.y)
                 }
-                maxPointers == 1 && !moved && !longPressFired && duration < longPressMs ->
+                maxPointers == 1 && !moved && !longPressFired && duration < longPressMs -> {
                     TrackpadController.tapClick(v, cursor.x, cursor.y)
+                    // v3.2.2：手指轻点的屏幕位置若落在非顶层窗口的可见部分，
+                    // 一并置前 —— 用户直觉“点谁谁置前”（tapClick 已在指针处
+                    // 置前；此处是轻点位置的补充，指针处点击照旧）。滑动/
+                    // 长按/双指均不触发（本分支仅轻点）。
+                    startPositions.values.firstOrNull()?.let {
+                        WindowFocusHook.raiseAt(it.x, it.y)
+                    }
+                }
                 maxPointers == 2 && !scrollMode && !moved && duration < twoFingerTapMs ->
                     onContextMenu?.invoke(cursor)
             }

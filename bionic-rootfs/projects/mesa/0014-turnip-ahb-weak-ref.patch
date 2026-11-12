@@ -1,0 +1,40 @@
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -54,6 +54,14 @@
+ #include <vndk/hardware_buffer.h>
+ #endif
+ 
++#if DETECT_OS_ANDROID && defined(__BIONIC__)
++/* LinBox(bionic): NDK 的 libnativewindow 存根不导出 AHardwareBuffer_getNativeHandle
++ * （平台内部符号，真机 libnativewindow 自 Android 8 起导出）。
++ * 声明为弱引用：链接期不要求符号存在，运行期绑定真机实现。 */
++extern "C" const native_handle_t *AHardwareBuffer_getNativeHandle(
++   const AHardwareBuffer *buffer) __attribute__((weak));
++#endif
++
+ uint64_t os_page_size = 4096;
+ 
+ static bool
+@@ -3714,11 +3722,17 @@
+       }
+    } else if (mem->vk.ahardware_buffer) {
+ #if DETECT_OS_ANDROID
+-      const native_handle_t *handle = AHardwareBuffer_getNativeHandle(mem->vk.ahardware_buffer);
+-      assert(handle->numFds > 0);
+-      size_t size = lseek(handle->data[0], 0, SEEK_END);
+-      result = tu_bo_init_dmabuf(device, &mem->bo, size, alloc_flags,
+-                                 handle->data[0]);
++      const native_handle_t *handle = NULL;
++      if (AHardwareBuffer_getNativeHandle)
++         handle = AHardwareBuffer_getNativeHandle(mem->vk.ahardware_buffer);
++      if (handle && handle->numFds > 0) {
++         size_t size = lseek(handle->data[0], 0, SEEK_END);
++         result = tu_bo_init_dmabuf(device, &mem->bo, size, alloc_flags,
++                                    handle->data[0]);
++      } else {
++         /* 弱符号缺失（极老设备）：AHB 导入路径降级 */
++         result = VK_ERROR_FEATURE_NOT_PRESENT;
++      }
+ #else
+       result = VK_ERROR_FEATURE_NOT_PRESENT;
+ #endif

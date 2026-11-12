@@ -1,0 +1,6 @@
+revision="v1.4.359"
+url="https://github.com/KhronosGroup/Vulkan-Headers.git"
+urlType="git"
+arch="aarch64 x86_64"
+buildSys="cmake"
+license="Apache-2.0 OR MIT"

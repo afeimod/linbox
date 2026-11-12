@@ -19,26 +19,31 @@ import com.linbox.core.input.MouseController
 import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.VirtualKeyboardOverlay
+import com.linbox.core.input.gamepad.GamepadFloatingBall
 import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
+import com.linbox.core.window.WinDialogHost
+import com.linbox.core.window.WindowHost
+import com.linbox.shellui.AdvancedScreen
+import com.linbox.shellui.ContainerHomeScreen
 
 /**
- * LinBox 壳层：终端主页 + X11 / DAC / 设置全屏页 + 输入覆盖层。
- *
- * 无浮动窗口、无桌面启动器（原桌面环境的壁纸/图标网格/任务栏/开始菜单
- * 及替代它的启动器卡片均已移除）——App 打开即终端，终端就是主页：
- * - 主页 = 真实 Termux 终端铺满全屏；
- * - 终端执行 `linbox-x11`（或点悬浮球"X11"）→ 整屏跳转 X11 图形界面；
- * - 悬浮球"DAC 显示器"（或 wine wrapper 的 DAC_START 广播）→ 全屏
- *   DAC 显示器页（winedac.drv 画面直出安卓屏，不依赖 X11）；
- * - 悬浮球"设置"→ 全屏设置页（虚拟手柄开关在这里）。
+ * LinBox 壳层：**以 Wine 容器管理为主页** 的直接性容器管理界面。
  *
  * 结构（自底向上）：
- * 1. 当前页面（ShellController.screen 决定：终端 / X11 / DAC / 设置）
- * 2. VirtualKeyboardOverlay（虚拟键盘，可拖动）
- * 3. GamepadOverlay + GamepadSettingsWindow（虚拟游戏手柄：开启后
- *    摇杆/按钮/迷你工具条悬浮在当前页面之上，X11/DAC 游戏可用）
- * 4. MouseCursorOverlay（虚拟鼠标指针，最顶层）
+ * 1. 当前页面（ShellController.screen 决定）：
+ *    - HOME 主页 = 容器管理（选中容器信息卡 + 容器卡片列表，底部导航）
+ *    - ADVANCED 高级页 = 终端 / 浏览器 / 容器高级设置 / 体检 / 文件管理器
+ *      / X11 / DAC / 应用设置（底部导航）
+ *    - TERMINAL / X11 / DAC / SETTINGS = linbox 自有全屏页面（无底部导航）
+ * 2. 浮动窗口层（AnWind 窗口系统移植）：容器管理器（五选项卡配置）、
+ *    exe 选择器、浏览器、文件管理器、日志/体检弹窗等以可拖拽缩放的
+ *    窗口形式展示 —— "容器界面以窗口形式展示各种容器"
+ * 3. WinDialogHost（Qt 风格弹窗栈，容器管理器的全部弹窗）
+ * 4. VirtualKeyboardOverlay（虚拟键盘，可拖动）
+ * 5. GamepadOverlay + GamepadSettingsWindow + GamepadFloatingBall
+ *    （虚拟游戏手柄 + 常驻悬浮球）
+ * 6. MouseCursorOverlay（虚拟鼠标指针，最顶层）
  */
 @Composable
 fun LinBoxShell() {
@@ -68,27 +73,42 @@ fun LinBoxShell() {
         }
     }
 
+    // 性能治理（AnWind v3.4.0 移植）：X11 页面（真全屏游戏会话）期间，
+    // 主界面周期性刷新（容器运行态轮询等）全部静止，把大核让给 wine/box64
+    SideEffect {
+        com.linbox.core.PerfGovernor.update(ShellController.screen == ShellController.Screen.X11)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // ===== 1. 当前页面（终端主页 / X11 / DAC / 设置） =====
+        // ===== 1. 当前页面 =====
         when (ShellController.screen) {
+            ShellController.Screen.HOME -> ContainerHomeScreen()
+            ShellController.Screen.ADVANCED -> AdvancedScreen()
             ShellController.Screen.TERMINAL -> TerminalScreen()
             ShellController.Screen.X11 -> X11Screen()
             ShellController.Screen.DAC -> DacScreen()
             ShellController.Screen.SETTINGS -> SettingsScreen()
         }
 
-        // ===== 2. 虚拟键盘层（可拖动全键盘） =====
+        // ===== 2. 浮动窗口层（容器管理器 / exe 选择器 / 浏览器 / 文件管理器…） =====
+        WindowHost()
+
+        // ===== 3. Qt 风格弹窗栈（容器管理器全部弹窗基于此） =====
+        WinDialogHost()
+
+        // ===== 4. 虚拟键盘层（可拖动全键盘） =====
         VirtualKeyboardOverlay()
 
-        // ===== 3. 虚拟游戏手柄层（摇杆/十字键/按钮 + 迷你工具条 ⚙✎✕） =====
+        // ===== 5. 虚拟游戏手柄层（悬浮球 + 摇杆/按钮 + 设置窗） =====
         GamepadOverlay()
         GamepadSettingsWindow()
+        GamepadFloatingBall()
 
-        // ===== 4. 虚拟鼠标指针层（最顶层） =====
+        // ===== 6. 虚拟鼠标指针层（最顶层） =====
         MouseCursorOverlay()
     }
 }

@@ -1,0 +1,13 @@
+*.tar
+*.o
+ndk/
+toolchain-/
+/src/
+pkgs/
+bionic_ccache/
+host_ccache/
+cross_ccache/
+debug.txt
+custom.conf
+termux-packages/
+host_tools/

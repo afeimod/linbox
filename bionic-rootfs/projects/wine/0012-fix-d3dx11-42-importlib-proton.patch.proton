@@ -1,0 +1,51 @@
+# linbox: proton_9.0 树 d3dx11_42 转发导入的导入库解析修复（v3.3.9）
+#
+# 【根因】CI proton-9.0 两形态实测（wine-build-log-x86_64.zip /
+#   wine-build-log-arm64ec.zip）：
+#     lld-link: error: could not open 'd3dx11_43.lib': No such file or directory
+#     make: *** [dlls/d3dx11_42/i386-windows/d3dx11_42.dll] Error 2
+#     make: *** [dlls/d3dx11_42/x86_64-windows/d3dx11_42.dll] Error 2
+#
+#   Valve 在 proton_9.0 分支（commit 94a621e874 "d3dx11_42: Don't share
+#   source with d3dx11_43"，2024-05）把 d3dx11_42 重构为薄转发 DLL：
+#   spec 条目大量改为 -import（转发进 d3dx11_43），Makefile.in 相应写
+#   IMPORTS = d3dcompiler d3dx11_43。但 wine 构建系统（tools/makedep.c
+#   add_import_libs → get_static_lib）解析 IMPORTS 时只认两种名字：
+#     a) 某模块 Makefile.in 的 IMPORTLIB 值；
+#     b) 某静态库 lib<name>.a。
+#   d3dx11_43 的 IMPORTLIB 是 d3dx11（与 d3dx9_36→d3dx9、d3dx10_43→
+#   d3dx10 同构的家族共享命名），"d3dx11_43" 两者皆非 → 回退
+#   -ld3dx11_43 → PE 链接器把它变成 d3dx11_43.lib —— 全树不存在，
+#   lld-link 报错。Valve 官方 Proton 构建能过，是因为 Gentoo
+#   mingw-w64 系统工具链自带 DirectX SDK 导入库；本构建 PE 侧走
+#   llvm-mingw/NDK clang + lld-link，无系统 d3dx 库。
+#
+# 【修法】与 Valve 在 proton_10.0 分支的官方修法逐字一致（proton_10.0
+#   树 dlls/d3dx11_42/Makefile.in 实测比对）：
+#     IMPORTS = d3dcompiler d3dx11_43  →  IMPORTS = d3dcompiler d3dx11
+#   get_static_lib("d3dx11") 命中 d3dx11_43 子模块 → 链接行改为显式
+#   路径 dlls/d3dx11_43/<arch>-windows/libd3dx11.a（与 kernel32→
+#   libkernel.a 等数千个既有跨 DLL 导入同机制，本构建已实证可用），
+#   并自动生成正确构建顺序。PE 导入表仍编码 d3dx11_43.dll，运行时
+#   行为与 Valve 官方一致。
+#
+# 【互斥】.patch.proton 后缀避开主补丁循环 *.patch 通配（official/
+#   hangover 树 d3dx11_42 是 PARENTSRC 完整构建形态，无此行，普通
+#   应用必然失败）；由 build.sh 条件应用：仅当 Makefile.in 含
+#   "IMPORTS = d3dcompiler d3dx11_43"（proton_9.0 转发形态）时套用。
+#   proton_10.0+ 树已是 d3dx11 → 门控不命中自动跳过。
+#
+# 【验证】proton_9.0 树 patch --dry-run 命中；proton_10.0 / wine-9.0 /
+#   wine-9.2 / wine-10.0 / hangover-11.16 树不命中（无该行或已修复）。
+
+--- a/dlls/d3dx11_42/Makefile.in	2026-11-07 08:48:37.435223372 +0000
++++ b/dlls/d3dx11_42/Makefile.in	2026-11-07 08:48:37.436223375 +0000
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -DD3DX11_SDK_VERSION=42
+ MODULE    = d3dx11_42.dll
+ IMPORTLIB = d3dx11_42
+-IMPORTS = d3dcompiler d3dx11_43
++IMPORTS = d3dcompiler d3dx11
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 

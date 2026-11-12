@@ -1,0 +1,28 @@
+{
+  "default": {
+    "dinput": "builtin,native",
+    "dinput8": "builtin,native",
+    "xinput1_1": "builtin,native",
+    "xinput1_2": "builtin,native",
+    "xinput1_3": "builtin,native",
+    "xinput1_4": "builtin,native",
+    "xinput9_1_0": "builtin,native",
+    "xinputuap": "builtin,native"
+  },
+  "direct3d": {
+    "dx8_11": [
+      "d3d8",
+      "d3d9",
+      "d3d10",
+      "d3d10_1",
+      "d3d10core",
+      "d3d11",
+      "dxgi",
+      "ddraw"
+    ],
+    "dx12": [
+      "d3d12",
+      "d3d12core"
+    ]
+  }
+}

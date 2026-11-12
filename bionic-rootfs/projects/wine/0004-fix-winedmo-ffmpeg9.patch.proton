@@ -1,0 +1,49 @@
+--- a/dlls/winedmo/unix_demuxer.c
++++ b/dlls/winedmo/unix_demuxer.c
+@@ -37,6 +37,7 @@
+ struct stream
+ {
+     AVBSFContext *filter;
++    unsigned int pcm_reverse_bytes; /* bytes per sample to swap, 0 = none */
+     BOOL eos;
+ };
+ 
+@@ -144,10 +145,16 @@
+         }
+         else if (codec_is_big_endian_pcm(par->codec_id))
+         {
+-            /* WAVEFORMATEX does not contain endianness info, so this needs to be converted here. */
+-            if (av_bsf_alloc( &ff_pcm_byte_order_reverse_bsf, &stream->filter ) < 0) return STATUS_UNSUCCESSFUL;
++            /* WAVEFORMATEX does not contain endianness info, so this needs to be converted here.
++             * ffmpeg >= 7 made custom bitstream filters impossible from outside the library
++             * (the AVBitStreamFilter callbacks are internal ABI), so the old in-library BSF is
++             * replaced by a byte swap applied to each packet in demuxer_read, and the
++             * little-endian codec id is reported downstream via par_out. */
++            if (av_bsf_get_null_filter( &stream->filter ) < 0) return STATUS_UNSUCCESSFUL;
+             avcodec_parameters_copy( stream->filter->par_in, par );
+-            av_bsf_init( stream->filter );
++            avcodec_parameters_copy( stream->filter->par_out, par );
++            stream->filter->par_out->codec_id = pcm_byte_order_reverse_codec_id( par->codec_id );
++            stream->pcm_reverse_bytes = pcm_byte_order_bytes_per_sample( par->codec_id );
+             continue;
+         }
+ 
+@@ -344,7 +351,17 @@
+         if (!(stream = demuxer->last_stream)) ret = 0;
+         else
+         {
+-            if (!(ret = av_bsf_receive_packet( stream->filter, *packet ))) return STATUS_SUCCESS;
++            if (!(ret = av_bsf_receive_packet( stream->filter, *packet )))
++            {
++                if (stream->pcm_reverse_bytes)
++                {
++                    if (av_packet_make_writable( *packet ) < 0)
++                        WARN( "Failed to make packet writable.\n" );
++                    else
++                        pcm_byte_order_reverse_packet( *packet, stream->pcm_reverse_bytes );
++                }
++                return STATUS_SUCCESS;
++            }
+             if (ret == AVERROR_EOF) stream->eos = TRUE;
+             if (!ret || ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) ret = 0;
+             else WARN( "Failed to read packet from filter, error %s.\n", debugstr_averr( ret ) );

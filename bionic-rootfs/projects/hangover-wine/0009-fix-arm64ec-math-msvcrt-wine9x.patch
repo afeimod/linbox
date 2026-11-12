@@ -1,0 +1,221 @@
+# linbox: wine-9.x msvcrt/math.c arm64ec x87/SSE 内联汇编修复（v3.2.9）
+#
+# 【根因】0007 补丁（v3.2.4，wine-9.2 树全量扫描）漏扫 msvcrt/math.c：
+#   llvm-mingw arm64ec 目标同时预定义 __arm64ec__ 和 __x86_64__（不预
+#   定义 __aarch64__），wine-9.x math.c 的三处 x86 专属代码因此在 EC
+#   编译趟被激活：
+#     * sse2_sqrtf/sse2_sqrt 的 sqrtss/sqrtsd（#ifdef __x86_64__ 块）
+#     * _setfp_sse 的 stmxcsr/ldmxcsr（#if i386||x86_64 块）
+#   aarch64 代码生成器报 "unknown token in expression" /
+#   "unrecognized instruction mnemonic" —— CI official-9.7 arm64ec 在
+#   make 首批 PE 编译（dlls/crtdll/arm64ec-windows/math.o）阵亡（6 errors）。
+#
+# 【修法】逐处对齐上游 wine-9.22 已落地的同款修复（上游 9.8~9.22 期间
+#   合入，hangover-9.22 官方 arm64ec 构建实证可用；本补丁与 9.22 最终
+#   形态逐 hunk 核对，仅剩 3 处无关上游差异——__SOFTFP__/feholdexcept/
+#   一空行，均不在 arm64ec 路径）：
+#   * sqrtf/sqrt：arm64ec naked fsqrt 分支前置 + aarch64/arm/x86_64/i386
+#     完整分支链（sqrtf_validate/sqrt_validate 无条件化，#ifndef __i386__）
+#   * MXCSR 读写抽出 get_mxcsr()/set_mxcsr()：arm64ec 经 ARM64X thunk
+#     （__os_arm64x_get/set_x64_information，ntdll loader.c 已导出，
+#     wine-9.7 树自带该符号），x86 走原 stmxcsr/ldmxcsr
+#   * __libm_sse2_sqrt_precise（i386-only 块）的 call sse2_sqrt 同步
+#     改为直接 sqrtsd 指令 —— asm_sqrt 改名后旧符号不存在（上游同款）
+#
+# 【验证】wine-9.7 干净树 fuzz=0 全 20 hunk 应用通过；arm64ec 宏模拟
+#   （__arm64ec__+__x86_64__、无 __aarch64__）全树预处理扫描（0007+
+#   本补丁后）：PE 编译趟 x86 内联汇编残留归零（修复前 math.c 4 处、
+#   全树 6 文件阳性对照可复现）。i386/aarch64 PE 目标行为不变（分支链
+#   与上游 9.22 逐字一致）。
+#
+# 【互斥】锚点均为 wine-9.x 形态；hangover-11.16/proton_10.0/wine-10+
+#   树（上游已自带全部修复）hunk 不命中 → 静默跳过，与 0007 同款树
+#   形态互斥机制。
+#
+--- a/dlls/msvcrt/math.c	2024-04-19 20:18:13.000000000 +0000
++++ b/dlls/msvcrt/math.c	2026-11-01 10:22:57.942119613 +0000
+@@ -77,14 +77,12 @@
+ #endif
+ }
+ 
+-#if defined(__i386__) || defined(__x86_64__)
+ static inline double ret_nan( BOOL update_sw )
+ {
+     double x = 1.0;
+     if (!update_sw) return -NAN;
+     return (x - x) / (x - x);
+ }
+-#endif
+ 
+ #define SET_X87_CW(MASK) \
+     "subl $4, %esp\n\t" \
+@@ -260,7 +258,7 @@
+ }
+ #endif
+ 
+-#ifdef __x86_64__
++#ifndef __i386__
+ extern short CDECL _fdclass(float x);
+ 
+ static BOOL sqrtf_validate( float *x )
+@@ -278,10 +276,21 @@
+     return TRUE;
+ }
+ 
+-float CDECL sse2_sqrtf(float);
+-__ASM_GLOBAL_FUNC( sse2_sqrtf,
+-        "sqrtss %xmm0, %xmm0\n\t"
+-        "ret" )
++#ifdef __arm64ec__
++static float __attribute__((naked)) CDECL asm_sqrtf(float x)
++{
++    asm( "fsqrt s0,s0; ret" );
++}
++#elif defined __aarch64__
++float CDECL asm_sqrtf(float);
++__ASM_GLOBAL_FUNC( asm_sqrtf, "fsqrt s0,s0; ret" )
++#elif defined __arm__
++float CDECL asm_sqrtf(float);
++__ASM_GLOBAL_FUNC( asm_sqrtf, "vsqrt s0,s0; bx lr" )
++#elif defined __x86_64__
++float CDECL asm_sqrtf(float);
++__ASM_GLOBAL_FUNC( asm_sqrtf, "sqrtss %xmm0, %xmm0; ret" )
++#endif
+ #endif
+ 
+ /*********************************************************************
+@@ -289,11 +298,11 @@
+  */
+ float CDECL MSVCRT_sqrtf( float x )
+ {
+-#ifdef __x86_64__
++#ifndef __i386__
+     if (!sqrtf_validate(&x))
+         return x;
+ 
+-    return sse2_sqrtf(x);
++    return asm_sqrtf(x);
+ #else
+     return sqrtf( x );
+ #endif
+@@ -382,7 +391,6 @@
+ }
+ #endif
+ 
+-#if defined(__x86_64__) || defined(__i386__)
+ extern short CDECL _dclass(double x);
+ 
+ static BOOL sqrt_validate( double *x, BOOL update_sw )
+@@ -410,15 +418,24 @@
+     return TRUE;
+ }
+ 
+-double CDECL sse2_sqrt(double);
+-__ASM_GLOBAL_FUNC( sse2_sqrt,
+-        "sqrtsd %xmm0, %xmm0\n\t"
+-        "ret" )
+-#endif
+-
+-#ifdef __i386__
+-double CDECL x87_sqrt(double);
+-__ASM_GLOBAL_FUNC( x87_sqrt,
++#ifdef __arm64ec__
++static double __attribute__((naked)) CDECL asm_sqrt(double x)
++{
++    asm( "fsqrt d0,d0; ret" );
++}
++#elif defined __aarch64__
++double CDECL asm_sqrt(double);
++__ASM_GLOBAL_FUNC( asm_sqrt, "fsqrt d0,d0; ret" )
++#elif defined __arm__
++double CDECL asm_sqrt(double);
++__ASM_GLOBAL_FUNC( asm_sqrt, "vsqrt d0,d0; bx lr" )
++#elif defined __x86_64__
++double CDECL asm_sqrt(double);
++__ASM_GLOBAL_FUNC( asm_sqrt, "sqrtsd %xmm0, %xmm0; ret" )
++
++#elif defined __i386__
++double CDECL asm_sqrt(double);
++__ASM_GLOBAL_FUNC( asm_sqrt,
+         "fldl 4(%esp)\n\t"
+         SET_X87_CW(0xc00)
+         "fsqrt\n\t"
+@@ -431,19 +448,10 @@
+  */
+ double CDECL MSVCRT_sqrt( double x )
+ {
+-#ifdef __x86_64__
+     if (!sqrt_validate(&x, TRUE))
+         return x;
+ 
+-    return sse2_sqrt(x);
+-#elif defined( __i386__ )
+-    if (!sqrt_validate(&x, TRUE))
+-        return x;
+-
+-    return x87_sqrt(x);
+-#else
+-    return sqrt( x );
+-#endif
++    return asm_sqrt(x);
+ }
+ 
+ /*********************************************************************
+@@ -698,14 +706,36 @@
+ }
+ 
+ #if defined(__i386__) || defined(__x86_64__)
++
++static unsigned int get_mxcsr(void)
++{
++    unsigned int ret;
++#ifdef __arm64ec__
++    extern NTSTATUS (*__os_arm64x_get_x64_information)(ULONG,void*,void*);
++    __os_arm64x_get_x64_information( 0, &ret, NULL );
++#else
++    __asm__ __volatile__( "stmxcsr %0" : "=m" (ret) );
++#endif
++    return ret;
++}
++
++static void set_mxcsr( unsigned int val )
++{
++#ifdef __arm64ec__
++    extern NTSTATUS (*__os_arm64x_set_x64_information)(ULONG,ULONG_PTR,void*);
++    __os_arm64x_set_x64_information( 0, val, NULL );
++#else
++    __asm__ __volatile__( "ldmxcsr %0" : : "m" (val) );
++#endif
++}
++
+ static void _setfp_sse( unsigned int *cw, unsigned int cw_mask,
+         unsigned int *sw, unsigned int sw_mask )
+ {
+ #if defined(__GNUC__) || defined(__clang__)
+-    unsigned long old_fpword, fpword;
++    unsigned int old_fpword, fpword = get_mxcsr();
+     unsigned int flags;
+ 
+-    __asm__ __volatile__( "stmxcsr %0" : "=m" (fpword) );
+     old_fpword = fpword;
+ 
+     cw_mask &= _MCW_EM | _MCW_RC | _MCW_DN;
+@@ -785,8 +815,7 @@
+         }
+     }
+ 
+-    if (fpword != old_fpword)
+-        __asm__ __volatile__( "ldmxcsr %0" : : "m" (fpword) );
++    if (fpword != old_fpword) set_mxcsr( fpword );
+ #else
+     FIXME("not implemented\n");
+     if (cw) *cw = 0;
+@@ -2540,7 +2569,7 @@
+         __asm__ __volatile__( "movq %0,%%xmm0" : : "m" (d) );
+         return;
+     }
+-    __asm__ __volatile__( "call " __ASM_NAME( "sse2_sqrt" ) );
++    __asm__ __volatile__( "sqrtsd %xmm0, %xmm0" );
+ }
+ #endif  /* __i386__ */
+ 

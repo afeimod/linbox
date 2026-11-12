@@ -1,0 +1,16 @@
+--- a/src/library.c
++++ b/src/library.c
+@@ -26,11 +26,11 @@
+ #include <string.h>
+ 
+ #ifndef ICONDIR
+-#define ICONDIR "/usr/X11R6/lib/X11/icons"
++#define ICONDIR "@ROOTFS_PREFIX@/share/icons"
+ #endif
+ 
+ #ifndef XCURSORPATH
+-#define XCURSORPATH "~/.local/share/icons:~/.icons:/usr/share/icons:/usr/share/pixmaps:"ICONDIR
++#define XCURSORPATH "~/.local/share/icons:~/.icons:@ROOTFS_PREFIX@/share/icons:@ROOTFS_PREFIX@/share/pixmaps:"ICONDIR
+ #endif
+ 
+ typedef struct XcursorInherit {

@@ -241,8 +241,18 @@ object GamepadController {
     // 运行时状态（Compose 可观察）
     // ============================================================
 
-    /** 手柄是否显示（游戏时开启） */
+    /** 手柄是否显示（游戏时开启）。
+     *
+     * v3.2.24（AnWind 移植）：默认 **false** —— 开启手柄即只出悬浮球，
+     * 元素（摇杆/按键）默认收起，从球菜单「显示手柄」展开；避免开屏
+     * 即满屏摇杆/按键遮挡游戏画面。随 gamepad_config v3 的 padVisible
+     * 持久化（用户选过就记住）。 */
     var visible by mutableStateOf(false)
+
+    /** 悬浮球位置（归一化 0..1，相对 (屏宽-球宽)/(屏高-球高)）；默认右上角 */
+    var ballPosX by mutableStateOf(0.965f)
+
+    var ballPosY by mutableStateOf(0.06f)
 
     /** 设置悬浮窗是否打开 */
     var settingsOpen by mutableStateOf(false)
@@ -261,8 +271,10 @@ object GamepadController {
     private var loaded = false
 
     /** 配置版本：v2 = 摇杆WASD / 十字键方向键 / JKLUIO 默认布局；
-     *  旧版本（裸数组或 v<2）加载时自动升级为新默认 */
-    private const val CONFIG_VERSION = 2
+     *  v3（AnWind 移植）= 新增 padVisible（元素显示开关）与 ballX/ballY
+     *  （悬浮球位置）。旧版本（裸数组或 v<2）加载时自动升级为新默认；
+     *  v2 配置兼容读取（缺省字段取默认值，用户自定布局不丢） */
+    private const val CONFIG_VERSION = 3
 
     fun updateElements(list: List<PadElement>) {
         elements = list
@@ -272,7 +284,8 @@ object GamepadController {
         selectedElementId = id
     }
 
-    /** 从持久化 JSON 恢复（带版本：旧版配置自动升级为 v2 新默认布局） */
+    /** 从持久化 JSON 恢复（带版本：v1/裸数组自动升级为 v2 新默认布局；
+     *  v2 起兼容读取，v3 新字段缺省取默认） */
     fun loadFromJson(json: String?) {
         loaded = true
         if (json.isNullOrBlank()) {
@@ -282,7 +295,11 @@ object GamepadController {
         runCatching {
             val arr: JSONArray = try {
                 val root = JSONObject(json)
-                if (root.optInt("v", 1) < CONFIG_VERSION) return@runCatching
+                if (root.optInt("v", 1) < 2) return@runCatching
+                // v3.2.24（AnWind 移植）：v3 新字段（v2 配置缺省 → 默认值）
+                visible = root.optBoolean("padVisible", false)
+                ballPosX = root.optDouble("ballX", 0.965).toFloat().coerceIn(0f, 1f)
+                ballPosY = root.optDouble("ballY", 0.06).toFloat().coerceIn(0f, 1f)
                 root.optJSONArray("elements") ?: return@runCatching
             } catch (_: org.json.JSONException) {
                 // v2.15.2 及之前是裸数组格式 = 旧默认布局（摇杆/十字键均为方向键、
@@ -329,7 +346,13 @@ object GamepadController {
                     .put("sizeDp", e.sizeDp.toDouble())
             )
         }
-        return JSONObject().put("v", CONFIG_VERSION).put("elements", arr).toString()
+        return JSONObject()
+            .put("v", CONFIG_VERSION)
+            .put("padVisible", visible)
+            .put("ballX", ballPosX.toDouble())
+            .put("ballY", ballPosY.toDouble())
+            .put("elements", arr)
+            .toString()
     }
 
     // ============================================================
@@ -643,6 +666,11 @@ object GamepadController {
     private val toolbarHitRect = FloatArray(4)
     private var hasToolbarHitRect = false
 
+    /** 悬浮球展开菜单命中矩形（窗口坐标 px [l,t,r,b]；仅 UI 线程读写）。
+     *  v3.2.23（AnWind 移植）：悬浮球菜单浮在窗口层之上，落点若不登记，
+     *  X11 智能触摸桥会把按住菜单的手指当成屏幕手势（事件被吞）。 */
+    private var menuHitRect: FloatArray? = null
+
     /** 迷你工具条布局后登记命中矩形（GamepadOverlayContent 调用） */
     fun registerToolbarHit(l: Float, t: Float, r: Float, b: Float) {
         toolbarHitRect[0] = l; toolbarHitRect[1] = t
@@ -650,9 +678,15 @@ object GamepadController {
         hasToolbarHitRect = true
     }
 
+    /** 悬浮球展开菜单布局后登记命中矩形（GamepadFloatingBall 调用） */
+    fun registerMenuHit(l: Float, t: Float, r: Float, b: Float) {
+        menuHitRect = floatArrayOf(l, t, r, b)
+    }
+
     /** 手柄隐藏/离开组合时清空工具条命中（对齐 clearElementHits 生命周期） */
     fun clearToolbarHit() {
         hasToolbarHitRect = false
+        menuHitRect = null
     }
 
     /** 是否有工具条命中矩形 */
@@ -668,6 +702,11 @@ object GamepadController {
             x >= toolbarHitRect[0] - HIT_MARGIN_PX && x <= toolbarHitRect[2] + HIT_MARGIN_PX &&
             y >= toolbarHitRect[1] - HIT_MARGIN_PX && y <= toolbarHitRect[3] + HIT_MARGIN_PX
         ) return true
+        menuHitRect?.let { rect ->
+            if (x >= rect[0] - HIT_MARGIN_PX && x <= rect[2] + HIT_MARGIN_PX &&
+                y >= rect[1] - HIT_MARGIN_PX && y <= rect[3] + HIT_MARGIN_PX
+            ) return true
+        }
         return false
     }
 }

@@ -1,0 +1,295 @@
+name: LinBox Bionic Mesa (X11 / aarch64 + x86_64)
+
+# ============================================================
+# 构建面向 LinBox bionic rootfs 的 Mesa（X11 平台）
+# ------------------------------------------------------------
+# aarch64:
+#   - gallium: softpipe（软渲染，产物名 swrast_dri.so）+ freedreno（Adreno 硬件，MSM/KGSL 双 KMD）
+#              + zink（OpenGL-over-Vulkan，与 turnip 配合提升兼容性）
+#   - vulkan : freedreno/turnip（Adreno Vulkan）
+# x86_64:
+#   - gallium: softpipe（软渲染，产物名 swrast_dri.so）
+# 平台: platforms=x11 / egl-native-platform=x11 / glx=dri —— 纯 X11，
+#   无 wayland；与 LinBox 内置 X 服务（tmp/.X11-unix/X1）配合。
+# 产物: linbox-mesa-<ver>-<arch>-bionic.tar.gz（data/data/... 布局）
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_ref:
+        description: 'Mesa 版本（Git 标签如 mesa-26.2.1，或分支 main；上游默认分支已从 master 改名 main，选 master 会自动回退 main）'
+        required: false
+        default: 'mesa-26.2.1'
+        type: string
+      arch:
+        description: '目标架构'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - aarch64
+          - x86_64
+      make_release:
+        description: '构建成功后创建 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: bionic-mesa-${{ github.ref }}-${{ github.event.inputs.arch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-mesa:
+    name: Bionic Mesa (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(github.event.inputs.arch == 'all' && '["aarch64", "x86_64"]' || format('["{0}"]', github.event.inputs.arch)) }}
+
+    steps:
+      # ============ 1. 检出代码 ============
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 检查构建系统
+        run: |
+          if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/build-rootfs-arch.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/build-rootfs-arch.sh！"
+            exit 1
+          fi
+          if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/projects/mesa/build.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/projects/mesa/ 配方！"
+            exit 1
+          fi
+          echo "构建系统与 mesa 配方就绪"
+
+      # ============ 2. 释放磁盘空间（mesa + llvm 依赖链较大） ============
+      - name: 释放 Runner 磁盘空间
+        run: |
+          echo "清理前可用空间:"
+          df -h / | tail -1
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            "${HOME}/.cache" 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          echo "清理后可用空间:"
+          df -h / | tail -1
+
+      # ============ 3. 宿主依赖 ============
+      - name: 安装宿主依赖（host-deps.sh，含新版 meson/ninja）
+        run: |
+          sudo -E bash "${GITHUB_WORKSPACE}/bionic-rootfs/host-deps.sh"
+          meson --version
+          ninja --version
+          glslangValidator --version 2>/dev/null | head -1 || true
+
+      # ============ 4. 前缀目录 ============
+      - name: 准备 LinBox rootfs 前缀目录
+        run: |
+          sudo mkdir -p /data/data/com.linbox/files/rootfs/usr \
+                        /data/data/com.linbox/files/rootfs/home \
+                        /data/data/com.linbox/files/rootfs/tmp/.X11-unix \
+                        /data/data/com.linbox/files/usr/tmp/.X11-unix
+          sudo chown -R "$(whoami):$(whoami)" /data
+
+      # ============ 5. 缓存 ============
+      - name: 缓存 NDK
+        uses: actions/cache@v4
+        with:
+          path: bionic-rootfs/ndk
+          key: linbox-ndk-r28b-v1
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            bionic-rootfs/bionic_ccache
+            bionic-rootfs/host_ccache
+          key: linbox-bionic-ccache-${{ matrix.arch }}-mesa-v1
+          restore-keys: |
+            linbox-bionic-ccache-${{ matrix.arch }}-v1
+            linbox-bionic-ccache-v1
+
+      # ============ 6. 构建 mesa（自动拓扑补齐 X11 全栈依赖） ============
+      - name: 构建 Mesa ${{ matrix.arch }}（含 X11 栈依赖）
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}/bionic-rootfs"
+          chmod +x *.sh
+          set -o pipefail
+          export LINBOX_MESA_REF="${{ github.event.inputs.mesa_ref }}"
+          ./build-rootfs-arch.sh --arch "${{ matrix.arch }}" \
+            --build mesa 2>&1 | tee build-mesa-${{ matrix.arch }}.log
+
+      # ============ 6.5 失败自诊断（把日志尾部直接打进步骤输出） ============
+      - name: 失败时输出日志尾部
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          LOG="${GITHUB_WORKSPACE}/bionic-rootfs/build-mesa-${{ matrix.arch }}.log"
+          if [[ -f "$LOG" ]]; then
+            echo "::error::mesa 构建失败！以下是日志最后 150 行（完整日志见 artifact）"
+            tail -n 150 "$LOG"
+          else
+            echo "::error::mesa 构建失败且未生成日志文件"
+          fi
+          echo "=== 磁盘/内存状态 ==="
+          df -h / | tail -2
+          free -h
+
+      # ============ 7. 产物校验 ============
+      - name: 校验 mesa 产物
+        run: |
+          PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"mesa-*-${{ matrix.arch }}.tar | head -n 1)
+          [[ -n "$PKG_TAR" ]] || { echo "::error::未找到 mesa 包 tar"; exit 1; }
+          echo "mesa 包: $PKG_TAR"
+          rm -rf /tmp/mesa-verify && mkdir -p /tmp/mesa-verify
+          tar -xf "$PKG_TAR" -C /tmp/mesa-verify
+          M=/tmp/mesa-verify/data/data/com.linbox/files/rootfs/usr
+          echo "=== 关键文件校验 ==="
+          MISS=0
+          check() { if [[ -e "$1" ]]; then echo "  [OK] $1"; else echo "  [MISS] $1"; MISS=1; fi; }
+          check "$M/lib/libGL.so.1"
+          check "$M/lib/libEGL.so.1"
+          check "$M/lib/libgbm.so.1"
+          # mesa 25.1+ 以 softpipe/llvmpipe 源码构建 swrast DRI 驱动，产物名仍为 swrast_dri.so
+          check "$M/lib/dri/swrast_dri.so"
+          check "$M/lib/dri/kms_swrast_dri.so"
+          echo "=== 架构相关驱动校验 ==="
+          if [[ "${{ matrix.arch }}" == "aarch64" ]]; then
+            # freedreno 的 DRI 驱动按 winsys 命名：msm（内核 DRM 后端）与 kgsl（高通用户态后端），
+            # mesa 从不产出 freedreno_dri.so 这个文件名，禁止再按它校验
+            check "$M/lib/dri/msm_dri.so"
+            check "$M/lib/dri/kgsl_dri.so"
+            check "$M/lib/dri/zink_dri.so"
+            check "$M/lib/libvulkan_freedreno.so"
+            # turnip 的 Vulkan ICD 清单（zink/外部 Vulkan 加载器发现驱动所需）
+            check "$M/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+          fi
+          echo "=== NEEDED 依赖闭环校验（防运行时 dlopen/加载失败导致游戏全挂）==="
+          # 产物内 .so 的 NEEDED 必须满足三者之一，否则构建即失败：
+          #   1. 产物自身携带（$M/lib、$M/lib/dri、$M/lib/gbm）
+          #   2. Android 系统库（设备 /system/lib64 必有）
+          #   3. rootfs 依赖包库（deps 拓扑已先行装入 rootfs）
+          # 若 mesa 增删依赖，请同步更新 deps= 与 ROOTFS_DEP_RE
+          ANDROID_SYS_RE='^(libc|libc\+\+|libdl|libm|liblog|libandroid|libnativewindow|libvulkan|libEGL|libGLESv1_CM|libGLESv2|libOpenSLES)\.so'
+          ROOTFS_DEP_RE='^(libandroid-shmem|libc\+\+_shared|libexpat|libdrm|libdrm_freedreno|libzstd|libz|libX11|libX11-xcb|libxcb|libxcb-glx|libxcb-shm|libxcb-dri3|libxcb-present|libxcb-sync|libxcb-xfixes|libxcb-randr|libxcb-render|libxcb-shape|libxshmfence|libXext|libXfixes|libXdamage|libXxf86vm|libXrandr|libXrender|libXau|libXdmcp|libpthread-stub|libglapi)\.so'
+          BAD_NEEDS=0
+          for so in "$M"/lib/libGL.so.1 "$M"/lib/libEGL.so.1 "$M"/lib/libgbm.so.1 \
+                    "$M"/lib/libglapi.so* "$M"/lib/dri/*_dri.so "$M"/lib/libvulkan_freedreno.so; do
+            [[ -e "$so" ]] || continue
+            while IFS= read -r n; do
+              [[ -z "$n" ]] && continue
+              [[ -e "$M/lib/$n" || -e "$M/lib/dri/$n" || -e "$M/lib/gbm/$n" ]] && continue
+              echo "$n" | grep -qE "$ANDROID_SYS_RE" && continue
+              echo "$n" | grep -qE "$ROOTFS_DEP_RE" && continue
+              echo "  [MISS] $(basename "$so") 需要 $n（产物与白名单均未提供）"; BAD_NEEDS=1
+            done < <(readelf -d "$so" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')
+          done
+          if [[ "$BAD_NEEDS" == "0" ]]; then echo "  [OK] NEEDED 依赖闭环"; fi
+          echo "=== wayland 残留校验（应全部不存在）==="
+          for f in "$M/lib/libwayland-client.so" "$M/lib/libgallium-"*"-wayland"*; do
+            if [[ -e "$f" ]]; then echo "  [FOUND] $f 不应存在！"; MISS=1; else echo "  [NOT FOUND] $(basename "$f")"; fi
+          done
+          [[ "$MISS" == "0" ]] || { echo "::error::mesa 产物校验失败！"; exit 1; }
+
+      # ============ 8. 打包发行 ============
+      - name: 打包 mesa 发行包
+        run: |
+          PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"mesa-*-${{ matrix.arch }}.tar | head -n 1)
+          MESA_VER=$(basename "$PKG_TAR" | sed -e 's/^mesa-//' -e 's/-${{ matrix.arch }}\.tar$//')
+          echo "MESA_VER=${MESA_VER}" >> "$GITHUB_ENV"
+          PACKAGE_NAME="linbox-mesa-${MESA_VER}-${{ matrix.arch }}-bionic"
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> "$GITHUB_ENV"
+          cd "${GITHUB_WORKSPACE}"
+          tar -czf "${PACKAGE_NAME}.tar.gz" -C /tmp/mesa-verify .
+          sha256sum "${PACKAGE_NAME}.tar.gz" > "checksums-mesa-${{ matrix.arch }}.txt"
+          echo "=== 打包完成 ==="
+          ls -lh "${PACKAGE_NAME}.tar.gz" "checksums-mesa-${{ matrix.arch }}.txt"
+
+      # ============ 8.5. turnip 驱动包（v3.3.19 图形驱动槽位专用） ============
+      # 与 rootfs 同一配方/同一 bionic/X11 平台构建，App 图形驱动页 ➕ 直接安装：
+      #   usr/lib/libvulkan_freedreno.so + usr/share/vulkan/icd.d/freedreno_icd.aarch64.json
+      #   （rootfs 布局包形态，WrapperDriverSupport.install 归一化到独立 slot）。
+      # 零 ABI 风险 —— 互联网流转的 turnip 包绝大多数是 glibc 构建，bionic
+      # 原生 wine 无法 dlopen（DXVK 只报 VK_KHR_surface not supported）。
+      # 依赖（libdrm/libzstd/libexpat/libc++_shared/libxcb 系列）由
+      # rootfs/usr/lib 提供（同 CI 依赖包拓扑），驱动包只携带驱动本体。
+      - name: 打包 turnip 驱动包（aarch64）
+        if: ${{ matrix.arch == 'aarch64' }}
+        run: |
+          DRIVER_NAME="linbox-turnip-driver-${MESA_VER}-bionic"
+          echo "DRIVER_NAME=${DRIVER_NAME}" >> "$GITHUB_ENV"
+          M=/tmp/mesa-verify/data/data/com.linbox/files/rootfs/usr
+          STAGE=/tmp/turnip-driver-pkg
+          rm -rf "$STAGE" && mkdir -p "$STAGE/usr/lib" "$STAGE/usr/share/vulkan/icd.d"
+          cp "$M/lib/libvulkan_freedreno.so" "$STAGE/usr/lib/"
+          cp "$M/share/vulkan/icd.d/freedreno_icd.aarch64.json" "$STAGE/usr/share/vulkan/icd.d/"
+          # 同包随行关键依赖（存在才拷；保证 rootfs mesa 版本落后时驱动仍能加载）
+          for l in libdrm.so libdrm_freedreno.so libzstd.so libexpat.so; do
+            [[ -e "$M/lib/$l" ]] && cp "$M/lib/$l" "$STAGE/usr/lib/"
+          done
+          tar -czf "${GITHUB_WORKSPACE}/${DRIVER_NAME}.tar.gz" -C "$STAGE" usr
+          sha256sum "${GITHUB_WORKSPACE}/${DRIVER_NAME}.tar.gz" > "${GITHUB_WORKSPACE}/checksums-turnip-driver.txt"
+          echo "=== turnip 驱动包打包完成 ==="
+          ls -lh "${GITHUB_WORKSPACE}/${DRIVER_NAME}.tar.gz" "${GITHUB_WORKSPACE}/checksums-turnip-driver.txt"
+
+      # ============ 9. 上传日志与产物 ============
+      - name: 上传构建日志
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: mesa-build-log-${{ matrix.arch }}
+          path: bionic-rootfs/build-mesa-${{ matrix.arch }}.log
+          if-no-files-found: ignore
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-mesa-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+      - name: 上传 turnip 驱动包（aarch64）
+        if: ${{ matrix.arch == 'aarch64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DRIVER_NAME }}
+          path: |
+            ${{ env.DRIVER_NAME }}.tar.gz
+            checksums-turnip-driver.txt
+          if-no-files-found: error
+
+      - name: 创建 Release
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bionic-mesa-${{ env.MESA_VER }}
+          name: LinBox Bionic Mesa ${{ env.MESA_VER }} (X11)
+          body: |
+            LinBox bionic rootfs 专用 Mesa（X11）
+
+            - aarch64: softpipe(产物名 swrast_dri.so) + freedreno(MSM/KGSL) + zink + turnip(freedreno vulkan)
+            - x86_64: softpipe(产物名 swrast_dri.so)
+            - 设备安装: 解包 `linbox-mesa-*.tar.gz` 至 /（data/data/com.linbox/... 自动就位）
+            - 容器内切换 GL 驱动: `linbox-container set <name> gallium=zink|freedreno|llvmpipe`
+            - 图形驱动槽位专用包: `linbox-turnip-driver-*-bionic.tar.gz`（aarch64，App 图形驱动页 ➕ 安装，零 ABI 风险）
+          files: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-mesa-${{ matrix.arch }}.txt
+            linbox-turnip-driver-*.tar.gz
+            checksums-turnip-driver.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

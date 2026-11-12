@@ -1,0 +1,48 @@
+# linbox: proton 树 msvcrt _isatty x64 汇编包装的 arm64ec 编译守卫（v3.3.9）
+#
+# 【根因】CI proton-9.0 arm64ec 形态实测（wine-build-log-arm64ec.zip）：
+#     <inline asm>:10:12: error: unknown token in expression
+#        10 |         sub $0x30,%rsp
+#     <inline asm>:11:22: error: unexpected token in argument list
+#        11 |         lea MSVCRT___pioinfo(%rip),%rdx
+#     make: *** [Makefile:17527: dlls/crtdll/arm64ec-windows/file.o] Error 1
+#
+#   Valve 私有补丁 cf08808609（2022-04 "msvcrt: HACK: Introduce asm
+#   wrapper for _isatty on x64"，proton 分支携带，官方 wine 树无此代码）
+#   给 _isatty 加了 x86-64 热补丁跳板：
+#       #ifdef __x86_64__
+#       int CDECL MSVCRT__isatty(int fd) {...}
+#       __ASM_GLOBAL_FUNC( _isatty, "sub $0x30,%rsp\n\t"... )
+#   llvm-mingw 的 arm64ec 目标【同时预定义 __arm64ec__ 和 __x86_64__】
+#   （0007 系列已论证的同一特性），EC 编译趟该分支被激活 → x86 AT&T
+#   汇编送入 ARM64 代码生成器 → 逐条报错。file.c 经 PARENTSRC 同时供
+#   crtdll/msvcrt/msvcr70~120/ucrtbase 等八个 CRT 模块编译，EC 趟必炸
+#   （本轮构建即折在 crtdll/arm64ec-windows/file.o —— 首个阵亡点）。
+#
+# 【修法】与 Valve 在 proton_10.0 分支的官方修法逐字一致（proton_10.0
+#   树 dlls/msvcrt/file.c:859 实测比对）：
+#       #ifdef __x86_64__
+#   →   #if defined(__x86_64__) && !defined(__arm64ec__)
+#   EC 趟回落 #else 的通用 C 实现（get_ioinfo_nolock 直接判断，语义
+#   等价，仅少一个热补丁跳板）；x86_64 趟行为不变。
+#
+# 【互斥】.patch.proton 后缀避开主补丁循环（官方/hangover 树 file.c
+#   无 __ASM_GLOBAL_FUNC( _isatty，普通应用必然失败）；由 build.sh
+#   条件应用：仅当 file.c 含该汇编包装且行首仍是裸 #ifdef __x86_64__
+#   （proton_9.0 特征）时套用。proton_10.0 已自带守卫 → 门控不命中
+#   自动跳过（幂等）。
+#
+# 【验证】proton_9.0 树 patch --dry-run 命中；proton_10.0（已自带）、
+#   wine-9.0/9.2/9.7/10.0、hangover-11.16（无此代码）不命中。
+
+--- a/dlls/msvcrt/file.c	2026-11-07 08:48:37.439223386 +0000
++++ b/dlls/msvcrt/file.c	2026-11-07 08:48:37.440223390 +0000
+@@ -819,7 +819,7 @@
+ /*********************************************************************
+  *		_isatty (MSVCRT.@)
+  */
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ int CDECL MSVCRT__isatty(int fd)
+ {
+     TRACE(":fd (%d)\n",fd);

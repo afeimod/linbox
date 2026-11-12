@@ -1,0 +1,11 @@
+--- a/dlls/winegstreamer/unixlib.c	2026-11-11 04:50:58.931741253 +0000
++++ b/dlls/winegstreamer/unixlib.c	2026-11-11 04:50:58.956741355 +0000
+@@ -281,6 +281,8 @@
+         const char *arch = "/registry.x86_64.bin";
+ #elif defined(__i386__)
+         const char *arch = "/registry.i386.bin";
++#elif defined(__aarch64__)
++        const char *arch = "/registry.aarch64.bin";
+ #else
+ #error Bad arch
+ #endif

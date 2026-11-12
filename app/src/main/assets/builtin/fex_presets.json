@@ -1,0 +1,82 @@
+[
+  {
+    "name": "stability",
+    "items": [
+      {"key": "FEX_TSOENABLED", "value": "1"},
+      {"key": "FEX_VECTORTSOENABLED", "value": "0"},
+      {"key": "FEX_HALFBARRIERTSOENABLED", "value": "1"},
+      {"key": "FEX_MEMCPYSETTSOENABLED", "value": "0"},
+      {"key": "FEX_X87REDUCEDPRECISION", "value": "0"},
+      {"key": "FEX_MULTIBLOCK", "value": "0"},
+      {"key": "FEX_MAXINST", "value": "5000"},
+      {"key": "FEX_HOSTFEATURES", "value": "off"},
+      {"key": "FEX_SMALLTSCSCALE", "value": "1"},
+      {"key": "FEX_SMC_CHECKS", "value": "mtrack"},
+      {"key": "FEX_VOLATILEMETADATA", "value": "1"},
+      {"key": "FEX_MONOHACKS", "value": "1"},
+      {"key": "FEX_HIDEHYPERVISORBIT", "value": "0"},
+      {"key": "FEX_DISABLEL2CACHE", "value": "0"},
+      {"key": "FEX_DYNAMICL1CACHE", "value": "0"}
+    ]
+  },
+  {
+    "name": "compatibility",
+    "items": [
+      {"key": "FEX_TSOENABLED", "value": "1"},
+      {"key": "FEX_VECTORTSOENABLED", "value": "0"},
+      {"key": "FEX_HALFBARRIERTSOENABLED", "value": "1"},
+      {"key": "FEX_MEMCPYSETTSOENABLED", "value": "0"},
+      {"key": "FEX_X87REDUCEDPRECISION", "value": "0"},
+      {"key": "FEX_MULTIBLOCK", "value": "1"},
+      {"key": "FEX_MAXINST", "value": "5000"},
+      {"key": "FEX_HOSTFEATURES", "value": "off"},
+      {"key": "FEX_SMALLTSCSCALE", "value": "1"},
+      {"key": "FEX_SMC_CHECKS", "value": "mtrack"},
+      {"key": "FEX_VOLATILEMETADATA", "value": "1"},
+      {"key": "FEX_MONOHACKS", "value": "1"},
+      {"key": "FEX_HIDEHYPERVISORBIT", "value": "0"},
+      {"key": "FEX_DISABLEL2CACHE", "value": "0"},
+      {"key": "FEX_DYNAMICL1CACHE", "value": "0"}
+    ]
+  },
+  {
+    "name": "intermediate",
+    "items": [
+      {"key": "FEX_TSOENABLED", "value": "1"},
+      {"key": "FEX_VECTORTSOENABLED", "value": "0"},
+      {"key": "FEX_HALFBARRIERTSOENABLED", "value": "1"},
+      {"key": "FEX_MEMCPYSETTSOENABLED", "value": "0"},
+      {"key": "FEX_X87REDUCEDPRECISION", "value": "0"},
+      {"key": "FEX_MULTIBLOCK", "value": "1"},
+      {"key": "FEX_MAXINST", "value": "5000"},
+      {"key": "FEX_HOSTFEATURES", "value": "off"},
+      {"key": "FEX_SMALLTSCSCALE", "value": "1"},
+      {"key": "FEX_SMC_CHECKS", "value": "mtrack"},
+      {"key": "FEX_VOLATILEMETADATA", "value": "1"},
+      {"key": "FEX_MONOHACKS", "value": "0"},
+      {"key": "FEX_HIDEHYPERVISORBIT", "value": "0"},
+      {"key": "FEX_DISABLEL2CACHE", "value": "0"},
+      {"key": "FEX_DYNAMICL1CACHE", "value": "0"}
+    ]
+  },
+  {
+    "name": "performance",
+    "items": [
+      {"key": "FEX_TSOENABLED", "value": "0"},
+      {"key": "FEX_VECTORTSOENABLED", "value": "0"},
+      {"key": "FEX_HALFBARRIERTSOENABLED", "value": "0"},
+      {"key": "FEX_MEMCPYSETTSOENABLED", "value": "0"},
+      {"key": "FEX_X87REDUCEDPRECISION", "value": "0"},
+      {"key": "FEX_MULTIBLOCK", "value": "1"},
+      {"key": "FEX_MAXINST", "value": "5000"},
+      {"key": "FEX_HOSTFEATURES", "value": "off"},
+      {"key": "FEX_SMALLTSCSCALE", "value": "1"},
+      {"key": "FEX_SMC_CHECKS", "value": "none"},
+      {"key": "FEX_VOLATILEMETADATA", "value": "0"},
+      {"key": "FEX_MONOHACKS", "value": "1"},
+      {"key": "FEX_HIDEHYPERVISORBIT", "value": "0"},
+      {"key": "FEX_DISABLEL2CACHE", "value": "0"},
+      {"key": "FEX_DYNAMICL1CACHE", "value": "0"}
+    ]
+  }
+]

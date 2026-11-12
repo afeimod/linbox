@@ -1,0 +1,98 @@
+# linbox: proton_9.0 arm64ec 第四批炸点 —— ntdll 专属 syscall 导出缺 EC 裸跳板（v3.3.18）
+#
+# 【根因】（CI wine-build-log-arm64ec (2).zip 实证链条终点）：
+#   0019 修完 kernel32/virtual.o（lstrcpyA）后，主 make 推进至
+#   dlls/ntdll/arm64ec-windows/signal_arm64ec.o 阵亡：
+#     dlls/ntdll/signal_arm64ec.c:1629:5: error: use of undeclared identifier
+#       '__wine_needs_override_large_address_aware'; did you mean
+#       '__id___wine_needs_override_large_address_aware'?
+#     dlls/ntdll/ntsyscalls.h:481:28: SYSCALL_ENTRY( 0x00e9,
+#       __wine_needs_override_large_address_aware, 0 )
+#     2 errors generated.
+#   —— 1 out of 1 hunk FAILED 的 0011 signal_arm64ec.c.rej 与 0018 补全无关
+#   （0018 不触碰该文件；"挂起管道四要素校验通过"证明 RtlWow64SuspendThread
+#   早已原生在树），这是完全独立的第四批炸点。
+#
+# 【机制】proton_9.0 的 ntdll.spec 尾部有五个非 Nt 的 -syscall 条目：
+#     1721: __wine_set_unix_env          （unix/env.c:2516 实现）
+#     1729: __wine_dbg_ftrace            （unix/debug.c:307 实现）
+#     1737: wine_nt_to_unix_file_name    （signal_arm64ec.c:1615 有 EC 跳板）
+#     1738: wine_unix_to_nt_file_name    （signal_arm64ec.c:1621 有 EC 跳板）
+#     1739: __wine_needs_override_large_address_aware（unix/virtual.c:5000 实现）
+#   autogen.sh 的 tools/make_specfiles 把它们全部收进生成的 ntsyscalls.h
+#   （ALL_SYSCALLS64/32）；各编译趟的落地方式不同：
+#     * unix 趟（unix/loader.c syscalls[] + KeServiceDescriptorTable）：
+#       三个实现符号全在 —— 无事；
+#     * x86_64/i386/aarch64 PE 趟：signal_x86_64.c / signal_i386.c /
+#       signal_arm64.c 用 __ASM_SYSCALL_FUNC(id,name) → __ASM_GLOBAL_FUNC
+#       汇编展开自动定义全部条目 —— 无事（Valve 只构建 x86_64，从未暴露）；
+#     * arm64ec PE 趟：signal_arm64ec.c 逐一手写裸跳板（SYSCALL_API naked
+#       + __ASM_SYSCALL_FUNC(__id_*)）—— 只写了上游 wine-9.0 自带的两个
+#       wine_*_file_name，Valve 追加的三个条目没有跳板：
+#       __wine_needs_override_large_address_aware 无任何 EC 趟可见声明
+#       （仅 unix_private.h:586 声明，PE 侧文件不含它）→ arm64ec_syscalls[]
+#       表展开 ALL_SYSCALLS64 直接炸"undeclared identifier"；
+#       __wine_dbg_ftrace（debug.h:117 extern）/__wine_set_unix_env
+#       （winternl.h:5145 extern）靠头文件声明侥幸过编译，但 EC 链接趟
+#       同样缺定义 → 修完编译错误后必接 undefined symbol。
+#
+# 【修法】按同文件 200+ 既有跳板的同款形态补齐三个裸跳板（返回类型与
+#   unix_private.h / debug.h / winternl.h 声明逐字一致；裸函数体纯内联
+#   汇编，签名仅为标识符可见性与表引用服务）：
+#     unsigned int SYSCALL_API __wine_dbg_ftrace(char*, unsigned int, unsigned int)
+#     NTSTATUS    SYSCALL_API __wine_set_unix_env(const char*, const char*)
+#     BOOL        SYSCALL_API __wine_needs_override_large_address_aware(void)
+#   运行链完整：EC 跳板 → __wine_syscall_dispatcher（unix/loader.c 启动时
+#   注入 PE ntdll）→ unix 侧 syscalls[] 表（三个实现俱在）。
+#
+# 【互斥】内容特征门控（build.sh）：
+#   * 仅当 ntdll.spec 含 "__wine_needs_override_large_address_aware() 且
+#     signal_arm64ec.c 尚无该跳板时套用（proton_9.0 形态）；
+#   * proton_10.0+：上游已删这三个 spec 条目（与 wine 官方树一致，仅剩
+#     两个 wine_* 条目）→ 门控不触发；wine-9.7/hangover/official-9.x
+#     同理（spec 无这些条目）；已打过（本补丁幂等重入）时锚点不命中。
+#   * --fuzz=0 逐字锚点。
+#
+# 【验证】本地 proton_9.0 全量 CI 同序补丁复现树上 patch --dry-run --fuzz=0
+#   全 hunk 命中；跳板签名与三个头文件声明比对一致；ntsyscalls.h 再生成后
+#   ALL_SYSCALLS64 的全部标识符在 signal_arm64ec.c 均有定义或可见声明。
+--- a/dlls/ntdll/signal_arm64ec.c	2025-01-20 21:30:19.000000000 +0000
++++ b/dlls/ntdll/signal_arm64ec.c	2025-01-20 21:30:19.000000000 +0000
+@@ -1623,6 +1623,37 @@
+     __ASM_SYSCALL_FUNC( __id_wine_unix_to_nt_file_name );
+ }
+ 
++/* linbox: proton_9.0 专属 syscall 导出的 arm64ec 裸跳板补齐（v3.3.18）。
++ * Valve 在 ntdll.spec 追加了三个 -syscall 条目（__wine_dbg_ftrace /
++ * __wine_set_unix_env / __wine_needs_override_large_address_aware），
++ * unix 侧实现俱在（unix/loader.c 的 syscalls[] 表经由 KeServiceDescriptorTable
++ * 分发），但 signal_arm64ec.c 未给它们生成 EC 裸跳板 —— x86_64 形态由
++ * signal_x86_64.c 的 ALL_SYSCALLS64 汇编展开自动定义（Valve 不构建 EC 故
++ * 从未暴露），arm64ec 形态则逐一手写跳板（wine_nt_to_unix_file_name 等
++ * 200+ 同款形态）。缺失后果（CI wine-build-log-arm64ec (2).zip 实证）：
++ *   dlls/ntdll/signal_arm64ec.c:1629: error: use of undeclared identifier
++ *     '__wine_needs_override_large_address_aware'
++ * （arm64ec_syscalls[] 表展开 ALL_SYSCALLS64 引用该标识符；__wine_dbg_ftrace/
++ *  __wine_set_unix_env 因 debug.h/winternl.h 的 extern 声明侥幸过编译，但
++ *  EC 链接同样缺定义）。跳板签名与 unix_private.h / debug.h / winternl.h
++ *  的声明逐字一致；裸函数体纯内联汇编，签名仅为编译器可见性服务。
++ * proton_10.0 已在上游删除这三个 spec 条目（与 wine 官方树一致），
++ * 本补丁锚点不命中自动跳过；wine-9.7/hangover 树无这些条目同理。 */
++unsigned int SYSCALL_API __wine_dbg_ftrace( char *str, unsigned int str_size, unsigned int ctx )
++{
++    __ASM_SYSCALL_FUNC( __id___wine_dbg_ftrace );
++}
++
++NTSTATUS SYSCALL_API __wine_set_unix_env( const char *var, const char *val )
++{
++    __ASM_SYSCALL_FUNC( __id___wine_set_unix_env );
++}
++
++BOOL SYSCALL_API __wine_needs_override_large_address_aware(void)
++{
++    __ASM_SYSCALL_FUNC( __id___wine_needs_override_large_address_aware );
++}
++
+ static void * const arm64ec_syscalls[] =
+ {
+ #define SYSCALL_ENTRY(id,name,args) name,

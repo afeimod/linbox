@@ -1,0 +1,74 @@
+--- a/src/vulkan/wsi/wsi_common_display.c
++++ b/src/vulkan/wsi/wsi_common_display.c
+@@ -2105,6 +2105,9 @@
+    .sequence_handler = wsi_display_sequence_handler,
+ };
+ 
++/* bionic has no pthread_cancel: use a stop flag + poll timeout for graceful exit */
++static bool _wsi_display_wait_thread_stop = false;
++
+ static void *
+ wsi_display_wait_thread(void *data)
+ {
+@@ -2114,10 +2117,20 @@
+       .events = POLLIN
+    };
+ 
++#if defined(__BIONIC__)
++   for (;;) {
++      int ret = poll(&pollfd, 1, 100);
++      if (ret < 0)
++         continue;
++      if (_wsi_display_wait_thread_stop)
++         return NULL;
++      if (ret > 0) {
++#else
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+    for (;;) {
+       int ret = poll(&pollfd, 1, -1);
+       if (ret > 0) {
++#endif
+          mtx_lock(&wsi->wait_mutex);
+          (void) drmHandleEvent(wsi->fd, &event_context);
+          u_cnd_monotonic_broadcast(&wsi->wait_cond);
+@@ -2144,9 +2157,16 @@
+ {
+    mtx_lock(&wsi->wait_mutex);
+    if (wsi->wait_thread) {
++#if defined(__BIONIC__)
++      _wsi_display_wait_thread_stop = true;
++      pthread_join(wsi->wait_thread, NULL);
++      _wsi_display_wait_thread_stop = false;
++      wsi->wait_thread = 0;
++#else
+       pthread_cancel(wsi->wait_thread);
+       pthread_join(wsi->wait_thread, NULL);
+       wsi->wait_thread = 0;
++#endif
+    }
+    mtx_unlock(&wsi->wait_mutex);
+ }
+@@ -3621,7 +3641,9 @@
+ 
+    int udev_fd = udev_monitor_get_fd(mon);
+ 
++#if !defined(__BIONIC__)
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
++#endif
+ 
+    for (;;) {
+       nfds_t nfds = 1;
+@@ -3786,8 +3808,13 @@
+       wsi_display_stop_wait_thread(wsi);
+ 
+       if (wsi->hotplug_thread) {
++#if defined(__BIONIC__)
++         pthread_detach(wsi->hotplug_thread);
++         wsi->hotplug_thread = 0;
++#else
+          pthread_cancel(wsi->hotplug_thread);
+          pthread_join(wsi->hotplug_thread, NULL);
++#endif
+       }
+ 
+       mtx_destroy(&wsi->connectors_mutex);

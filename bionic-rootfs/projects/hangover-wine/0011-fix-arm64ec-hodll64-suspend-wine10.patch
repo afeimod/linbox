@@ -1,0 +1,485 @@
+# linbox: x64-in-EC 仿真（HODLL64）+ Wow64 线程挂起管道（v3.2.10，Hangover 移植）
+# 
+# 【根因一】vanilla wine-10/11 的 ntdll/loader.c load_arm64ec_module：EC 进程
+# 装载 x64 仿真器按注册表 HKLM\Software\Microsoft\Wow64\amd64，默认
+# xtajit64.dll——Linux 不存在 → EC 进程（x64 exe / 纯 x64 dll）必死于
+# NtTerminateProcess。hangover-11.16 的修法 = HODLL64 环境变量优先 + 缺省
+# libarm64ecfex.dll（本仓 wine 包自带该 FEX 仿真器）。
+# 
+# 【根因二】hangover-11.16 为 FEX 仿真 DLL 补齐了 Wow64 线程挂起管道：
+#   ntdll.spec 导出 RtlWow64SuspendThread（wine-9.x/10 无此导出）；
+#   aarch64 侧完整实现（远进程经 NtCreateThreadEx breakin 挂起）；
+#   arm64ec 侧 NtSuspendThread 直通桩；
+#   wow64.spec 把 Wow64SuspendLocalThread 由 stub 转为真导出（syscall.c
+#   转发 CPU dll 的 BTCpuSuspendLocalThread——libwow64fex 依赖此链路）；
+#   wow64/process.c 的 NtSuspendMethod 改走 RtlWow64SuspendThread；
+#   ntdll/loader.c init_wow64 增取 Wow64SuspendLocalThread。缺此管道时
+#   仿真器 DLL 的线程挂起语义不完整。
+# 
+# 【双锚点】proton_10.0/wine-10 形态与 wine-9.x 形态的 signal_* 文件结构不同，
+# 本补丁对 signal_arm64.c / signal_arm64ec.c 各带两套互斥 hunk：
+#   * wine-10 锚点（RtlIsProcessorFeaturePresent 尾）——wine-9.x 树无此函数
+#   * wine-9.x 锚点（KiUserExceptionDispatcher 汇编尾 / __chkstk 函数）——
+#     wine-10 起已重写移除
+# 同一树只有一套命中。wine-11.16 vanilla 自带 RtlWow64SuspendThread 导出
+# （process.c 实现）→ spec hunk 不命中（防重复定义）；其 signal_arm64ec.c
+# 特性表含 SVE 段 → wine-10 锚点不命中（防与 process.c 实现冲突）。
+# hangover-11.16 树自带全部机制 → 全 hunk 不命中 → 静默跳过。
+# x86_64 flavor 本配方不构建（--enable-archs=arm64ec,aarch64,i386），
+# signal_x86_64.c 无需实现即可链接。
+# 
+# 【v3.2.11 修正】CI proton_10.0 实测（日志 wine-build-log-arm64ec (7).zip）
+# 唯一阵亡点：wow64/process.c:1095 "call to undeclared function
+# 'RtlWow64SuspendThread'" —— 本补丁改了 process.c 调用点、ntdll.spec 导出
+# 与 signal_arm64{,ec}.c 定义，却漏了【声明】：wow64 是独立 PE dll，
+# wine-9.x/10 树无任何公共头声明该函数（wine-11.16 vanilla 起在
+# include/wow64.h 补了，hangover-11.16 同）→ 隐式声明被 clang 判错。
+# 修法：process.c hunk 内就位 extern（同一 hunk 原子生效；对已自带声明的
+# wine-11/hangover 树因调用点 hunk 本就不命中而天然互斥）。
+# 其余 signal_arm64{,ec}.c 双锚点 hunk 各命中其一（fuzz 吸收 proton 树
+# 注释风格漂移，CI 实证定义已落进树）——非失败即成功，无需动。
+# 
+# 【验证】proton_10.0 树全套 hunk 命中；wine-9.7 树 9.x 锚点命中 + 10 形态
+# hunk 落 .rej（预期）；wine-11.16 vanilla / hangover-11.16 全不命中。
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -4421,36 +4421,51 @@
+     NtClose( token.Token );
+     NtClose( linked.LinkedToken );
+ }
+ 
+ #ifdef __arm64ec__
+ 
++static DWORD loaderGetEnvironmentVariableW( LPCWSTR name, LPWSTR val, DWORD size )
++{
++    UNICODE_STRING us_name, us_value;
++    NTSTATUS status;
++    DWORD len;
++
++    RtlInitUnicodeString( &us_name, name );
++    us_value.Length = 0;
++    us_value.MaximumLength = (size ? size - 1 : 0) * sizeof(WCHAR);
++    us_value.Buffer = val;
++
++    status = RtlQueryEnvironmentVariable_U( NULL, &us_name, &us_value );
++    len = us_value.Length / sizeof(WCHAR);
++    if (status == STATUS_BUFFER_TOO_SMALL) return len + 1;
++    if (status) return 0;
++    if (!size) return len + 1;
++    val[len] = 0;
++    return len;
++}
++
+ static void load_arm64ec_module(void)
+ {
+-    ULONG buffer[16];
+-    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
+-    UNICODE_STRING nameW = RTL_CONSTANT_STRING( L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\amd64" );
+-    WCHAR module[64] = L"C:\\windows\\system32\\xtajit64.dll";
+-    OBJECT_ATTRIBUTES attr;
++    ULONG buffer[32];
++    WCHAR *cpu_dll = (WCHAR*)buffer;
++    WCHAR module[64] = L"C:\\windows\\system32\\libarm64ecfex.dll";
+     WINE_MODREF *wm;
+     NTSTATUS status;
+-    HANDLE key;
++    DWORD res;
+ 
+-    InitializeObjectAttributes( &attr, &nameW, OBJ_CASE_INSENSITIVE, 0, NULL );
+-    if (!NtOpenKey( &key, KEY_READ | KEY_WOW64_64KEY, &attr ))
++    /* linbox v3.2.10: HODLL64 环境变量优先（Hangover ABI；App 侧注入
++     * HODLL64=libarm64ecfex.dll，用户可覆盖）；vanilla 的注册表默认
++     * xtajit64.dll 在 Linux 不存在，EC 进程必死于 NtTerminateProcess */
++    if ((res = loaderGetEnvironmentVariableW( L"HODLL64", cpu_dll, ARRAY_SIZE(buffer))) &&
++        res < ARRAY_SIZE(buffer))
+     {
+-        UNICODE_STRING valueW = RTL_CONSTANT_STRING( L"" );
+         ULONG dirlen = wcslen( L"C:\\windows\\system32\\" );
+-        ULONG size = sizeof(buffer);
+-
+-        if (!NtQueryValueKey( key, &valueW, KeyValuePartialInformation, buffer, size, &size ) && info->Type == REG_SZ)
+-        {
+-            size = sizeof(module) - (dirlen + 1) * sizeof(WCHAR);
+-            memcpy( module + dirlen, info->Data, min( info->DataLength, size ));
+-        }
+-        NtClose( key );
++        ULONG size = sizeof(module) - (dirlen + 1) * sizeof(WCHAR);
++        memset( module + dirlen, 0, size );
++        memcpy( module + dirlen, cpu_dll, min( res * sizeof(WCHAR), size ));
+     }
+ 
+     if ((status = load_dll( NULL, module, 0, &wm, FALSE )) ||
+         (status = arm64ec_process_init( wm->ldr.DllBase )))
+     {
+         ERR( "could not load %s, status %lx\n", debugstr_w(module), status );
+@@ -4476,12 +4491,13 @@
+     RtlFreeUnicodeString( &nt_name );
+ }
+ 
+ static void (WINAPI *pWow64LdrpInitialize)( CONTEXT *ctx );
+ 
+ void (WINAPI *pWow64PrepareForException)( EXCEPTION_RECORD *rec, CONTEXT *context ) = NULL;
++NTSTATUS (WINAPI *pWow64SuspendLocalThread)( HANDLE thread, ULONG *count ) = NULL;
+ 
+ static void init_wow64( CONTEXT *context )
+ {
+     if (!imports_fixup_done)
+     {
+         HMODULE wow64;
+@@ -4500,12 +4516,13 @@
+         wow64 = wm->ldr.DllBase;
+ #define GET_PTR(name) \
+         if (!(p ## name = RtlFindExportedRoutineByName( wow64, #name ))) ERR( "failed to load %s\n", #name )
+ 
+         GET_PTR( Wow64LdrpInitialize );
+         GET_PTR( Wow64PrepareForException );
++        GET_PTR( Wow64SuspendLocalThread );
+ #undef GET_PTR
+         imports_fixup_done = TRUE;
+     }
+ 
+     RtlLeaveCriticalSection( &loader_section );
+     pWow64LdrpInitialize( context );
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -79,12 +79,13 @@
+ extern void WINAPI LdrInitializeThunk(CONTEXT*,ULONG_PTR,ULONG_PTR,ULONG_PTR);
+ extern void WINAPI KiUserExceptionDispatcher(EXCEPTION_RECORD*,CONTEXT*);
+ extern void WINAPI KiUserApcDispatcher(CONTEXT*,ULONG_PTR,ULONG_PTR,ULONG_PTR,PNTAPCFUNC);
+ extern void WINAPI KiUserCallbackDispatcher(ULONG,void*,ULONG);
+ extern void WINAPI KiUserCallbackDispatcherReturn(void);
+ extern void (WINAPI *pWow64PrepareForException)( EXCEPTION_RECORD *rec, CONTEXT *context );
++extern NTSTATUS (WINAPI *pWow64SuspendLocalThread)( HANDLE thread, ULONG *count );
+ 
+ /* debug helpers */
+ extern LPCSTR debugstr_us( const UNICODE_STRING *str );
+ extern void set_native_thread_name( DWORD tid, const char *name );
+ 
+ /* init routines */
+--- a/dlls/ntdll/ntdll.spec
++++ b/dlls/ntdll/ntdll.spec
+@@ -1138,12 +1138,13 @@
+ @ stdcall -arch=win64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
+ @ stdcall -arch=win64 RtlWow64PopCrossProcessWorkFromFreeList(ptr)
+ @ stdcall -arch=win64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)
+ @ stdcall -arch=win64 RtlWow64PushCrossProcessWorkOntoWorkList(ptr ptr ptr)
+ @ stdcall -arch=win64 RtlWow64RequestCrossProcessHeavyFlush(ptr)
+ @ stdcall -arch=win64 RtlWow64SetThreadContext(long ptr)
++@ stdcall -arch=win64 RtlWow64SuspendThread(long ptr)
+ @ stub RtlWriteMemoryStream
+ @ stdcall RtlWriteRegistryValue(long ptr wstr long ptr long)
+ @ stub RtlZeroHeap
+ @ stdcall RtlZeroMemory(ptr long)
+ @ stdcall RtlZombifyActivationContext(ptr)
+ # @ stub RtlpApplyLengthFunction
+--- a/dlls/ntdll/signal_arm64.c
++++ b/dlls/ntdll/signal_arm64.c
+@@ -665,12 +665,89 @@
+ 
+     return (feature < PROCESSOR_FEATURE_MAX && (arm64_features & (1ull << feature)) &&
+             user_shared_data->ProcessorFeatures[feature]);
+ }
+ 
+ 
++#ifndef THREAD_CREATE_FLAGS_SKIP_LOADER_INIT
++#define THREAD_CREATE_FLAGS_SKIP_LOADER_INIT     0x00000020
++#endif
++#ifndef THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE
++#define THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE 0x00000040
++#endif
++
++static void suspend_remote_breakin( HANDLE thread )
++{
++    ULONG count;
++    NTSTATUS status = pWow64SuspendLocalThread( thread, &count );
++    if (status >= 0) status = count;
++    NtTerminateThread( GetCurrentThread(),  status );
++}
++
++/***********************************************************************
++ *              RtlWow64SuspendThread (NTDLL.@)
++ */
++NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
++{
++    HANDLE thread_dup;
++    THREAD_BASIC_INFORMATION tbi;
++    NTSTATUS status = NtDuplicateObject( NtCurrentProcess(), thread, NtCurrentProcess(), &thread_dup,
++                                         THREAD_QUERY_INFORMATION | THREAD_SUSPEND_RESUME, 0, 0 );
++    if (status) return status;
++    status = NtQueryInformationThread( thread_dup, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
++    NtClose( thread_dup );
++    if (status) return status;
++
++    if (tbi.ClientId.UniqueProcess != NtCurrentTeb()->ClientId.UniqueProcess)
++    {
++        HANDLE process;
++        HANDLE suspender_thread;
++        HANDLE remote_suspendee_thread;
++        OBJECT_ATTRIBUTES attr = { .Length = sizeof(attr) };
++
++        status = NtOpenProcess( &process, PROCESS_CREATE_THREAD | PROCESS_DUP_HANDLE, &attr, &tbi.ClientId );
++        if (status) return status;
++
++        status = NtDuplicateObject( NtCurrentProcess(), thread, process, &remote_suspendee_thread, 0, 0,
++                                    DUPLICATE_SAME_ACCESS );
++        if (status) goto err_close_proc;
++
++        status = NtCreateThreadEx( &suspender_thread, SYNCHRONIZE | THREAD_QUERY_INFORMATION, NULL, process,
++                                   suspend_remote_breakin, remote_suspendee_thread,
++                                   THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT |
++                                   THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER | THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE,
++                                   0, 0, 0, NULL );
++        if (status) goto err_close_remote_hnd;
++
++        NtWaitForSingleObject( suspender_thread, FALSE, NULL );
++        status = NtQueryInformationThread( suspender_thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL );
++        if (!status)
++        {
++            if (tbi.ExitStatus < 0)
++            {
++                status = tbi.ExitStatus;
++            }
++            else if (count)
++            {
++                *count = (ULONG)tbi.ExitStatus;
++            }
++        }
++
++        NtClose( suspender_thread );
++err_close_remote_hnd:
++        NtDuplicateObject( process, remote_suspendee_thread, NULL, NULL, 0, 0, DUPLICATE_CLOSE_SOURCE );
++err_close_proc:
++        NtClose( process );
++        return status;
++    }
++
++    return pWow64SuspendLocalThread( thread, count );
++}
++
++
++
+ /*************************************************************************
+  *		RtlWalkFrameChain (NTDLL.@)
+  */
+ ULONG WINAPI RtlWalkFrameChain( void **buffer, ULONG count, ULONG flags )
+ {
+     UNWIND_HISTORY_TABLE table;
+--- a/dlls/ntdll/signal_arm64.c
++++ b/dlls/ntdll/signal_arm64.c
+@@ -686,12 +686,88 @@
+                    "bl " __ASM_NAME("dispatch_exception") "\n"
+                    "1:\tmov  x2, #1\n\t"
+                    "bl " __ASM_NAME("NtRaiseException") "\n\t"
+                    "bl " __ASM_NAME("RtlRaiseStatus") /* does not return */ );
+ 
+ 
++#ifndef THREAD_CREATE_FLAGS_SKIP_LOADER_INIT
++#define THREAD_CREATE_FLAGS_SKIP_LOADER_INIT     0x00000020
++#endif
++#ifndef THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE
++#define THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE 0x00000040
++#endif
++
++static void suspend_remote_breakin( HANDLE thread )
++{
++    ULONG count;
++    NTSTATUS status = pWow64SuspendLocalThread( thread, &count );
++    if (status >= 0) status = count;
++    NtTerminateThread( GetCurrentThread(),  status );
++}
++
++/***********************************************************************
++ *              RtlWow64SuspendThread (NTDLL.@)
++ */
++NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
++{
++    HANDLE thread_dup;
++    THREAD_BASIC_INFORMATION tbi;
++    NTSTATUS status = NtDuplicateObject( NtCurrentProcess(), thread, NtCurrentProcess(), &thread_dup,
++                                         THREAD_QUERY_INFORMATION | THREAD_SUSPEND_RESUME, 0, 0 );
++    if (status) return status;
++    status = NtQueryInformationThread( thread_dup, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
++    NtClose( thread_dup );
++    if (status) return status;
++
++    if (tbi.ClientId.UniqueProcess != NtCurrentTeb()->ClientId.UniqueProcess)
++    {
++        HANDLE process;
++        HANDLE suspender_thread;
++        HANDLE remote_suspendee_thread;
++        OBJECT_ATTRIBUTES attr = { .Length = sizeof(attr) };
++
++        status = NtOpenProcess( &process, PROCESS_CREATE_THREAD | PROCESS_DUP_HANDLE, &attr, &tbi.ClientId );
++        if (status) return status;
++
++        status = NtDuplicateObject( NtCurrentProcess(), thread, process, &remote_suspendee_thread, 0, 0,
++                                    DUPLICATE_SAME_ACCESS );
++        if (status) goto err_close_proc;
++
++        status = NtCreateThreadEx( &suspender_thread, SYNCHRONIZE | THREAD_QUERY_INFORMATION, NULL, process,
++                                   suspend_remote_breakin, remote_suspendee_thread,
++                                   THREAD_CREATE_FLAGS_SKIP_THREAD_ATTACH | THREAD_CREATE_FLAGS_SKIP_LOADER_INIT |
++                                   THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER | THREAD_CREATE_FLAGS_BYPASS_PROCESS_FREEZE,
++                                   0, 0, 0, NULL );
++        if (status) goto err_close_remote_hnd;
++
++        NtWaitForSingleObject( suspender_thread, FALSE, NULL );
++        status = NtQueryInformationThread( suspender_thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL );
++        if (!status)
++        {
++            if (tbi.ExitStatus < 0)
++            {
++                status = tbi.ExitStatus;
++            }
++            else if (count)
++            {
++                *count = (ULONG)tbi.ExitStatus;
++            }
++        }
++
++        NtClose( suspender_thread );
++err_close_remote_hnd:
++        NtDuplicateObject( process, remote_suspendee_thread, NULL, NULL, 0, 0, DUPLICATE_CLOSE_SOURCE );
++err_close_proc:
++        NtClose( process );
++        return status;
++    }
++
++    return pWow64SuspendLocalThread( thread, count );
++}
++
++
+ /***********************************************************************
+  *           _setjmpex (NTDLL.@)
+  */
+ __ASM_GLOBAL_FUNC( NTDLL__setjmpex,
+                    ".seh_endprologue\n\t"
+                    "str x1,       [x0]\n\t"        /* jmp_buf->Frame */
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -986,17 +986,26 @@
+         RtlWow64PushCrossProcessWorkOntoFreeList( &list->free_list, entry );
+         entry = next ? CROSS_PROCESS_LIST_ENTRY( &list->work_list, next ) : NULL;
+     }
+ }
+ 
+ 
++/***********************************************************************
++ *              RtlWow64SuspendThread (NTDLL.@)
++ */
++NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
++{
++    return NtSuspendThread( thread, count );
++}
++
++
+ /**********************************************************************
+  *           virtual_unwind
+  */
+ static NTSTATUS virtual_unwind( ULONG type, DISPATCHER_CONTEXT_ARM64EC *dispatch,
+-                                ARM64EC_NT_CONTEXT *context, BOOL dump_backtrace )
++                                ARM64EC_NT_CONTEXT *context, BOOL dump_backtrace ) /* linbox suspend anchor */
+ {
+     DISPATCHER_CONTEXT_NONVOLREG_ARM64 *nonvol_regs;
+     LDR_DATA_TABLE_ENTRY *module = NULL;
+     DWORD64 pc = context->Pc;
+     int i;
+ 
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -2331,12 +2331,22 @@
+ void __attribute__((naked)) __chkstk(void)
+ {
+     asm( "ret" );
+ }
+ 
+ 
++/***********************************************************************
++ *              RtlWow64SuspendThread (NTDLL.@)
++ */
++NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count )
++{
++    return NtSuspendThread( thread, count );
++}
++
++
++
+ /**************************************************************************
+  *		__chkstk_arm64ec (NTDLL.@)
+  *
+  * Supposed to touch all the stack pages, but we shouldn't need that.
+  */
+ void __attribute__((naked)) __chkstk_arm64ec(void)
+--- a/dlls/wow64/wow64.spec
++++ b/dlls/wow64/wow64.spec
+@@ -19,10 +19,10 @@
+ @ stdcall Wow64ProcessPendingCrossProcessItems()
+ @ stdcall Wow64RaiseException(long ptr)
+ @ stub Wow64ShallowThunkAllocObjectAttributes32TO64_FNC
+ @ stub Wow64ShallowThunkAllocSecurityQualityOfService32TO64_FNC
+ @ stub Wow64ShallowThunkSIZE_T32TO64
+ @ stub Wow64ShallowThunkSIZE_T64TO32
+-@ stub Wow64SuspendLocalThread
++@ stdcall Wow64SuspendLocalThread(long ptr)
+ @ stdcall -norelay Wow64SystemServiceEx(long ptr)
+ @ stub Wow64ValidateUserCallTarget
+ @ stub Wow64ValidateUserCallTargetFilter
+--- a/dlls/wow64/process.c
++++ b/dlls/wow64/process.c
+@@ -1089,13 +1089,20 @@
+  */
++/* linbox 0011 (v3.2.11)：声明兜底 —— ntdll.spec 本补丁新增导出，aarch64
++ * 实现在 ntdll/signal_arm64.c、EC 桩在 ntdll/signal_arm64ec.c；wow64 为
++ * 独立 PE dll 且 wine-9.x/10 树无公共头声明该函数，就地补 extern 防
++ * "call to undeclared function 'RtlWow64SuspendThread'"（CI proton_10.0
++ * 实测 wow64/process.c:1095 阵亡点）。 */
++extern NTSTATUS WINAPI RtlWow64SuspendThread( HANDLE thread, ULONG *count );
++
+ NTSTATUS WINAPI wow64_NtSuspendThread( UINT *args )
+ {
+     HANDLE handle = get_handle( &args );
+     ULONG *count = get_ptr( &args );
+ 
+-    return NtSuspendThread( handle, count );
++    return RtlWow64SuspendThread( handle, count );
+ }
+ 
+ 
+ /**********************************************************************
+  *           wow64_NtTerminateProcess
+  */
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -102,6 +102,7 @@
+ static NTSTATUS (WINAPI *pBTCpuSetContext)(HANDLE,HANDLE,void *,void *);
+ static void     (WINAPI *pBTCpuThreadInit)(void);
+ static void     (WINAPI *pBTCpuSimulate)(void) __attribute__((used));
++static NTSTATUS (WINAPI *pBTCpuSuspendLocalThread)(HANDLE,ULONG *);
+ static void *   (WINAPI *p__wine_get_unix_opcode)(void);
+ static void *   (WINAPI *pKiRaiseUserExceptionDispatcher)(void);
+ void     (WINAPI *pBTCpuFlushInstructionCache2)( const void *, SIZE_T ) = NULL;
+@@ -839,6 +840,7 @@
+     GET_PTR( BTCpuProcessInit );
+     GET_PTR( BTCpuThreadInit );
+     GET_PTR( BTCpuResetToConsistentState );
++    GET_PTR( BTCpuSuspendLocalThread );
+     GET_PTR( BTCpuSetContext );
+     GET_PTR( BTCpuSimulate );
+     GET_PTR( BTCpuFlushInstructionCache2 );
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -1522,6 +1522,14 @@
+ 
+     exception_record_64to32( &rec32, rec );
+     raise_exception( &rec32, &ctx32, first_chance, rec );
+ 
+     return STATUS_SUCCESS;
+ }
++
++/**********************************************************************
++ *            Wow64SuspendLocalThread (wow64.@)
++ */
++NTSTATUS WINAPI Wow64SuspendLocalThread( HANDLE thread, ULONG *count )
++{
++    return pBTCpuSuspendLocalThread( thread, count );
++}

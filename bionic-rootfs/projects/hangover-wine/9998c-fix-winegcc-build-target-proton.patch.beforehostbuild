@@ -1,0 +1,20 @@
+--- a/tools/winegcc/winegcc.c
++++ b/tools/winegcc/winegcc.c
+@@ -298,6 +298,16 @@
+         if (target)
+         {
+-            strarray_add( &ret, "-target" );
+-            strarray_add( &ret, target );
++            const char* str = NULL;
++            if (strstr(target, "android")) {
++                if (strstr(target, "arm")) {
++                    str = strmake( "%s24", "armv7a-linux-androideabi" );
++                } else {
++                    str = strmake( "%s24", target );
++                }
++            } else {
++                str = strmake( "%s", target );
++            }
++            strarray_add( &ret, "-target" );
++            strarray_add( &ret, str );
+         }

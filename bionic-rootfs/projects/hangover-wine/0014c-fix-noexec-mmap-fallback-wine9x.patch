@@ -1,0 +1,55 @@
+# linbox: wine 9.x 树 noexec 回退补丁（arm64ec 形态）v3.3.7
+#
+# 【为什么需要 9.x 形态】hangover-wine 的 noexec 补丁此前只有
+#   0014（11.x 树）/ 0014b（10.x 树）两份 —— 但用户实际装机的
+#   arm64ec wine 包大量是 wine-9.2 时代产物（设备会话日志
+#   "wine-9.2-20261105" 实证）。本机对 wine-9.2 源码树实测：
+#   0014 四个 hunk、0014b 三个 hunk **全部干净失败**（9.x 的
+#   map_file_into_view 是另一套结构）—— 9.x 形态一直裸奔。
+#
+# 【wine 9.2 的 noexec 失败机理】（virtual.c，与 brunodev85 的
+#   winlator wine-9.2-custom 对照核实）：
+#   map_file_into_view 里 flags = MAP_FIXED | (WRITECOPY ? MAP_PRIVATE
+#   : MAP_SHARED) —— 一切【不带 WRITECOPY】的映射（游戏对自家
+#   media/数据文件的只读 SECTION 映射就是这种）都是 MAP_SHARED；
+#   游戏开 DEP-off 后 force_exec_prot 生效 → 所有可读映射被强加
+#   PROT_EXEC → noexec 上 mmap EPERM → EPERM 分支对 MAP_SHARED
+#   硬失败 return STATUS_ACCESS_DENIED → virtual_map_section 失败
+#   → "Could not load required media"。exe/dll 落地内部存储也救
+#   不了它 —— 失败的是【数据文件】映射，与 PE 件无关。
+#
+# 【修法】与 projects/wine/0011（x86_64 形态同款）一致：删掉
+#   EPERM 分支对共享映射的硬失败，落入 wine 自带的匿名 mmap +
+#   pread + mprotect 回退（匿名页加执行位不受 noexec 限制 ——
+#   本机内核实验 + 上游参考 同款机制验证）。
+#
+# 【生效标记】WARN 行内嵌 "LinBox-noexec-fallback" —— App 侧
+#   WinePatchDetector grep ntdll.so 中的该串判断 wine 包是否含
+#   noexec 回退；未含的 arm64ec/hangover 包在游戏位于外部存储时
+#   给出明确重装指引（不再让用户对着 media 报错猜）。
+#
+# 应用形态：official 9.0~9.x 树（arm64ec 形态经 LINBOX_WINE_TAG=
+#   official wine-9.2 等构建）。10.x/11.x 树上本补丁 hunk 干净
+#   失败（EPERM 分支结构不同），由 0014/0014b 接管 —— 三份按树
+#   形态自动命中，--forward 容错。
+diff -uNr a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2103,12 +2103,11 @@
+             break;
+         case EACCES:
+         case EPERM:  /* noexec filesystem, fall back to read() */
+-            if (flags & MAP_SHARED)
+-            {
+-                if (prot & PROT_EXEC) ERR( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
+-                return STATUS_ACCESS_DENIED;
+-            }
+-            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
++            /* LinBox: no hard-fail for shared mappings (identical to the fix
++             * brunodev85 ships in winlator's wine-9.2-custom) - fall through
++             * to the anonymous mmap + pread + mprotect fallback below, which
++             * works on noexec mounts and keeps the data fully accessible. */
++            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem? [LinBox-noexec-fallback]\n" );
+             break;
+         default:
+             ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",

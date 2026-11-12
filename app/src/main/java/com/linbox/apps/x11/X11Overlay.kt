@@ -159,6 +159,9 @@ fun X11GlassFab(
                 }
             },
             X11FabItem("游戏全屏", "FS") { X11InputHub.sendAltEnter() },
+            // v3.0（AnWind 移植）：窗口轮转 —— 把堆叠序中紧挨当前顶层之下的
+            // 窗口提到最前（多 wine 会话 / 多 X 窗口完全遮挡时轮转切换）
+            X11FabItem("切窗", "⛛") { X11WindowOps.cycleTopWindow() },
             X11FabItem("虚拟手柄", "柄", active = gamepadEnabled,
                 onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },
                 onLongClick = { GamepadController.settingsOpen = true }),

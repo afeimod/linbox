@@ -1,0 +1,11 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# LinBox wine 包装器（APK assets 自动部署，勿手改）
+# ------------------------------------------------------------
+# 等价: linbox-wine "$@"
+#   * 环境隔离: PREFIX/HOME/TMPDIR/LD_LIBRARY_PATH/LANG
+#     全部指向 rootfs 自身（与 Termux 终端环境零串扰）
+#   * 语言: 容器 conf lang=（默认 zh_CN.UTF-8；bionic 无 locale 数据，
+#     只导出 LANG 不导出 LC_ALL，wine 的 unix 侧直接读这两个环境变量）
+#   * 显示: 强制 DISPLAY=:1，X 服务未运行时自动拉起（黑屏修复）
+#   * 音频: rootfs 自带 PulseAudio（unix socket 隔离）
+exec /data/data/com.linbox/files/rootfs/usr/bin/linbox-wine "$@"

@@ -1,0 +1,28 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH 4/7] LinBox box64: Android RELR tags in elfparser32.c (32-bit twin)
+
+32-bit twin of 0002/0003. The file only exists since v0.3.2 (v0.3.0 has no
+32-bit loader) and its DT_RELR case indentation is identical in v0.3.2
+through v0.4.5, so a single variant covers all tags that have the file.
+On v0.3.0 the file is absent, the dry-run fails and the patch is skipped.
+The hunk headers carry v0.4.4 line numbers; patch locates the
+(unique) anchors by scanning, so line drift across tags is fine. A hunk that
+cannot find its anchors fails the dry-run and is skipped whole
+(patchOptional=1 in build.sh) - it is NEVER force-placed at a wrong offset.
+
+---
+diff --git a/src/elfs/elfparser32.c b/src/elfs/elfparser32.c
+--- a/src/elfs/elfparser32.c
++++ b/src/elfs/elfparser32.c
+@@ -213,2 +213,3 @@
+                 case DT_RELR:
++                case 0x6fffe000:  // DT_ANDROID_RELR (LinBox: bionic RELR tags, same encoding)
+                     h->relr = ptr;
+@@ -216,2 +217,3 @@
+                 case DT_RELRSZ:
++                case 0x6fffe001:  // DT_ANDROID_RELRSZ
+                     h->relrsz = val;
+@@ -219,2 +221,3 @@
+                 case DT_RELRENT:
++                case 0x6fffe003:  // DT_ANDROID_RELRENT
+                     h->relrent = val;

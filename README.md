@@ -1,83 +1,146 @@
 # LinBox
 
-> 一个 Android 平台的 **Termux 终端 + X11 图形** 一体化应用：单个 APK 里同时拥有真实 Termux 终端（apt/pkg 全家桶）和内置 X11 显示端（显示号 `:13`），窗口化运行，支持虚拟键盘 / 虚拟鼠标 / 虚拟游戏手柄。
+> Android 平台的 **Wine 容器管理应用**：以 bionic rootfs + Wine + Box64/FEX 为核心，
+> 直接性的容器管理界面（容器卡片 / 选中容器信息 / 一键运行），并保留 Termux 终端、
+> 内置 X11 显示端、浏览器与 DAC 直合显示栈。
 
 ## 项目简介
 
-LinBox 是一个用 **Kotlin + Jetpack Compose** 编写的 Android 应用：没有桌面环境、没有启动器外壳，只做两件核心事情 —— **终端** 与 **X11 图形**，并为其配备完整的输入支持（虚拟键盘 / 鼠标 / 触控板 / 游戏手柄）。整个项目作为独立 GitHub 仓库交付，可克隆、编译、二次开发。
+LinBox 是一个用 **Kotlin + Jetpack Compose** 编写的 Android 应用，由
+[AnWind](https://github.com/afeimod/AnWind) 全量移植改造而来（同根项目，
+包名 `com.linbox`）：
 
-## 演示图
+- **主页 = Wine 容器管理**：选中容器信息卡（容器名 / wine 版本 / 后端 /
+  Windows 版本 / 分辨率 / 运行状态）+ 容器卡片列表（支持自定义卡片图片
+  与 exe 内嵌图标），点 ▶ 一键运行，点 ⚙ 进入容器配置；
+- **容器全部相关设置**：每容器五选项卡（基本 / 图形驱动 / CPU 核心 /
+  函数库 / 更多配置）+ 全局高级设置（DY / FEX / Box64 / Wine 安装 /
+  MangoHud / 生态配置）；
+- **底部导航 [容器] [高级]**：高级页汇集终端、浏览器、容器高级设置、
+  容器体检、文件管理器、X11 / DAC 显示器、应用设置；
+- **窗口化容器界面**：容器管理器 / exe 选择器 / 浏览器 / 文件管理器
+  以可拖拽缩放的浮动窗口形式展示；
+- **bionic rootfs 全量体系**：rootfs 以 `.tzst` 放在 `assets/linbox/`，
+  启动自动解压到 `/data/data/com.linbox/files/rootfs`（tzst 内部目录为
+  `rootfs/`，亦兼容 CI data/data 布局与相对布局）；
+- **完整构建链**：`bionic-rootfs/` 70+ 包配方（rootfs / wine / mesa /
+  box64 / X11 栈 / glibc 层）+ 四条 CI 工作流；
+- **真实 Termux 终端 + 内置 X11（:13）+ DAC 直合显示**：linbox 自有栈
+  保留，叠加 AnWind 的 X11 性能优化（X server 前台主进程化、点击置前、
+  窗口轮转、PerfGovernor 让位）。
 
-* 简单演示图
+## 核心特性
 
-![demo](https://github.com/afeimod/LinBox/blob/main/Screenshot_2026-09-06-15-57-23-134_com.linbox.jpg?raw=true)
+- **容器管理** — 创建 / 克隆 / 重命名 / 删除 / 设默认容器 / 容器体检
+  （rootfs/X11/wine/box64/FEX 探活）；容器与终端 CLI（`linbox-container`）
+  完全共享数据；
+- **多 Wine 版本管理** — `/usr/opt/wine*` 多槽位，本地 tar / URL 下载
+  安装，每容器可选 wine 版本；
+- **多种运行后端** — ARM64EC 原生 / Box64 / Hangover / FEXCore / Native
+  自动或手动选择；Box64 DYNAREC 四档预设；
+- **图形驱动** — Turnip / Freedreno / Zink / Softpipe 分层探测，
+  DXVK 自动注入（assets/dxvk），Vulkan Wrapper 驱动栈（AdrenoTools），
+  `/opt` 生态包（驱动 tar / 前缀模板 / 时区 / locale）；
+- **X11 显示（wine 容器）** — 容器启动链自动 `app_process` 拉起 X server
+  （:1），前台服务先行钉住 cgroup（性能关键），广播自动上屏；
+- **浏览器** — 多标签 / 书签 / 历史（Room），桌面 UA，file:// 与 http(s)，
+  Flash（Ruffle，含 4399 预载），网页 3D 视角，双指缩放；
+- **exe 内置图标识别** — PE 内嵌图标提取（PeIcon：RT_GROUP_ICON →
+  RT_ICON → PNG/DIB 全 bpp），容器卡片 / 文件管理器缩略图直接显示；
+- **卡片自定义图片** — 容器卡片背景可选本地图片（container.conf 的
+  `card_image` 键，文件管理器选择回填）；
+- **输入全家桶** — 虚拟键盘 / 鼠标 / 触控板 / 游戏手柄（悬浮球常驻 +
+  .vgp 布局存取）；
+- **离线 bootstrap 安装** — 内置 aarch64 离线归档，安装期同长度重写
+  `com.termux → com.linbox` 路径前缀。
 
-
-### 核心特性
-
-- **真实 Termux 终端** — 完整移植官方 Termux（termux-app v0.118.0）：真实 PTY + login shell、官方 bootstrap 根文件系统（apt/dpkg/pkg 全家桶）、pkg 安装真实软件包（python/git/openssh…）、两排快捷键栏 + 可切换符号层，详见 [docs/TERMUX.md](docs/TERMUX.md)
-- **内置 X11 图形（显示号 :13）** — 内置 X server（lorie 合成器 + Xwayland），终端 `linbox-x11 :13` 一条命令即可把图形化 Linux 桌面（xfce4 / openbox 等）或游戏投射为应用内的一个窗口；分辨率"跟随窗口"或"固定分辨率"随时切换，详见 [docs/X11.md](docs/X11.md)
-- **浮动窗口模型** — 终端 / X11 / 设置以可拖拽、可缩放、可最小化/最大化的浮动窗口运行，控制条一键真全屏
-- **虚拟键盘** — 应用内全键盘（可拖动、功能键行 + 小键盘、大小可调），文本框聚焦自动呼出，映射真实按键事件
-- **虚拟鼠标 / 触控板** — Windows 风格指针跟随手指，或整屏触控板模式（双指右键、滚轮、拖拽手势）
-- **虚拟游戏手柄** — 屏幕虚拟摇杆 / 十字键 / 按钮，可自定义布局与按键映射（键盘 + 鼠标动作），X11 游戏专用，布局持久化
-- **5 套窗口配色主题** — Windows 95 / XP / 7 / 10 / 11 窗口风格切换（仅影响窗口与控件配色）
-- **离线 bootstrap 安装** — 内置 aarch64 离线归档，安装时同长度重写 `com.termux → com.linbox` 路径前缀，无需联网即可获得完整终端环境
-
-### 架构
-
-| 模块 | 说明 |
-|------|------|
-| `app` | 主应用（com.linbox）：终端、X11 显示端、输入覆盖层、最小壳层 |
-| `termux-x11` | X server 显示端（com.termux.x11，lorie + Xwayland 预编译库） |
-| `termux-x11-stub` | 隐藏 API 编译桩（compileOnly） |
+## 架构
 
 ```
 app/src/main/java/com/linbox/
-├── LinBoxApp.kt / MainActivity.kt   # 应用入口 + 最小壳层宿主
-├── apps/terminal/                   # Termux 移植终端（TerminalApp + bootstrap 安装器）
-├── apps/x11/                        # X11 显示端（窗口渲染 / 控制器 / 设置 / 保活服务）
-├── apps/settings/                   # 设置（显示 / 主题 / 输入 / 手柄 / 关于）
-├── core/shell/LinBoxShell.kt        # 主屏启动器 + 窗口 + 输入覆盖层
-├── core/window/                     # 浮动窗口系统（拖拽 / 缩放 / 最小化 / 全屏）
-├── core/input/                      # 虚拟鼠标 / 键盘 / 触控板 / 游戏手柄
-├── core/theme/                      # 窗口配色主题
-├── data/prefs/                      # DataStore 偏好
-├── termux/                          # termux-app 移植（终端模拟器 + 视图，Apache-2.0）
-└── util/                            # L10n / 沉浸式工具
+├── LinBoxApp.kt / MainActivity.kt     # 入口：Room DB + 容器应用注册 + tzst 铺装 + 孤儿清扫
+├── shellui/                            # 新壳层：容器主页 + 高级页 + 底部导航
+│   ├── ContainerHomeScreen.kt          #   主页：选中容器信息卡 + 容器卡片列表
+│   ├── AdvancedScreen.kt               #   高级页：终端/浏览器/容器设置/体检/文件/X11/DAC
+│   └── ShellBottomBar.kt               #   底部导航 [容器] [高级]
+├── core/shell/                         # ShellController 页面路由（HOME/ADVANCED/TERMINAL/X11/DAC/SETTINGS）
+├── core/window/                        # 浮动窗口系统（拖拽/缩放/最小化/全屏 + WinDialog 弹窗栈）
+├── apps/containers/                    # 【AnWind 移植】容器管理
+│   ├── ContainerManager/Models         #   容器 CRUD + container.conf 编解码（30+ 键，含 card_image）
+│   ├── ContainerScreens.kt             #   wineguanli.py 全量 Compose 移植（五选项卡/高级页/全部弹窗）
+│   ├── WineSessionLauncher.kt          #   门面 → RootfsLauncher 13 步原生启动链
+│   └── launcher/                       #   RootfsLauncher / WineEnvironment / WineRegistry / WineServerUtils
+│                                       #   X11Support / PulseAudioManager / NativeShellExecutor /
+│                                       #   WrapperDriverSupport / WineLibrary / WineLocaleSupport …
+├── apps/browser/                       # 【AnWind 移植】浏览器（多标签/书签/Flash/3D 视角）
+├── apps/filemanager/                   # 【AnWind 移植】文件管理器 + PeIcon（exe 图标）+ FilePickBus
+├── apps/terminal/                      # linbox 自有 Termux 终端 + LinBoxTzstAssets（rootfs 自解压）
+│                                       #   + LinBoxScriptAssets（rootfs 侧脚本部署）
+├── apps/x11/                           # linbox 自有 X11 显示端 + X11WindowOps（点击置前/切窗）
+├── apps/dac/                           # linbox 自有 DAC 直合显示栈（winedac.drv）
+├── apps/settings/                      # 应用设置（显示/终端背景/输入/手柄/开发者/关于）
+├── core/input/                         # 虚拟键盘/鼠标/触控板/手柄（含悬浮球 GamepadFloatingBall）
+├── core/theme/                         # Windows 五代窗口主题
+├── data/                               # Room（书签/历史/快捷方式）+ SettingsStore
+└── termux/                             # termux-app 移植（终端模拟器 + 视图，Apache-2.0）
+```
+
+```
+仓库根目录
+├── bionic-rootfs/       # 【AnWind 移植】bionic rootfs 构建体系（70+ 包配方）
+│   ├── projects/        #   wine / hangover-wine / mesa / box64 / pulseaudio / X11 全家 / glibc 层 …
+│   ├── ndk_patches/     #   NDK r28b/r29 sysroot 补丁
+│   ├── build-rootfs-arch.sh / make-rootfs.sh   # 逐包构建 + 组装导出
+│   └── default.conf     #   prefix=/data/data/com.linbox/files/rootfs/usr
+├── wine/ mesa/ dxvk/    # linbox 自有 DAC 显示栈构建（winedac.drv / turnip / dxvk）
+├── termux-x11/          # X server 显示端（lorie + Xwayland 预编译库）
+├── scripts/             # 【AnWind 移植】kt_struct_check / msgfmt 等开发工具
+└── docs/                # 容器/原生启动链/GPU 驱动/TERMUX/X11/DAC 文档
+```
+
+## rootfs 生命周期
+
+```
+【构建】 bionic-rootfs/build-rootfs-arch.sh --arch aarch64 --build all
+         → make-rootfs.sh 组装 → CI (build-bionic-rootfs.yml) tar.gz
+【打包】 rootfs tar.gz 重压缩为 zstd → assets/linbox/rootfs-<date>-aarch64.tzst
+         （tzst 内部目录 rootfs/，或 CI 的 data/data/com.linbox/files/rootfs/ 布局）
+【安装】 App 启动后台线程 LinBoxTzstAssets.installAllIfNeeded：
+         指纹幂等（usr/etc/linbox/.tzst-assets-fingerprint）→
+         TarCompressorUtils 解压 → remapToRootfs 前缀剥壳 → /data/data/com.linbox/files/rootfs
+【配套】 mesa-*.tzst / box64-*.tzst / turnip-*.tzst 同通道自动解压；
+         wrapper-stack.tzst（Vulkan 驱动栈）按需安装；
+         dxvk-*.tar.gz 仅对已构建前缀注入 drive_c/windows；
+         linbox/scripts（linbox-container / linbox-wine CLI）每次启动覆盖部署到 rootfs/usr/bin
+【Wine】 不进 assets —— 容器管理器「Wine 安装」页本地 tar / URL 安装到 /usr/opt/<槽位>
 ```
 
 ## 构建
 
-- Android Studio 打开根目录，或使用 GitHub Actions（`.github/workflows/build.yml`，**仅手动触发** workflow_dispatch，可在 Actions 页选择 build_type / JDK / Gradle 版本）
-- NDK 26.3.11579264（CI 自动安装）
-- `./gradlew assembleDebug` / `assembleRelease`
-
-## X11 快速上手
-
 ```bash
-pkg install x11-repo && pkg install xfce4 dbus   # 首次
-linbox-x11 :13                                    # 启动 X server + xfce4 会话
+# APK（需要 JDK 17 + Android SDK 34 + NDK 26.3.11579264）
+./gradlew assembleRelease
+
+# bionic rootfs（CI：.github/workflows/build-bionic-rootfs.yml）
+cd bionic-rootfs && ./host-deps.sh && ./build-rootfs-arch.sh --arch aarch64 --build all
+
+# wine / mesa / box64（CI：build-wine-bionic.yml / build-mesa-bionic.yml / build-box64-bionic.yml）
 ```
 
-服务启动后 LinBox 内会自动弹出 X11 窗口并连接渲染；也可以在主屏启动器点击「X11 图形」先开窗口等待连接。
+约束：`targetSdk` 锁 28（Android 10+ SELinux 禁止 exec 数据目录二进制，
+Termux 同款硬约束）；minSdk 24；Kotlin 1.9.25 + Compose BOM 2024.06。
 
-## 已知限制
+## 文档
 
-- **浮动窗口拖拽**：使用 `detectDragGestures` 直接更新坐标，未实现边缘吸附
-- **bootstrap 归档**：离线包仅含 aarch64；其他架构打开终端时会收到明确提示
-- **图标渲染**：部分应用图标使用 emoji 兜底，正式发布建议替换为矢量图标
+- [docs/CONTAINERS.md](docs/CONTAINERS.md) — 容器创建 / 启动 / 前缀构建全流程
+- [docs/NATIVE-LAUNCHER.md](docs/NATIVE-LAUNCHER.md) — 原生启动链（去终端化）架构
+- [docs/SYSTEM-GPU-DRIVERS.md](docs/SYSTEM-GPU-DRIVERS.md) — 系统 GPU 驱动 / Vulkan
+- [docs/WINEGUANLI-OPT-FOLDERS.md](docs/WINEGUANLI-OPT-FOLDERS.md) — /opt 生态目录
+- [docs/TERMUX.md](docs/TERMUX.md) — Termux 终端移植
+- [docs/X11.md](docs/X11.md) — X11 显示端
+- [docs/DAC.md](docs/DAC.md) — DAC 直合显示栈
 
-## 许可证
+## 许可
 
-MIT License — 见 [LICENSE](LICENSE)
-
-## 致谢
-
-- [termux-app](https://github.com/termux/termux-app)（Apache-2.0）— 终端模拟器与 PTY 移植来源
-- [termux-x11](https://github.com/termux/termux-x11) — X server 显示端来源
-- Jetpack Compose 团队提供的现代声明式 UI 框架
-
----
-
-**注意**：本项目不含任何微软公司的代码、资源或商标。窗口主题仅以配色致敬各 Windows 时代的视觉风格，仅用于学习和致敬。
+Termux 移植部分（`com.linbox.termux`、`apps/terminal`）遵循 Apache-2.0
+（见 [docs/LICENSE-APACHE-2.0.txt](docs/LICENSE-APACHE-2.0.txt)）。

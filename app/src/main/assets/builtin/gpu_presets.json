@@ -1,0 +1,2541 @@
+{
+  "_comment": "由 dlls/wined3d/directx.c 的 gpu_description_table[] 生成，写入 HKCU\\Software\\Wine\\Direct3D 的 VideoPciVendorID / VideoPciDeviceID。",
+  "gpus": [
+    {
+      "code": "10de:2684",
+      "name": "NVIDIA GeForce RTX 4090",
+      "vid": "0x10de",
+      "did": "0x2684",
+      "vram": 24576,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2702",
+      "name": "NVIDIA GeForce RTX 4080 SUPER",
+      "vid": "0x10de",
+      "did": "0x2702",
+      "vram": 16384,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2704",
+      "name": "NVIDIA GeForce RTX 4080",
+      "vid": "0x10de",
+      "did": "0x2704",
+      "vram": 16384,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2705",
+      "name": "NVIDIA GeForce RTX 4070 Ti SUPER",
+      "vid": "0x10de",
+      "did": "0x2705",
+      "vram": 16384,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2782",
+      "name": "NVIDIA GeForce RTX 4070 Ti",
+      "vid": "0x10de",
+      "did": "0x2782",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2783",
+      "name": "NVIDIA GeForce RTX 4070 SUPER",
+      "vid": "0x10de",
+      "did": "0x2783",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2786",
+      "name": "NVIDIA GeForce RTX 4070",
+      "vid": "0x10de",
+      "did": "0x2786",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2805",
+      "name": "NVIDIA GeForce RTX 4060 Ti 16GB",
+      "vid": "0x10de",
+      "did": "0x2805",
+      "vram": 16384,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2803",
+      "name": "NVIDIA GeForce RTX 4060 Ti 8GB",
+      "vid": "0x10de",
+      "did": "0x2803",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2882",
+      "name": "NVIDIA GeForce RTX 4060",
+      "vid": "0x10de",
+      "did": "0x2882",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2236",
+      "name": "NVIDIA Ampere A10",
+      "vid": "0x10de",
+      "did": "0x2236",
+      "vram": 24576,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1eb8",
+      "name": "NVIDIA Tesla T4",
+      "vid": "0x10de",
+      "did": "0x1eb8",
+      "vram": 16384,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2203",
+      "name": "NVIDIA GeForce RTX 3090 Ti",
+      "vid": "0x10de",
+      "did": "0x2203",
+      "vram": 24576,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2204",
+      "name": "NVIDIA GeForce RTX 3090",
+      "vid": "0x10de",
+      "did": "0x2204",
+      "vram": 24576,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2208",
+      "name": "NVIDIA GeForce RTX 3080 Ti",
+      "vid": "0x10de",
+      "did": "0x2208",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:220a",
+      "name": "NVIDIA GeForce RTX 3080 12GB",
+      "vid": "0x10de",
+      "did": "0x220a",
+      "vram": 10240,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2216",
+      "name": "NVIDIA GeForce RTX 3080 10GB (Low Hash Rate)",
+      "vid": "0x10de",
+      "did": "0x2216",
+      "vram": 10240,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2206",
+      "name": "NVIDIA GeForce RTX 3080 10GB",
+      "vid": "0x10de",
+      "did": "0x2206",
+      "vram": 10240,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2482",
+      "name": "NVIDIA GeForce RTX 3070 Ti",
+      "vid": "0x10de",
+      "did": "0x2482",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:249d",
+      "name": "NVIDIA GeForce RTX 3070 (mobile)",
+      "vid": "0x10de",
+      "did": "0x249d",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2488",
+      "name": "NVIDIA GeForce RTX 3070 (Low Hash Rate)",
+      "vid": "0x10de",
+      "did": "0x2488",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2484",
+      "name": "NVIDIA GeForce RTX 3070",
+      "vid": "0x10de",
+      "did": "0x2484",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2489",
+      "name": "NVIDIA GeForce RTX 3060 Ti (GA104, Low Hash Rate)",
+      "vid": "0x10de",
+      "did": "0x2489",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2486",
+      "name": "NVIDIA GeForce RTX 3060 Ti (GA104)",
+      "vid": "0x10de",
+      "did": "0x2486",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2414",
+      "name": "NVIDIA GeForce RTX 3060 Ti (GA103)",
+      "vid": "0x10de",
+      "did": "0x2414",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2504",
+      "name": "NVIDIA GeForce RTX 3060 (Low Hash Rate)",
+      "vid": "0x10de",
+      "did": "0x2504",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2544",
+      "name": "NVIDIA GeForce RTX 3060",
+      "vid": "0x10de",
+      "did": "0x2544",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2507",
+      "name": "NVIDIA GeForce RTX 3050",
+      "vid": "0x10de",
+      "did": "0x2507",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1e07",
+      "name": "NVIDIA GeForce RTX 2080 Ti",
+      "vid": "0x10de",
+      "did": "0x1e07",
+      "vram": 11264,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1e87",
+      "name": "NVIDIA GeForce RTX 2080",
+      "vid": "0x10de",
+      "did": "0x1e87",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1f07",
+      "name": "NVIDIA GeForce RTX 2070",
+      "vid": "0x10de",
+      "did": "0x1f07",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1f08",
+      "name": "NVIDIA GeForce RTX 2060",
+      "vid": "0x10de",
+      "did": "0x1f08",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2182",
+      "name": "NVIDIA GeForce GTX 1660 Ti",
+      "vid": "0x10de",
+      "did": "0x2182",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:21c4",
+      "name": "NVIDIA GeForce GTX 1660 SUPER",
+      "vid": "0x10de",
+      "did": "0x21c4",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:2187",
+      "name": "NVIDIA GeForce GTX 1650 SUPER",
+      "vid": "0x10de",
+      "did": "0x2187",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1f82",
+      "name": "NVIDIA GeForce GTX 1650",
+      "vid": "0x10de",
+      "did": "0x1f82",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1d81",
+      "name": "NVIDIA TITAN V",
+      "vid": "0x10de",
+      "did": "0x1d81",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1b00",
+      "name": "NVIDIA TITAN X (Pascal)",
+      "vid": "0x10de",
+      "did": "0x1b00",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1b06",
+      "name": "NVIDIA GeForce GTX 1080 Ti",
+      "vid": "0x10de",
+      "did": "0x1b06",
+      "vram": 11264,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1be0",
+      "name": "NVIDIA GeForce GTX 1080M",
+      "vid": "0x10de",
+      "did": "0x1be0",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1b80",
+      "name": "NVIDIA GeForce GTX 1080",
+      "vid": "0x10de",
+      "did": "0x1b80",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1be1",
+      "name": "NVIDIA GeForce GTX 1070M",
+      "vid": "0x10de",
+      "did": "0x1be1",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1b81",
+      "name": "NVIDIA GeForce GTX 1070",
+      "vid": "0x10de",
+      "did": "0x1b81",
+      "vram": 8192,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1c20",
+      "name": "NVIDIA GeForce GTX 1060M",
+      "vid": "0x10de",
+      "did": "0x1c20",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1c03",
+      "name": "NVIDIA GeForce GTX 1060",
+      "vid": "0x10de",
+      "did": "0x1c03",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1c02",
+      "name": "NVIDIA GeForce GTX 1060 3GB",
+      "vid": "0x10de",
+      "did": "0x1c02",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1c82",
+      "name": "NVIDIA GeForce GTX 1050 Ti",
+      "vid": "0x10de",
+      "did": "0x1c82",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1c81",
+      "name": "NVIDIA GeForce GTX 1050",
+      "vid": "0x10de",
+      "did": "0x1c81",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1d01",
+      "name": "NVIDIA GeForce GT 1030",
+      "vid": "0x10de",
+      "did": "0x1d01",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:17c8",
+      "name": "NVIDIA GeForce GTX 980 Ti",
+      "vid": "0x10de",
+      "did": "0x17c8",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:13c0",
+      "name": "NVIDIA GeForce GTX 980",
+      "vid": "0x10de",
+      "did": "0x13c0",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:13d8",
+      "name": "NVIDIA GeForce GTX 970M",
+      "vid": "0x10de",
+      "did": "0x13d8",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:13c2",
+      "name": "NVIDIA GeForce GTX 970",
+      "vid": "0x10de",
+      "did": "0x13c2",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:139b",
+      "name": "NVIDIA GeForce GTX 960M",
+      "vid": "0x10de",
+      "did": "0x139b",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1401",
+      "name": "NVIDIA GeForce GTX 960",
+      "vid": "0x10de",
+      "did": "0x1401",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:139a",
+      "name": "NVIDIA GeForce GTX 950M",
+      "vid": "0x10de",
+      "did": "0x139a",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1402",
+      "name": "NVIDIA GeForce GTX 950",
+      "vid": "0x10de",
+      "did": "0x1402",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1347",
+      "name": "NVIDIA GeForce 940M",
+      "vid": "0x10de",
+      "did": "0x1347",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1198",
+      "name": "NVIDIA GeForce GTX 880M",
+      "vid": "0x10de",
+      "did": "0x1198",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1199",
+      "name": "NVIDIA GeForce GTX 870M",
+      "vid": "0x10de",
+      "did": "0x1199",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1392",
+      "name": "NVIDIA GeForce GTX 860M",
+      "vid": "0x10de",
+      "did": "0x1392",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1391",
+      "name": "NVIDIA GeForce GTX 850M",
+      "vid": "0x10de",
+      "did": "0x1391",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1344",
+      "name": "NVIDIA GeForce 845M",
+      "vid": "0x10de",
+      "did": "0x1344",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1341",
+      "name": "NVIDIA GeForce 840M",
+      "vid": "0x10de",
+      "did": "0x1341",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1340",
+      "name": "NVIDIA GeForce 830M",
+      "vid": "0x10de",
+      "did": "0x1340",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fed",
+      "name": "NVIDIA GeForce 820M",
+      "vid": "0x10de",
+      "did": "0x0fed",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1001",
+      "name": "NVIDIA GeForce GTX TITAN Z",
+      "vid": "0x10de",
+      "did": "0x1001",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:17c2",
+      "name": "NVIDIA GeForce GTX TITAN X",
+      "vid": "0x10de",
+      "did": "0x17c2",
+      "vram": 12288,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:100c",
+      "name": "NVIDIA GeForce GTX TITAN Black",
+      "vid": "0x10de",
+      "did": "0x100c",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1005",
+      "name": "NVIDIA GeForce GTX TITAN",
+      "vid": "0x10de",
+      "did": "0x1005",
+      "vram": 6144,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:100a",
+      "name": "NVIDIA GeForce GTX 780 Ti",
+      "vid": "0x10de",
+      "did": "0x100a",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:119e",
+      "name": "NVIDIA GeForce GTX 780M",
+      "vid": "0x10de",
+      "did": "0x119e",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1004",
+      "name": "NVIDIA GeForce GTX 780",
+      "vid": "0x10de",
+      "did": "0x1004",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:119d",
+      "name": "NVIDIA GeForce GTX 775M",
+      "vid": "0x10de",
+      "did": "0x119d",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1184",
+      "name": "NVIDIA GeForce GTX 770",
+      "vid": "0x10de",
+      "did": "0x1184",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11e0",
+      "name": "NVIDIA GeForce GTX 770M",
+      "vid": "0x10de",
+      "did": "0x11e0",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11e2",
+      "name": "NVIDIA GeForce GTX 765M",
+      "vid": "0x10de",
+      "did": "0x11e2",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1193",
+      "name": "NVIDIA GeForce GTX 760 Ti",
+      "vid": "0x10de",
+      "did": "0x1193",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1187",
+      "name": "NVIDIA GeForce GTX 760",
+      "vid": "0x10de",
+      "did": "0x1187",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1380",
+      "name": "NVIDIA GeForce GTX 750 Ti",
+      "vid": "0x10de",
+      "did": "0x1380",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1381",
+      "name": "NVIDIA GeForce GTX 750",
+      "vid": "0x10de",
+      "did": "0x1381",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fcd",
+      "name": "NVIDIA GeForce GT 755M",
+      "vid": "0x10de",
+      "did": "0x0fcd",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fe9",
+      "name": "NVIDIA GeForce GT 750M",
+      "vid": "0x10de",
+      "did": "0x0fe9",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1292",
+      "name": "NVIDIA GeForce GT 740M",
+      "vid": "0x10de",
+      "did": "0x1292",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fe1",
+      "name": "NVIDIA GeForce GT 730M",
+      "vid": "0x10de",
+      "did": "0x0fe1",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1287",
+      "name": "NVIDIA GeForce GT 730",
+      "vid": "0x10de",
+      "did": "0x1287",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:128b",
+      "name": "NVIDIA GeForce GT 720",
+      "vid": "0x10de",
+      "did": "0x128b",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1188",
+      "name": "NVIDIA GeForce GTX 690",
+      "vid": "0x10de",
+      "did": "0x1188",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1180",
+      "name": "NVIDIA GeForce GTX 680",
+      "vid": "0x10de",
+      "did": "0x1180",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11a2",
+      "name": "NVIDIA GeForce GTX 675MX",
+      "vid": "0x10de",
+      "did": "0x11a2",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11a7",
+      "name": "NVIDIA GeForce GTX 675MX",
+      "vid": "0x10de",
+      "did": "0x11a7",
+      "vram": 4096,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11a1",
+      "name": "NVIDIA GeForce GTX 670MX",
+      "vid": "0x10de",
+      "did": "0x11a1",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1189",
+      "name": "NVIDIA GeForce GTX 670",
+      "vid": "0x10de",
+      "did": "0x1189",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1183",
+      "name": "NVIDIA GeForce GTX 660 Ti",
+      "vid": "0x10de",
+      "did": "0x1183",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fd4",
+      "name": "NVIDIA GeForce GTX 660M",
+      "vid": "0x10de",
+      "did": "0x0fd4",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11c0",
+      "name": "NVIDIA GeForce GTX 660",
+      "vid": "0x10de",
+      "did": "0x11c0",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:11c6",
+      "name": "NVIDIA GeForce GTX 650 Ti",
+      "vid": "0x10de",
+      "did": "0x11c6",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fc6",
+      "name": "NVIDIA GeForce GTX 650",
+      "vid": "0x10de",
+      "did": "0x0fc6",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fd1",
+      "name": "NVIDIA GeForce GT 650M",
+      "vid": "0x10de",
+      "did": "0x0fd1",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fd2",
+      "name": "NVIDIA GeForce GT 640M",
+      "vid": "0x10de",
+      "did": "0x0fd2",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0fc1",
+      "name": "NVIDIA GeForce GT 640",
+      "vid": "0x10de",
+      "did": "0x0fc1",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0de9",
+      "name": "NVIDIA GeForce GT 630M",
+      "vid": "0x10de",
+      "did": "0x0de9",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0f00",
+      "name": "NVIDIA GeForce GT 630",
+      "vid": "0x10de",
+      "did": "0x0f00",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:104a",
+      "name": "NVIDIA GeForce GT 610",
+      "vid": "0x10de",
+      "did": "0x104a",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1080",
+      "name": "NVIDIA GeForce GTX 580",
+      "vid": "0x10de",
+      "did": "0x1080",
+      "vram": 1536,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1081",
+      "name": "NVIDIA GeForce GTX 570",
+      "vid": "0x10de",
+      "did": "0x1081",
+      "vram": 1280,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1201",
+      "name": "NVIDIA GeForce GTX 560",
+      "vid": "0x10de",
+      "did": "0x1201",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1251",
+      "name": "NVIDIA GeForce GTX 560M",
+      "vid": "0x10de",
+      "did": "0x1251",
+      "vram": 3072,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1200",
+      "name": "NVIDIA GeForce GTX 560 Ti",
+      "vid": "0x10de",
+      "did": "0x1200",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:04b8",
+      "name": "NVIDIA GeForce GT 555M",
+      "vid": "0x10de",
+      "did": "0x04b8",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1244",
+      "name": "NVIDIA GeForce GTX 550 Ti",
+      "vid": "0x10de",
+      "did": "0x1244",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0df4",
+      "name": "NVIDIA GeForce GT 540M",
+      "vid": "0x10de",
+      "did": "0x0df4",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0dec",
+      "name": "NVIDIA GeForce GT 525M",
+      "vid": "0x10de",
+      "did": "0x0dec",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1040",
+      "name": "NVIDIA GeForce GT 520",
+      "vid": "0x10de",
+      "did": "0x1040",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:06c0",
+      "name": "NVIDIA GeForce GTX 480",
+      "vid": "0x10de",
+      "did": "0x06c0",
+      "vram": 1536,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:06cd",
+      "name": "NVIDIA GeForce GTX 470",
+      "vid": "0x10de",
+      "did": "0x06cd",
+      "vram": 1280,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:06c4",
+      "name": "NVIDIA GeForce GTX 465",
+      "vid": "0x10de",
+      "did": "0x06c4",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0dd1",
+      "name": "NVIDIA GeForce GTX 460M",
+      "vid": "0x10de",
+      "did": "0x0dd1",
+      "vram": 1536,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0e22",
+      "name": "NVIDIA GeForce GTX 460",
+      "vid": "0x10de",
+      "did": "0x0e22",
+      "vram": 768,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0dc4",
+      "name": "NVIDIA GeForce GTS 450",
+      "vid": "0x10de",
+      "did": "0x0dc4",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0de0",
+      "name": "NVIDIA GeForce GT 440",
+      "vid": "0x10de",
+      "did": "0x0de0",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0de1",
+      "name": "NVIDIA GeForce GT 430",
+      "vid": "0x10de",
+      "did": "0x0de1",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0df0",
+      "name": "NVIDIA GeForce GT 425M",
+      "vid": "0x10de",
+      "did": "0x0df0",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0de2",
+      "name": "NVIDIA GeForce GT 420",
+      "vid": "0x10de",
+      "did": "0x0de2",
+      "vram": 2048,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:1055",
+      "name": "NVIDIA GeForce 410M",
+      "vid": "0x10de",
+      "did": "0x1055",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0cb0",
+      "name": "NVIDIA GeForce GTS 350M",
+      "vid": "0x10de",
+      "did": "0x0cb0",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0ca0",
+      "name": "NVIDIA GeForce GT 330",
+      "vid": "0x10de",
+      "did": "0x0ca0",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0a35",
+      "name": "NVIDIA GeForce GT 325M",
+      "vid": "0x10de",
+      "did": "0x0a35",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0a2d",
+      "name": "NVIDIA GeForce GT 320M",
+      "vid": "0x10de",
+      "did": "0x0a2d",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:08a3",
+      "name": "NVIDIA GeForce 320M",
+      "vid": "0x10de",
+      "did": "0x08a3",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0a7a",
+      "name": "NVIDIA GeForce 315M",
+      "vid": "0x10de",
+      "did": "0x0a7a",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:05e1",
+      "name": "NVIDIA GeForce GTX 280",
+      "vid": "0x10de",
+      "did": "0x05e1",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:05e6",
+      "name": "NVIDIA GeForce GTX 275",
+      "vid": "0x10de",
+      "did": "0x05e6",
+      "vram": 896,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:05e2",
+      "name": "NVIDIA GeForce GTX 260",
+      "vid": "0x10de",
+      "did": "0x05e2",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0615",
+      "name": "NVIDIA GeForce GTS 250",
+      "vid": "0x10de",
+      "did": "0x0615",
+      "vram": 1024,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0ca3",
+      "name": "NVIDIA GeForce GT 240",
+      "vid": "0x10de",
+      "did": "0x0ca3",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0a20",
+      "name": "NVIDIA GeForce GT 220",
+      "vid": "0x10de",
+      "did": "0x0a20",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0a23",
+      "name": "NVIDIA GeForce 210",
+      "vid": "0x10de",
+      "did": "0x0a23",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0614",
+      "name": "NVIDIA GeForce 9800 GT",
+      "vid": "0x10de",
+      "did": "0x0614",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:064a",
+      "name": "NVIDIA GeForce 9700M GT",
+      "vid": "0x10de",
+      "did": "0x064a",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0622",
+      "name": "NVIDIA GeForce 9600 GT",
+      "vid": "0x10de",
+      "did": "0x0622",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0640",
+      "name": "NVIDIA GeForce 9500 GT",
+      "vid": "0x10de",
+      "did": "0x0640",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:042c",
+      "name": "NVIDIA GeForce 9400 GT",
+      "vid": "0x10de",
+      "did": "0x042c",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0863",
+      "name": "NVIDIA GeForce 9400M",
+      "vid": "0x10de",
+      "did": "0x0863",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:086c",
+      "name": "NVIDIA GeForce 9300",
+      "vid": "0x10de",
+      "did": "0x086c",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:086d",
+      "name": "NVIDIA GeForce 9200",
+      "vid": "0x10de",
+      "did": "0x086d",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0191",
+      "name": "NVIDIA GeForce 8800 GTX",
+      "vid": "0x10de",
+      "did": "0x0191",
+      "vram": 768,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0193",
+      "name": "NVIDIA GeForce 8800 GTS",
+      "vid": "0x10de",
+      "did": "0x0193",
+      "vram": 320,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0407",
+      "name": "NVIDIA GeForce 8600M GT",
+      "vid": "0x10de",
+      "did": "0x0407",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0402",
+      "name": "NVIDIA GeForce 8600 GT",
+      "vid": "0x10de",
+      "did": "0x0402",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0421",
+      "name": "NVIDIA GeForce 8500 GT",
+      "vid": "0x10de",
+      "did": "0x0421",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0404",
+      "name": "NVIDIA GeForce 8400 GS",
+      "vid": "0x10de",
+      "did": "0x0404",
+      "vram": 128,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0423",
+      "name": "NVIDIA GeForce 8300 GS",
+      "vid": "0x10de",
+      "did": "0x0423",
+      "vram": 128,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0849",
+      "name": "NVIDIA GeForce 8200",
+      "vid": "0x10de",
+      "did": "0x0849",
+      "vram": 512,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0092",
+      "name": "NVIDIA GeForce 7800 GT",
+      "vid": "0x10de",
+      "did": "0x0092",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0391",
+      "name": "NVIDIA GeForce 7600 GT",
+      "vid": "0x10de",
+      "did": "0x0391",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:01d8",
+      "name": "NVIDIA GeForce Go 7400",
+      "vid": "0x10de",
+      "did": "0x01d8",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:01d7",
+      "name": "NVIDIA GeForce Go 7300",
+      "vid": "0x10de",
+      "did": "0x01d7",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0041",
+      "name": "NVIDIA GeForce 6800",
+      "vid": "0x10de",
+      "did": "0x0041",
+      "vram": 128,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0140",
+      "name": "NVIDIA GeForce 6600 GT",
+      "vid": "0x10de",
+      "did": "0x0140",
+      "vram": 128,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:014f",
+      "name": "NVIDIA GeForce 6200",
+      "vid": "0x10de",
+      "did": "0x014f",
+      "vram": 64,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0302",
+      "name": "NVIDIA GeForce FX 5800",
+      "vid": "0x10de",
+      "did": "0x0302",
+      "vram": 256,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0312",
+      "name": "NVIDIA GeForce FX 5600",
+      "vid": "0x10de",
+      "did": "0x0312",
+      "vram": 128,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0320",
+      "name": "NVIDIA GeForce FX 5200",
+      "vid": "0x10de",
+      "did": "0x0320",
+      "vram": 64,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0170",
+      "name": "NVIDIA GeForce4 MX 460",
+      "vid": "0x10de",
+      "did": "0x0170",
+      "vram": 64,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0200",
+      "name": "NVIDIA GeForce3",
+      "vid": "0x10de",
+      "did": "0x0200",
+      "vram": 64,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0110",
+      "name": "NVIDIA GeForce2 MX/MX 400",
+      "vid": "0x10de",
+      "did": "0x0110",
+      "vram": 32,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0150",
+      "name": "NVIDIA GeForce2 GTS/GeForce2 Pro",
+      "vid": "0x10de",
+      "did": "0x0150",
+      "vram": 32,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0100",
+      "name": "NVIDIA GeForce 256",
+      "vid": "0x10de",
+      "did": "0x0100",
+      "vram": 32,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0028",
+      "name": "NVIDIA RIVA TNT2/TNT2 Pro",
+      "vid": "0x10de",
+      "did": "0x0028",
+      "vram": 32,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0020",
+      "name": "NVIDIA RIVA TNT",
+      "vid": "0x10de",
+      "did": "0x0020",
+      "vram": 16,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "10de:0018",
+      "name": "NVIDIA RIVA 128",
+      "vid": "0x10de",
+      "did": "0x0018",
+      "vram": 4,
+      "vendor": "nvidia"
+    },
+    {
+      "code": "1002:164e",
+      "name": "AMD Radeon(TM) Graphics",
+      "vid": "0x1002",
+      "did": "0x164e",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:163f",
+      "name": "AMD VANGOGH",
+      "vid": "0x1002",
+      "did": "0x163f",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:73ae",
+      "name": "Radeon Pro V620 VF",
+      "vid": "0x1002",
+      "did": "0x73ae",
+      "vram": 32768,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:73a1",
+      "name": "Radeon Pro V620",
+      "vid": "0x1002",
+      "did": "0x73a1",
+      "vram": 32768,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:73bf",
+      "name": "Radeon RX 6800/6800 XT / 6900 XT",
+      "vid": "0x1002",
+      "did": "0x73bf",
+      "vram": 16384,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:7340",
+      "name": "Radeon RX 5500M",
+      "vid": "0x1002",
+      "did": "0x7340",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:731f",
+      "name": "Radeon RX 5700 / 5700 XT",
+      "vid": "0x1002",
+      "did": "0x731f",
+      "vram": 8192,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:66af",
+      "name": "Radeon RX Vega 20",
+      "vid": "0x1002",
+      "did": "0x66af",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:15dd",
+      "name": "AMD Radeon(TM) Vega 10 Mobile Graphics",
+      "vid": "0x1002",
+      "did": "0x15dd",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:69af",
+      "name": "Radeon Pro Vega 20",
+      "vid": "0x1002",
+      "did": "0x69af",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:687f",
+      "name": "Radeon RX Vega",
+      "vid": "0x1002",
+      "did": "0x687f",
+      "vram": 8192,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:67df",
+      "name": "Radeon (TM) RX 480 Graphics",
+      "vid": "0x1002",
+      "did": "0x67df",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:67ef",
+      "name": "Radeon(TM) RX 460 Graphics",
+      "vid": "0x1002",
+      "did": "0x67ef",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6920",
+      "name": "AMD Radeon R9 M395X",
+      "vid": "0x1002",
+      "did": "0x6920",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6647",
+      "name": "AMD Radeon R9 M380",
+      "vid": "0x1002",
+      "did": "0x6647",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6821",
+      "name": "AMD Radeon R9 M370X",
+      "vid": "0x1002",
+      "did": "0x6821",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:7300",
+      "name": "AMD Radeon (TM) R9 Fury Series",
+      "vid": "0x1002",
+      "did": "0x7300",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:67b0",
+      "name": "AMD Radeon R9 290X",
+      "vid": "0x1002",
+      "did": "0x67b0",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:67b1",
+      "name": "AMD Radeon R9 290",
+      "vid": "0x1002",
+      "did": "0x67b1",
+      "vram": 4096,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6939",
+      "name": "AMD Radeon R9 285",
+      "vid": "0x1002",
+      "did": "0x6939",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:130f",
+      "name": "AMD Radeon(TM) R7 Graphics",
+      "vid": "0x1002",
+      "did": "0x130f",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9830",
+      "name": "AMD Radeon HD 8400 / R3 Series",
+      "vid": "0x1002",
+      "did": "0x9830",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:665c",
+      "name": "AMD Radeon HD 8770",
+      "vid": "0x1002",
+      "did": "0x665c",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6610",
+      "name": "AMD Radeon HD 8670",
+      "vid": "0x1002",
+      "did": "0x6610",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6660",
+      "name": "AMD Radeon HD 8600M Series",
+      "vid": "0x1002",
+      "did": "0x6660",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:679a",
+      "name": "AMD Radeon HD 7900 Series",
+      "vid": "0x1002",
+      "did": "0x679a",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6818",
+      "name": "AMD Radeon HD 7870 Series",
+      "vid": "0x1002",
+      "did": "0x6818",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6819",
+      "name": "AMD Radeon HD 7800 Series",
+      "vid": "0x1002",
+      "did": "0x6819",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:683d",
+      "name": "AMD Radeon HD 7700 Series",
+      "vid": "0x1002",
+      "did": "0x683d",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9901",
+      "name": "AMD Radeon HD 7660D",
+      "vid": "0x1002",
+      "did": "0x9901",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6719",
+      "name": "AMD Radeon HD 6900 Series",
+      "vid": "0x1002",
+      "did": "0x6719",
+      "vram": 2048,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6739",
+      "name": "AMD Radeon HD 6800 Series",
+      "vid": "0x1002",
+      "did": "0x6739",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:68ba",
+      "name": "AMD Radeon HD 6700 Series",
+      "vid": "0x1002",
+      "did": "0x68ba",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6741",
+      "name": "AMD Radeon HD 6600M Series",
+      "vid": "0x1002",
+      "did": "0x6741",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6758",
+      "name": "AMD Radeon HD 6600 Series",
+      "vid": "0x1002",
+      "did": "0x6758",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9640",
+      "name": "AMD Radeon HD 6550D",
+      "vid": "0x1002",
+      "did": "0x9640",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6760",
+      "name": "AMD Radeon HD 6490M",
+      "vid": "0x1002",
+      "did": "0x6760",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9648",
+      "name": "AMD Radeon HD 6480G",
+      "vid": "0x1002",
+      "did": "0x9648",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9644",
+      "name": "AMD Radeon HD 6410D",
+      "vid": "0x1002",
+      "did": "0x9644",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6770",
+      "name": "AMD Radeon HD 6400 Series",
+      "vid": "0x1002",
+      "did": "0x6770",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9803",
+      "name": "AMD Radeon HD 6300 series Graphics",
+      "vid": "0x1002",
+      "did": "0x9803",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:689c",
+      "name": "ATI Radeon HD 5900 Series",
+      "vid": "0x1002",
+      "did": "0x689c",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:6898",
+      "name": "ATI Radeon HD 5800 Series",
+      "vid": "0x1002",
+      "did": "0x6898",
+      "vram": 1024,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:68be",
+      "name": "ATI Radeon HD 5700 Series",
+      "vid": "0x1002",
+      "did": "0x68be",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:68d8",
+      "name": "ATI Radeon HD 5600 Series",
+      "vid": "0x1002",
+      "did": "0x68d8",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:68f9",
+      "name": "ATI Radeon HD 5400 Series",
+      "vid": "0x1002",
+      "did": "0x68f9",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:944c",
+      "name": "ATI Radeon HD 4800 Series",
+      "vid": "0x1002",
+      "did": "0x944c",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:944e",
+      "name": "ATI Radeon HD 4700 Series",
+      "vid": "0x1002",
+      "did": "0x944e",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9495",
+      "name": "ATI Radeon HD 4600 Series",
+      "vid": "0x1002",
+      "did": "0x9495",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:954f",
+      "name": "ATI Radeon HD 4350",
+      "vid": "0x1002",
+      "did": "0x954f",
+      "vram": 256,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9712",
+      "name": "ATI Mobility Radeon HD 4200",
+      "vid": "0x1002",
+      "did": "0x9712",
+      "vram": 256,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9515",
+      "name": "ATI Radeon HD 3850 AGP",
+      "vid": "0x1002",
+      "did": "0x9515",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9620",
+      "name": "ATI Radeon HD 3200 Graphics",
+      "vid": "0x1002",
+      "did": "0x9620",
+      "vram": 128,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9400",
+      "name": "ATI Radeon HD 2900 XT",
+      "vid": "0x1002",
+      "did": "0x9400",
+      "vram": 512,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:9581",
+      "name": "ATI Mobility Radeon HD 2600",
+      "vid": "0x1002",
+      "did": "0x9581",
+      "vram": 256,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:94c7",
+      "name": "ATI Mobility Radeon HD 2350",
+      "vid": "0x1002",
+      "did": "0x94c7",
+      "vram": 256,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:71c2",
+      "name": "ATI Radeon X1600 Series",
+      "vid": "0x1002",
+      "did": "0x71c2",
+      "vram": 128,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:5e4c",
+      "name": "ATI Radeon X700 SE",
+      "vid": "0x1002",
+      "did": "0x5e4c",
+      "vram": 128,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:5955",
+      "name": "ATI RADEON XPRESS 200M Series",
+      "vid": "0x1002",
+      "did": "0x5955",
+      "vram": 64,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:4144",
+      "name": "ATI Radeon 9500",
+      "vid": "0x1002",
+      "did": "0x4144",
+      "vram": 64,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:514c",
+      "name": "ATI RADEON 8500 SERIES",
+      "vid": "0x1002",
+      "did": "0x514c",
+      "vram": 64,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:5144",
+      "name": "ATI RADEON 7200 SERIES",
+      "vid": "0x1002",
+      "did": "0x5144",
+      "vram": 32,
+      "vendor": "amd"
+    },
+    {
+      "code": "1002:5246",
+      "name": "ATI Rage Fury",
+      "vid": "0x1002",
+      "did": "0x5246",
+      "vram": 16,
+      "vendor": "amd"
+    },
+    {
+      "code": "8086:3e91",
+      "name": "Intel(R) UHD Graphics 630",
+      "vid": "0x8086",
+      "did": "0x3e91",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:3e9b",
+      "name": "Intel(R) UHD Graphics 630",
+      "vid": "0x8086",
+      "did": "0x3e9b",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:591b",
+      "name": "Intel(R) HD Graphics 630",
+      "vid": "0x8086",
+      "did": "0x591b",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:5912",
+      "name": "Intel(R) HD Graphics 630",
+      "vid": "0x8086",
+      "did": "0x5912",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:5916",
+      "name": "Intel(R) HD Graphics 620",
+      "vid": "0x8086",
+      "did": "0x5916",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:591e",
+      "name": "Intel(R) HD Graphics 615",
+      "vid": "0x8086",
+      "did": "0x591e",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:3ea0",
+      "name": "Intel(R) UHD Graphics 620",
+      "vid": "0x8086",
+      "did": "0x3ea0",
+      "vram": 3072,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:87c0",
+      "name": "Intel(R) UHD Graphics 617",
+      "vid": "0x8086",
+      "did": "0x87c0",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:193d",
+      "name": "Intel(R) Iris(TM) Pro Graphics P580",
+      "vid": "0x8086",
+      "did": "0x193d",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:193a",
+      "name": "Intel(R) Iris(TM) Pro Graphics P580",
+      "vid": "0x8086",
+      "did": "0x193a",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:193b",
+      "name": "Intel(R) Iris(TM) Pro Graphics 580",
+      "vid": "0x8086",
+      "did": "0x193b",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1932",
+      "name": "Intel(R) Iris(TM) Pro Graphics 580",
+      "vid": "0x8086",
+      "did": "0x1932",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:192d",
+      "name": "Intel(R) Iris(TM) Graphics P555",
+      "vid": "0x8086",
+      "did": "0x192d",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:192b",
+      "name": "Intel(R) Iris(TM) Graphics 555",
+      "vid": "0x8086",
+      "did": "0x192b",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1927",
+      "name": "Intel(R) Iris(TM) Graphics 550",
+      "vid": "0x8086",
+      "did": "0x1927",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1926",
+      "name": "Intel(R) Iris(TM) Graphics 540",
+      "vid": "0x8086",
+      "did": "0x1926",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:191d",
+      "name": "Intel(R) HD Graphics P530",
+      "vid": "0x8086",
+      "did": "0x191d",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:191b",
+      "name": "Intel(R) HD Graphics 530",
+      "vid": "0x8086",
+      "did": "0x191b",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1912",
+      "name": "Intel(R) HD Graphics 530",
+      "vid": "0x8086",
+      "did": "0x1912",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1921",
+      "name": "Intel(R) HD Graphics 520",
+      "vid": "0x8086",
+      "did": "0x1921",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1916",
+      "name": "Intel(R) HD Graphics 520",
+      "vid": "0x8086",
+      "did": "0x1916",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:191e",
+      "name": "Intel(R) HD Graphics 515",
+      "vid": "0x8086",
+      "did": "0x191e",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:190b",
+      "name": "Intel(R) HD Graphics 510",
+      "vid": "0x8086",
+      "did": "0x190b",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1906",
+      "name": "Intel(R) HD Graphics 510",
+      "vid": "0x8086",
+      "did": "0x1906",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1902",
+      "name": "Intel(R) HD Graphics 510",
+      "vid": "0x8086",
+      "did": "0x1902",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:162a",
+      "name": "Intel(R) Iris(TM) Pro Graphics P6300",
+      "vid": "0x8086",
+      "did": "0x162a",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1622",
+      "name": "Intel(R) Iris(TM) Pro Graphics 6200",
+      "vid": "0x8086",
+      "did": "0x1622",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:162b",
+      "name": "Intel(R) Iris(TM) Graphics 6100",
+      "vid": "0x8086",
+      "did": "0x162b",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1626",
+      "name": "Intel(R) HD Graphics 6000",
+      "vid": "0x8086",
+      "did": "0x1626",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1612",
+      "name": "Intel(R) HD Graphics 5600",
+      "vid": "0x8086",
+      "did": "0x1612",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:1616",
+      "name": "Intel(R) HD Graphics 5500",
+      "vid": "0x8086",
+      "did": "0x1616",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:161e",
+      "name": "Intel(R) HD Graphics 5300",
+      "vid": "0x8086",
+      "did": "0x161e",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0c22",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0c22",
+      "vram": 2048,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0d2e",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0d2e",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0d2b",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0d2b",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0d2a",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0d2a",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0d26",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0d26",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0d22",
+      "name": "Intel(R) Iris(TM) Pro Graphics 5200",
+      "vid": "0x8086",
+      "did": "0x0d22",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0a2e",
+      "name": "Intel(R) Iris(TM) Graphics 5100",
+      "vid": "0x8086",
+      "did": "0x0a2e",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0a2b",
+      "name": "Intel(R) Iris(TM) Graphics 5100",
+      "vid": "0x8086",
+      "did": "0x0a2b",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0a2a",
+      "name": "Intel(R) Iris(TM) Graphics 5100",
+      "vid": "0x8086",
+      "did": "0x0a2a",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0a22",
+      "name": "Intel(R) Iris(TM) Graphics 5100",
+      "vid": "0x8086",
+      "did": "0x0a22",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0422",
+      "name": "Intel(R) HD Graphics 5000",
+      "vid": "0x8086",
+      "did": "0x0422",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0a26",
+      "name": "Intel(R) HD Graphics 5000",
+      "vid": "0x8086",
+      "did": "0x0a26",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0416",
+      "name": "Intel(R) HD Graphics 4600",
+      "vid": "0x8086",
+      "did": "0x0416",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0412",
+      "name": "Intel(R) HD Graphics 4600",
+      "vid": "0x8086",
+      "did": "0x0412",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:015a",
+      "name": "Intel(R) HD Graphics Family",
+      "vid": "0x8086",
+      "did": "0x015a",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0166",
+      "name": "Intel(R) HD Graphics 4000",
+      "vid": "0x8086",
+      "did": "0x0166",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0162",
+      "name": "Intel(R) HD Graphics 4000",
+      "vid": "0x8086",
+      "did": "0x0162",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:010a",
+      "name": "Intel(R) HD Graphics Family",
+      "vid": "0x8086",
+      "did": "0x010a",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0126",
+      "name": "Intel(R) HD Graphics 3000",
+      "vid": "0x8086",
+      "did": "0x0126",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0122",
+      "name": "Intel(R) HD Graphics 3000",
+      "vid": "0x8086",
+      "did": "0x0122",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0046",
+      "name": "Intel(R) HD Graphics",
+      "vid": "0x8086",
+      "did": "0x0046",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:0042",
+      "name": "Intel(R) HD Graphics",
+      "vid": "0x8086",
+      "did": "0x0042",
+      "vram": 1536,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2e92",
+      "name": "Intel(R) B43",
+      "vid": "0x8086",
+      "did": "0x2e92",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2e32",
+      "name": "Intel(R) G41",
+      "vid": "0x8086",
+      "did": "0x2e32",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2e12",
+      "name": "Intel(R) Q45/Q43",
+      "vid": "0x8086",
+      "did": "0x2e12",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2e22",
+      "name": "Intel(R) G45/G43",
+      "vid": "0x8086",
+      "did": "0x2e22",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2e02",
+      "name": "Intel(R) Integrated Graphics Device",
+      "vid": "0x8086",
+      "did": "0x2e02",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2a42",
+      "name": "Mobile Intel(R) GM45 Express Chipset Family",
+      "vid": "0x8086",
+      "did": "0x2a42",
+      "vram": 512,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2a12",
+      "name": "Intel(R) 965GME",
+      "vid": "0x8086",
+      "did": "0x2a12",
+      "vram": 128,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2a02",
+      "name": "Mobile Intel(R) 965 Express Chipset Family",
+      "vid": "0x8086",
+      "did": "0x2a02",
+      "vram": 128,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2972",
+      "name": "Intel(R) 946GZ",
+      "vid": "0x8086",
+      "did": "0x2972",
+      "vram": 128,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2982",
+      "name": "Intel(R) 965G",
+      "vid": "0x8086",
+      "did": "0x2982",
+      "vram": 128,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2992",
+      "name": "Intel(R) 965Q",
+      "vid": "0x8086",
+      "did": "0x2992",
+      "vram": 128,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:a011",
+      "name": "Intel(R) IGD",
+      "vid": "0x8086",
+      "did": "0xa011",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:a001",
+      "name": "Intel(R) IGD",
+      "vid": "0x8086",
+      "did": "0xa001",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:29d2",
+      "name": "Intel(R) Q33",
+      "vid": "0x8086",
+      "did": "0x29d2",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:29c2",
+      "name": "Intel(R) G33",
+      "vid": "0x8086",
+      "did": "0x29c2",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:29b2",
+      "name": "Intel(R) Q35",
+      "vid": "0x8086",
+      "did": "0x29b2",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:27ae",
+      "name": "Intel(R) 945GME",
+      "vid": "0x8086",
+      "did": "0x27ae",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:27a2",
+      "name": "Mobile Intel(R) 945GM Express Chipset Family",
+      "vid": "0x8086",
+      "did": "0x27a2",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2772",
+      "name": "Intel(R) 945G",
+      "vid": "0x8086",
+      "did": "0x2772",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2592",
+      "name": "Mobile Intel(R) 915GM/GMS,910GML Express Chipset Family",
+      "vid": "0x8086",
+      "did": "0x2592",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:258a",
+      "name": "Intel(R) E7221G",
+      "vid": "0x8086",
+      "did": "0x258a",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2582",
+      "name": "Intel(R) 82915G/GV/910GL Express Chipset Family",
+      "vid": "0x8086",
+      "did": "0x2582",
+      "vram": 64,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2572",
+      "name": "Intel(R) 82865G Graphics Controller",
+      "vid": "0x8086",
+      "did": "0x2572",
+      "vram": 32,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:2562",
+      "name": "Intel(R) 845G",
+      "vid": "0x8086",
+      "did": "0x2562",
+      "vram": 32,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:3582",
+      "name": "Intel(R) 82852/82855 GM/GME Graphics Controller",
+      "vid": "0x8086",
+      "did": "0x3582",
+      "vram": 32,
+      "vendor": "intel"
+    },
+    {
+      "code": "8086:3577",
+      "name": "Intel(R) 82830M Graphics Controller",
+      "vid": "0x8086",
+      "did": "0x3577",
+      "vram": 32,
+      "vendor": "intel"
+    },
+    {
+      "code": "15ad:0405",
+      "name": "VMware SVGA 3D (Microsoft Corporation - WDDM)",
+      "vid": "0x15ad",
+      "did": "0x0405",
+      "vram": 1024,
+      "vendor": "vmware"
+    },
+    {
+      "code": "1af4:1010",
+      "name": "Red Hat VirtIO GPU",
+      "vid": "0x1af4",
+      "did": "0x1010",
+      "vram": 1024,
+      "vendor": "redhat"
+    }
+  ]
+}

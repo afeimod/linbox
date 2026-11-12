@@ -1,0 +1,520 @@
+name: Build LinBox Bionic Rootfs (X11)
+
+# ============================================================================
+# LinBox (com.linbox) bionic rootfs 一键构建
+# 基于仓库内 bionic-rootfs/ 构建系统（NDK 交叉编译，Bionic/libc）：
+#   - 显示协议：X11（termux-x11 / libXlorie），已去除全部 weston/wayland
+#   - 包含完整 X11 客户端库栈 + mesa(GLX/EGL over X11) + hangover-wine(--with-x)
+#   - rootfs 前缀：/data/data/com.linbox/files/rootfs/usr
+#   - X11 socket：/data/data/com.linbox/files/usr/tmp/.X11-unix/X1（显示号 :1）
+#
+# 用法：仓库 → Actions → "Build LinBox Bionic Rootfs (X11)" → Run workflow
+# 前提：本 workflow 依赖仓库根目录下的 bionic-rootfs/ 构建系统，
+#       请先将 LinBox-bionic-rootfs.zip 中的 bionic-rootfs/ 目录提交到仓库根。
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "目标架构"
+        required: true
+        type: choice
+        default: "aarch64"
+        options:
+          - aarch64
+          - x86_64
+          - all
+      build_target:
+        description: "构建目标（all=全部包，或单个包名如 mesa）"
+        required: false
+        type: string
+        default: "all"
+      make_release:
+        description: "构建成功后创建 GitHub Release"
+        required: true
+        type: boolean
+        default: true
+
+# 取消同一分支上正在进行的旧构建
+concurrency:
+  group: bionic-rootfs-${{ github.ref }}-${{ github.event.inputs.arch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Bionic Rootfs (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        # 输入 all 时展开为双架构矩阵
+        arch: ${{ fromJSON(github.event.inputs.arch == 'all' && '["aarch64", "x86_64"]' || format('["{0}"]', github.event.inputs.arch)) }}
+
+    steps:
+      # ============ 1. 检出代码 ============
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 检查构建系统
+        run: |
+          if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/build-rootfs-arch.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/build-rootfs-arch.sh！"
+            echo "请将 LinBox-bionic-rootfs.zip 中的 bionic-rootfs/ 目录提交到仓库根目录后再运行。"
+            exit 1
+          fi
+          echo "构建系统就绪"
+
+      # ============ 2. 释放磁盘空间 ============
+      - name: 释放 Runner 磁盘空间
+        run: |
+          echo "清理前可用空间:"
+          df -h / | tail -1
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/lib/jvm/temurin-8-jdk-amd64 /usr/lib/jvm/temurin-11-jdk-amd64 \
+            "${HOME}/.cache" 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          echo "清理后可用空间:"
+          df -h / | tail -1
+
+      # ============ 3. 安装宿主依赖 ============
+      - name: 安装宿主依赖（host-deps.sh，含新版 meson/ninja）
+        run: |
+          sudo -E bash "${GITHUB_WORKSPACE}/bionic-rootfs/host-deps.sh"
+          echo "=== 工具版本 ==="
+          meson --version
+          ninja --version
+          cmake --version | head -1
+          ccache --version | head -1
+          pkg-config --version
+          python3 --version
+
+      # ============ 4. 准备 rootfs 前缀目录 ============
+      # build-rootfs-arch.sh 每完成一个包都会 tar -xvf <pkg>.tar -C /
+      # 将其安装进绝对前缀 /data/data/com.linbox/files/rootfs/usr，
+      # 因此需提前创建并把属主交给 runner 用户（构建全程免 sudo）。
+      - name: 准备 LinBox rootfs 前缀目录
+        run: |
+          sudo mkdir -p /data/data/com.linbox/files/rootfs/usr \
+                        /data/data/com.linbox/files/rootfs/home \
+                        /data/data/com.linbox/files/rootfs/tmp/.X11-unix \
+                        /data/data/com.linbox/files/usr/tmp/.X11-unix
+          sudo chown -R "$(whoami):$(whoami)" /data
+          echo "前缀目录就绪:"
+          ls -ld /data/data/com.linbox/files/rootfs/*
+
+      # ============ 5. 还原缓存（NDK / ccache） ============
+      - name: 缓存 NDK
+        uses: actions/cache@v4
+        with:
+          path: bionic-rootfs/ndk
+          key: linbox-ndk-r29-v1
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            bionic-rootfs/bionic_ccache
+            bionic-rootfs/host_ccache
+          key: linbox-bionic-ccache-${{ matrix.arch }}-${{ github.event.inputs.build_target }}-v1
+          restore-keys: |
+            linbox-bionic-ccache-${{ matrix.arch }}-v1
+            linbox-bionic-ccache-v1
+
+      # ============ 6. 构建 ============
+      - name: 构建所有包（${{ matrix.arch }}）
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}/bionic-rootfs"
+          chmod +x *.sh
+          set -o pipefail
+          ./build-rootfs-arch.sh --arch "${{ matrix.arch }}" \
+            --build "${{ github.event.inputs.build_target || 'all' }}" \
+            2>&1 | tee "build-${{ matrix.arch }}.log"
+
+      # ============ 6.5 失败自诊断（把日志尾部直接打进步骤输出） ============
+      - name: 失败时输出日志尾部
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          LOG="${GITHUB_WORKSPACE}/bionic-rootfs/build-${{ matrix.arch }}.log"
+          if [[ -f "$LOG" ]]; then
+            echo "::error::rootfs 构建失败！以下是日志最后 150 行（完整日志见 artifact）"
+            tail -n 150 "$LOG"
+          else
+            echo "::error::rootfs 构建失败且未生成日志文件"
+          fi
+          echo "=== 磁盘/内存状态 ==="
+          df -h / | tail -2
+          free -h
+
+      # ============ 7. 组装并校验 rootfs ============
+      - name: 组装 rootfs（make-rootfs.sh）
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}/bionic-rootfs"
+
+          # 组装前清理：以下目录在组装阶段均已无用（make-rootfs 只从 pkgs/
+          # 解包，不读构建期前缀），全部释放给解压与打包：
+          #   - src/：620 个包的源码树（10GB+）
+          #   - /tmp/download-src、/tmp/ndk*：下载缓存
+          #   - /tmp/build-*：DESTDIR 打包暂存
+          #   - /data/data/com.linbox/files/rootfs：构建期实装前缀（3.5GB+）
+          # NDK 与 ccache 不动（Post 阶段单独回存缓存）。
+          echo "=== 清理构建残留，释放磁盘 ==="
+          echo "清理前: $(df -h / | awk 'NR==2{print $4" 可用"}')"
+          rm -rf "${GITHUB_WORKSPACE}/bionic-rootfs/src" \
+                 "${GITHUB_WORKSPACE}/bionic-rootfs/tmp" \
+                 /tmp/download-src /tmp/ndk.zip /tmp/ndk-tmp \
+                 /tmp/build-aarch64 /tmp/build-x86_64 \
+                 /data/data/com.linbox/files/rootfs 2>/dev/null || true
+          echo "清理后: $(df -h / | awk 'NR==2{print $4" 可用"}')"
+          echo "pkgs 体积: $(du -sh pkgs 2>/dev/null | cut -f1 || echo 未知)"
+
+          # bash 直接调用（不依赖执行位）；tee 留档；失败时给出完整诊断
+          set +e
+          bash make-rootfs.sh --export "/tmp/linbox-rootfs" --arch "${{ matrix.arch }}" 2>&1 | tee /tmp/make-rootfs-run.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::make-rootfs.sh 组装失败 (exit $rc)——完整输出见下方与诊断 artifact"
+            tail -50 /tmp/make-rootfs-run.log || true
+            {
+              echo "=== df ==="; df -h / /tmp
+              echo "=== pkgs du ==="; du -sh pkgs
+              echo "=== pkgs 列表 ==="; ls -lh pkgs | head -90
+              echo "=== make-rootfs 日志尾部 ==="; tail -60 /tmp/make-rootfs-run.log
+            } > /tmp/linbox-diag.txt 2>&1
+            cat /tmp/linbox-diag.txt
+            exit "$rc"
+          fi
+
+          # 运行时目录 + 主目录
+          mkdir -p /tmp/linbox-rootfs/data/data/com.linbox/files/rootfs/tmp/.X11-unix
+          mkdir -p /tmp/linbox-rootfs/data/data/com.linbox/files/rootfs/home
+
+          # ============ 关键产物校验 ============
+          # 注意：-L 允许"符号链接本身存在"的项（如 xkeyboard-config 的
+          # share/X11/xkb 是指向 share/xkeyboard-config-2 的链接）；
+          # make-rootfs.sh 已把绝对链接改写为相对链接，正常都会走 -e 分支。
+          RFS=/tmp/linbox-rootfs/data/data/com.linbox/files/rootfs/usr
+          echo "=== 关键文件校验 ==="
+          MISS=0
+          MISS_LIST=""
+          check() {
+            if [[ -e "$1" || -L "$1" ]]; then echo "  [OK] $1"; else
+              echo "  [MISS] $1"; MISS=1; MISS_LIST+="$1"$'\n'
+            fi
+          }
+          check "$RFS/lib/libc++_shared.so"
+          check "$RFS/lib/libX11.so.6"
+          check "$RFS/lib/libX11-xcb.so.1"
+          check "$RFS/lib/libxcb.so.1"
+          check "$RFS/lib/libXext.so.6"
+          check "$RFS/lib/libXrender.so.1"
+          check "$RFS/lib/libXfixes.so.3"
+          check "$RFS/lib/libXrandr.so.2"
+          check "$RFS/lib/libXi.so.6"
+          check "$RFS/lib/libXcursor.so.1"
+          check "$RFS/lib/libXinerama.so.1"
+          check "$RFS/lib/libXcomposite.so.1"
+          check "$RFS/lib/libXxf86vm.so.1"
+          check "$RFS/lib/libxkbcommon.so.0"
+          check "$RFS/lib/libxkbcommon-x11.so.0"
+          check "$RFS/lib/libxshmfence.so.1"
+          check "$RFS/lib/libGL.so.1"
+          check "$RFS/lib/libEGL.so.1"
+          check "$RFS/lib/libgbm.so.1"
+          check "$RFS/lib/libvulkan.so.1"
+          # ---- 音频栈（v3.1.2 新增强制校验）----
+          # wine 10/11 的音频驱动 winepulse/winealsa 是纯 unixlib：wine 侧
+          # dlopen winepulse.so → DT_NEEDED libpulse.so.0（rootfs 本库）→ 经
+          # PULSE_SERVER 连 rootfs pulseaudio 守护（module-sles-sink 直连
+          # Android OpenSLES 出声）。旧版 rootfs 缺以下任一项 → 设备上
+          # winecfg 音频页无设备、游戏无声，且 App 原生链路没有 4713
+          # 服务端可兜底（那是终端时代 linbox-x11 脚本的产物）——必须
+          # 在构建期就拦下来。注意 --lite 模式不删运行库/守护/模块，
+          # 这些校验对 lite 导出同样成立。
+          check "$RFS/bin/pulseaudio"
+          check "$RFS/lib/libpulse.so.0"
+          check "$RFS/lib/libasound.so.2"
+          # 文件名注意：pulseaudio 上游所有运行时模块均无 "lib" 前缀
+          # （meson shared_module + name_prefix:''），安装产物就是
+          # module-sles-sink.so / module-null-sink.so 这样的名字；
+          # 守护进程加载时 lt_dlopenext 直接按 <moduledir>/<模块名>.so
+          # 查找（pulsecore/module.c 的 pa_module_exists 同样不带 lib 前缀）。
+          # v3.1.2 曾误写成 libmodule-sles-sink.so，导致校验永远 MISS ——
+          # rootfs 本身是完好的，纯属误报。
+          check "$RFS/lib/pulseaudio/modules/module-sles-sink.so"
+          check "$RFS/etc/pulse/default.pa"
+          if [[ -f "$RFS/etc/pulse/default.pa" ]] && \
+             ! grep -q "module-sles-sink" "$RFS/etc/pulse/default.pa"; then
+            echo "  [MISS] default.pa 未启用 module-sles-sink（OpenSLES 输出模块，缺失则守护无声）"
+            MISS=1
+            MISS_LIST+="$RFS/etc/pulse/default.pa (module-sles-sink)"$'\n'
+          fi
+          # ---- GStreamer 运行时（wine winegstreamer 后端依赖；此前
+          #      rootfs 缺 usr/lib/gstreamer-1.0 目录导致 wine 无编解码）----
+          check "$RFS/lib/libgstreamer-1.0.so"
+          check "$RFS/lib/libgstgl-1.0.so"
+          check "$RFS/lib/gstreamer-1.0/libgstcoreelements.so"
+          check "$RFS/libexec/gstreamer-1.0/gst-plugin-scanner"
+          # ---- libdrm amdgpu（wine 10+ amd_ags_x64 硬依赖 amdgpu.h/
+          #      libdrm_amdgpu.so，缺失则 wine make 阶段必炸）----
+          check "$RFS/include/libdrm/amdgpu.h"
+          check "$RFS/lib/libdrm_amdgpu.so.1"
+          # ---- 语言数据（locale-archive，此前缺失）----
+          check "$RFS/lib/locale/locale-archive"
+          # ---- 系统字体（此前缺失，fontconfig 无字可配）----
+          check "$RFS/share/fonts/dejavu/DejaVuSans.ttf"
+          check "$RFS/share/fonts/noto/NotoSansSC.ttf"
+          check "$RFS/share/X11/xkb"
+          check "$RFS/etc/hosts"
+          check "$RFS/bin/linbox-container"
+          check "$RFS/bin/linbox-wine"
+          check "$RFS/etc/linbox/container.conf"
+          if [[ "${{ matrix.arch }}" == "aarch64" ]]; then
+            check "$RFS/opt/bin/wine"
+            check "$RFS/opt/lib/wine"
+            check "$RFS/local/bin/box64"
+            # box64 PATH 入口链接（v3.3.1）：profile 只把 $prefix/bin 放进
+            # PATH，usr/bin/box64 → ../local/bin/box64 —— 终端直接敲
+            # box64 / linbox-wine 的 find_box64 第二探测位均命中该链接
+            check "$RFS/bin/box64"
+            # box64 上游 ANDROID 模式配套（v3.3.0）：被仿真 x86_64 程序的
+            # C++ 标准库 + 系统级调优 rc —— 产物完整集，缺一不可
+            check "$RFS/lib/box64-x86_64-linux-gnu/libc++_shared.so"
+            check "$RFS/etc/box64.box64rc"
+            # FEX/box64 仿真器 DLL（v3.1.4，hangover-wine 配方 pre_package
+            # 自动注入）：arm64ec 形态跑 x86_64/i386 Windows 程序的仿真核心，
+            # 缺它们前缀能建但任何 x86_64/i386 程序必挂
+            check "$RFS/opt/lib/wine/aarch64-windows/libarm64ecfex.dll"
+            check "$RFS/opt/lib/wine/aarch64-windows/libwow64fex.dll"
+            check "$RFS/opt/lib/wine/aarch64-windows/wowbox64.dll"
+            # Mesa DRI 驱动（aarch64: zink + freedreno msm/kgsl + softpipe swrast）
+            check "$RFS/lib/dri/zink_dri.so"
+            check "$RFS/lib/dri/kgsl_dri.so"
+            check "$RFS/lib/dri/msm_dri.so"
+            check "$RFS/lib/dri/swrast_dri.so"
+            # box64 仿真执行 glibc x86_64 程序（含 wine unix 侧）所需的
+            # x86_64 运行库（glibc-x86_64 配方安装，仿真侧非宿主侧）
+            check "$RFS/lib/x86_64-linux-gnu/libc.so.6"
+            check "$RFS/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+            check "$RFS/lib/x86_64-linux-gnu/libstdc++.so.6"
+            # aarch64 glibc 运行层（glibc-aarch64 配方，v3.3.1）：私有
+            # 加载器 ld-linux-aarch64.so.1 + libc.so.6 等 —— rootfs 内
+            # glibc 链接的 aarch64 二进制与 glibc 形态 box64
+            # （build-box64.yml 产物，PT_INTERP 指向该加载器）的运行层；
+            # lib/ld-linux-aarch64.so.1 为 Ubuntu usrmerge 同款便捷链接。
+            # 注意：这是【兼容目录】，bionic 加载器（linker64）永不搜索
+            # aarch64-linux-gnu 目录，与 rootfs 自身 bionic 库零串扰
+            check "$RFS/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+            check "$RFS/lib/aarch64-linux-gnu/libc.so.6"
+            check "$RFS/lib/ld-linux-aarch64.so.1"
+            # PT_INTERP 硬校验（v3.3.0）：rootfs 内置的 box64 本体是
+            # NDK bionic 链接，解释器必须是 /system/bin/linker64 ——
+            # 出现 ld-linux-aarch64.so.1 即说明 box64 本体又混入了
+            # glibc 方案（v3.2.5 废弃形态，设备上连 box64 都起不来），
+            # 直接判失败。aarch64-linux-gnu 目录是配套运行层，
+            # 与 box64 本体的形态校验互不冲突
+            _b64_interp="$(readelf -l "$RFS/local/bin/box64" 2>/dev/null \
+              | sed -n 's/.*Requesting program interpreter: \(.*\)\]/\1/p' | head -n 1)"
+            if [[ "$_b64_interp" == *ld-linux* ]]; then
+              echo "  [MISS] box64 PT_INTERP 为 glibc 加载器（$_b64_interp）—— rootfs 内置 box64 本体应回 NDK bionic 构建！"
+              MISS=1
+              MISS_LIST+="$RFS/local/bin/box64 (glibc 形态，应回 NDK bionic 构建)"$'\n'
+            elif [[ "$_b64_interp" != "/system/bin/linker64" ]]; then
+              echo "  [MISS] box64 PT_INTERP 非 bionic 形态（实际: ${_b64_interp:-无 PT_INTERP}，期望 /system/bin/linker64）"
+              MISS=1
+              MISS_LIST+="$RFS/local/bin/box64 (PT_INTERP 非 bionic)"$'\n'
+            else
+              echo "  [OK] box64 PT_INTERP => $_b64_interp（bionic）"
+            fi
+            # ld-linux-aarch64.so.1 架构硬校验：防索引解析拉错架构的包
+            _ld_machine="$(readelf -h "$RFS/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" 2>/dev/null \
+              | awk '/^ *Machine:/{print $2; exit}')"
+            if [[ "$_ld_machine" == "AArch64" ]]; then
+              echo "  [OK] ld-linux-aarch64.so.1 为 aarch64 ELF"
+            else
+              echo "  [MISS] ld-linux-aarch64.so.1 非 aarch64 ELF（Machine: ${_ld_machine:-未知}）"
+              MISS=1
+              MISS_LIST+="$RFS/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 (非 aarch64 ELF)"$'\n'
+            fi
+            # wine 自带 NLS/字体（locale.nls 为 wine 启动必需）
+            check "$RFS/opt/share/wine/nls/locale.nls"
+            check "$RFS/opt/share/wine/fonts/tahoma.ttf"
+          else
+            check "$RFS/opt/wine/bin/wine"
+            check "$RFS/opt/wine/lib/wine/x86_64-windows/kernel32.dll"
+            check "$RFS/lib/dri/swrast_dri.so"
+            check "$RFS/opt/wine/share/wine/nls/locale.nls"
+            check "$RFS/opt/wine/share/wine/fonts/tahoma.ttf"
+          fi
+          if [[ "$MISS" != "0" ]]; then
+            # 把缺失明细与实际目录内容写入诊断文件（failure-diag artifact 会上传），
+            # 避免只报错却看不出缺什么
+            {
+              echo "=== rootfs 缺失的关键文件 ==="
+              printf '%s' "$MISS_LIST"
+              echo "=== usr/lib 实际内容（前 80 项）==="
+              ls -lh "$RFS/lib" 2>/dev/null | head -80 || true
+              echo "=== pulseaudio 模块目录实际内容 ==="
+              ls -l "$RFS/lib/pulseaudio/modules" 2>/dev/null || true
+              echo "=== share/X11 实际内容 ==="
+              ls -l "$RFS/share/X11" 2>/dev/null || true
+              echo "=== bin / etc/linbox 实际内容 ==="
+              ls -l "$RFS/bin/linbox-container" "$RFS/bin/linbox-wine" \
+                   "$RFS/etc/linbox/container.conf" 2>/dev/null || true
+            } > /tmp/linbox-diag.txt 2>&1 || true
+            echo "::error::rootfs 缺少关键文件！缺失明细已写入 failure-diag artifact"
+            printf '%s' "$MISS_LIST"
+            exit 1
+          fi
+
+          # ============ weston/wayland 清除校验 ============
+          # 注意：find -print -quit 找到即停（不用 find|grep -q：grep -q 提前
+          # 关闭管道会让 find 收到 SIGPIPE，在 pipefail 下把 "找到" 误判为
+          # "未找到"，属于隐蔽的假阴性）。
+          echo "=== wayland 残留校验（应全部 NOT FOUND）==="
+          for f in libwayland-client.so libwayland-server.so libwayland-egl.so \
+                   libwayland-cursor.so bin/weston; do
+            hit="$(find /tmp/linbox-rootfs -name "$(basename "$f")*" -print -quit 2>/dev/null || true)"
+            if [[ -n "$hit" ]]; then
+              echo "  [FOUND] $f  <-- 不应存在！($hit)"; FAIL_WL=1
+            else
+              echo "  [NOT FOUND] $f"
+            fi
+          done
+          if [[ "${FAIL_WL:-0}" == "1" ]]; then
+            echo "::error::rootfs 存在 wayland 残留文件！（明细见上方 [FOUND] 行）"
+            exit 1
+          fi
+
+          echo "=== rootfs 概览 ==="
+          du -sh /tmp/linbox-rootfs
+          (ls /tmp/linbox-rootfs/data/data/com.linbox/files/rootfs/usr/lib | head -40) || true
+
+      # ============ 8. 打包 ============
+      - name: 打包 rootfs
+        shell: bash
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          echo "BUILD_DATE=${BUILD_DATE}" >> $GITHUB_ENV
+          PACKAGE_NAME="linbox-bionic-rootfs-${BUILD_DATE}-${{ matrix.arch }}"
+          echo "打包前可用空间: $(df -h / | awk 'NR==2{print $4}')"
+          cd /tmp
+          set +e
+          tar -czf "${GITHUB_WORKSPACE}/${PACKAGE_NAME}.tar.gz" -C /tmp/linbox-rootfs .
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::rootfs tar.gz 打包失败（exit $rc，多半是磁盘空间不足）"
+            df -h / | tail -2
+            exit 1
+          fi
+          cd "${GITHUB_WORKSPACE}"
+          sha256sum "${PACKAGE_NAME}.tar.gz" > checksums-${{ matrix.arch }}.txt
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+          echo "=== 打包完成 ==="
+          ls -lh "${PACKAGE_NAME}.tar.gz" checksums-${{ matrix.arch }}.txt
+
+      # ============ 8.5 失败诊断存档（组装/打包失败时自动上传） ============
+      - name: 上传失败诊断
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: failure-diag-${{ matrix.arch }}
+          path: |
+            /tmp/make-rootfs-run.log
+            /tmp/linbox-diag.txt
+          if-no-files-found: ignore
+          compression-level: 9
+
+      # ============ 9. 上传构建日志 ============
+      - name: 上传构建日志
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: build-log-${{ matrix.arch }}
+          path: bionic-rootfs/build-${{ matrix.arch }}.log
+          compression-level: 9
+          if-no-files-found: ignore
+
+      # ============ 10. 上传 rootfs 产物 ============
+      - name: 上传 rootfs 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-${{ matrix.arch }}.txt
+
+      # ============ 11. 发布 Release ============
+      - name: 创建 Release
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bionic-rootfs-${{ env.BUILD_DATE }}-${{ matrix.arch }}
+          name: LinBox Bionic Rootfs ${{ env.BUILD_DATE }} (${{ matrix.arch }})
+          body: |
+            **LinBox Bionic Rootfs (X11)** — `${{ matrix.arch }}`
+
+            基于 Android NDK r29 交叉编译的 Bionic rootfs，供 LinBox（com.linbox）使用。
+
+            ## 构建信息
+            - **架构**: ${{ matrix.arch }}
+            - **NDK**: r29（API 28）
+            - **显示协议**: X11（termux-x11 / libXlorie），无 weston/wayland
+            - **Mesa**: 26.2.1（platforms=x11, glx=dri；aarch64 附带 freedreno 硬件加速）
+            - **Wine**: hangover 11.16（--with-x，完整 X11 驱动）
+            - **构建日期**: ${{ env.BUILD_DATE }}
+
+            ## 运行时布局
+            解压到 LinBox 的 `files/` 目录后得到：
+            ```
+            /data/data/com.linbox/files/rootfs/usr    # ${prefix}（bionic 系统）
+            /data/data/com.linbox/files/rootfs/home   # 用户主目录
+            ```
+
+            ## X11 说明
+            - X 服务由 LinBox 内置（libXlorie / termux-x11），socket 位于
+              `/data/data/com.linbox/files/usr/tmp/.X11-unix/X1`（默认显示号 `:1`），
+              rootfs 内 X 客户端已补丁对齐该路径，直接 `DISPLAY=:1` 即可连接
+            - rootfs 自带完整 X11 客户端库（libX11/libxcb/全套 Xext 扩展）
+              + Mesa GLX/EGL + Vulkan（XCB/XLIB WSI）
+
+            ## box64 完整文件集（aarch64）
+            - `usr/local/bin/box64`（bionic 形态，PT_INTERP=/system/bin/linker64）
+              + `usr/bin/box64` PATH 入口链接
+            - `usr/lib/box64-x86_64-linux-gnu/libc++_shared.so`（上游 ANDROID
+              配套）+ `usr/etc/box64.box64rc`
+            - `usr/lib/aarch64-linux-gnu/`（`ld-linux-aarch64.so.1` 私有加载器
+              + aarch64 glibc 运行库，glibc 形态 box64 / glibc 二进制运行层）
+            - `usr/lib/x86_64-linux-gnu/`（被仿真 x86_64 程序的 glibc 运行库）
+
+            ## 文件
+            - `linbox-bionic-rootfs-*.tar.gz` — 完整 rootfs
+            - `checksums-*.txt` — SHA256 校验
+          files: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-${{ matrix.arch }}.txt
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ============ 12. 总结 ============
+      - name: 构建总结
+        run: |
+          echo "=== LinBox Bionic Rootfs (X11) 构建完成 ==="
+          echo "架构: ${{ matrix.arch }}"
+          echo "产物: ${{ env.PACKAGE_NAME }}.tar.gz"
+          echo "前缀: /data/data/com.linbox/files/rootfs/usr"
+          echo "显示: X11 (termux-x11, DISPLAY=:1)"

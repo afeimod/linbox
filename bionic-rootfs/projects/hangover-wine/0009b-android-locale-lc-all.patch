@@ -1,0 +1,47 @@
+# linbox: Android bionic 下 wine 界面语言恒英文的根治（LC_ALL 直读）
+#   —— hangover-wine（arm64ec 形态）v3.3.7 补齐版
+#
+# 【为什么 arm64ec 需要单独一份】projects/wine/0009（x86_64 形态）自
+#   v3.3.2 起就有本修复，但 hangover-wine 配方（arm64ec 原生执行形态）
+#   一直没带 —— 用户实测（v3.3.6）：x86_64 wine 中文正常、arm64ec wine
+#   "丢失了中文环境"。根因同 0009 注释：bionic setlocale 恒返回
+#   "C.UTF-8"（bionic 只内置 C/POSIX/C.UTF-8）→ unix_to_win_locale
+#   把 "C.UTF-8" 解析成 win_name="C" → locale.nls 查表失败 →
+#   user_lcid/system_lcid 落空回落英语 → wine 界面英文 + ACP=1252
+#   （游戏内中文路径/文件名按 ANSI 代码页转换全部乱码）。
+#
+# 【修法】与 projects/wine/0009 完全同源（unix_to_win_locale 函数区段
+#   在 9.2~11.16 各代上游/hangover 树逐字一致，本机对 wine-9.2 /
+#   wine-10.10 / hangover-11.16 三棵源码树均验证干净应用）：
+#   __ANDROID__ 分支直接读环境变量 LC_ALL 参与 win locale 解析 ——
+#   LC_ALL=zh_CN.UTF-8 → "zh-CN" → LCID 0x0804 → PE 资源中文 + ACP=936。
+#   App 侧语言链（容器 lang= → LANG/LC_ALL，默认简体中文）从此在
+#   arm64ec 形态同样生效。
+#
+# 【生效标记】WARN 格式串内嵌 "LinBox-locale-lc-all"（env.c 已含
+#   wine/debug.h + WINE_DEFAULT_DEBUG_CHANNEL(environ)，WARN 宏把
+#   格式串无条件编进 ntdll.so）—— App 侧 WinePatchDetector grep
+#   该串判断 arm64ec wine 包是否含本补丁，未含则明确提示重装。
+diff -uNr a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -713,9 +713,19 @@ static BOOL unix_to_win_locale( const char *unix_name, char *win_name )
+ {
+     static const char sep[] = "_.@";
+     const char *extra = NULL;
++#ifdef __ANDROID__
++    const char *env_locale = getenv( "LC_ALL" );
++#endif
+     char buffer[LOCALE_NAME_MAX_LENGTH];
+     char *p, *country = NULL, *modifier = NULL;
+ 
++#ifdef __ANDROID__
++    if (env_locale && env_locale[0])
++    {
++        WARN( "LinBox-locale-lc-all: using LC_ALL=%s to override bionic setlocale\n", env_locale );
++        unix_name = env_locale;
++    }
++#endif
+     if (!unix_name || !unix_name[0] || !strcmp( unix_name, "C" ))
+     {
+         unix_name = getenv( "LC_ALL" );

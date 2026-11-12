@@ -1,0 +1,31 @@
+--- a/tools/winegcc/winegcc.c
++++ b/tools/winegcc/winegcc.c
+@@ -293,11 +293,28 @@
+     ret = strarray_fromstring( path, " " );
+     if (!strncmp( llvm_base, "clang", 5 ))
+     {
+         if (opts->target_alias)
+         {
++            const char* linbox_target = NULL;
++            /* LINBOX: wine <=9.x build_tool_name() 传给 NDK clang 的
++             * -target 是 configure 推导的 unix 三元组（如
++             * aarch64-linux-android，无 API level）。NDK 编译器要求带
++             * API level 的完整 android 三元组，缺 level 时按最低支持级
++             * 别解析甚至直接拒绝。与 9998（add_clang_options 形态，wine
++             * 10+/hangover-11 树）同款变换：android 目标补 "24"，arm 32
++             * 位归一 armv7a 前缀。非 android 目标原样透传。 */
++            if (strstr(opts->target_alias, "android")) {
++                if (strstr(opts->target_alias, "arm")) {
++                    linbox_target = strmake( "%s24", "armv7a-linux-androideabi" );
++                } else {
++                    linbox_target = strmake( "%s24", opts->target_alias );
++                }
++            } else {
++                linbox_target = strmake( "%s", opts->target_alias );
++            }
+             strarray_add( &ret, "-target" );
+-            strarray_add( &ret, opts->target_alias );
++            strarray_add( &ret, linbox_target );
+         }
+         strarray_add( &ret, "-Wno-unused-command-line-argument" );
+         strarray_add( &ret, "-fuse-ld=lld" );

@@ -1,0 +1,51 @@
+# linbox: Android bionic 下 wine 界面语言恒英文的根治（LC_ALL 直读）v3.3.2
+#
+# 【根因】（wine-9.2 源码 + 用户设备实测：LANG/LC_ALL=zh_CN.UTF-8 依旧英文）
+#   ntdll/unix/env.c init_locale() 依赖 libc setlocale：
+#     setlocale( LC_ALL, "" ) → bionic 只内置 C/POSIX/C.UTF-8，
+#     "zh_CN.UTF-8" 不被识别 → setlocale(LC_CTYPE,NULL) 返回 "C"
+#     → unix_to_win_locale("C") 得 win_name="C"（带 '.' 的 "C.UTF-8"
+#     更糟：charset 剥离后剩 "C"，不走 POSIX/C→en-US 分支）
+#     → locale.nls 查表失败 → system_lcid/user_lcid 落空
+#     → 回落 MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT)
+#     → wine 界面英文 + ACP=1252（中文路径/文件名乱码的源头之一）。
+#   glibc 构建的参考环境（startwine.sh）setlocale 成功返回 zh_CN.UTF-8
+#   故正常 —— bionic rootfs 没有 locale 数据，App 端设什么都没用。
+#
+# 【修法】（用户提供的 wine 10.5 修改树同款写法，对 9.2~11.x official /
+#   proton / hangover 树通用 —— unix_to_win_locale 函数区段各代一致）：
+#   unix_to_win_locale() 开头加 __ANDROID__ 分支：环境变量 LC_ALL 非空时
+#   直接作为 unix locale 名参与解析，绕过 bionic 失效的 setlocale ——
+#   LC_ALL=zh_CN.UTF-8 → "zh-CN" → locale.nls → LCID 0x0804 →
+#   PE 资源中文 + ACP=936。App 侧语言链（/opt/locale.conf → LANG/LC_ALL）
+#   从此真正生效。
+#
+# v3.3.7：补丁生效标记 —— WARN 里带 "LinBox-locale-lc-all" 字面量
+#   （env.c 已 include wine/debug.h + WINE_DEFAULT_DEBUG_CHANNEL(environ)，
+#   WARN 宏无条件把格式串编进 ntdll.so，运行期才按调试级别过滤）——
+#   App 侧 WinePatchDetector 靠 grep 这个串判断 wine 包是否含本补丁，
+#   未打补丁的 arm64ec 包（v3.3.6 前构建）据此给出明确重装指引。
+diff --git a/dlls/ntdll/unix/env.c b/dlls/ntdll/unix/env.c
+index 7193cce..bf7cfba 100644
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -713,9 +713,19 @@ static BOOL unix_to_win_locale( const char *unix_name, char *win_name )
+ {
+     static const char sep[] = "_.@";
+     const char *extra = NULL;
++#ifdef __ANDROID__
++    const char *env_locale = getenv( "LC_ALL" );
++#endif
+     char buffer[LOCALE_NAME_MAX_LENGTH];
+     char *p, *country = NULL, *modifier = NULL;
+ 
++#ifdef __ANDROID__
++    if (env_locale && env_locale[0])
++    {
++        WARN( "LinBox-locale-lc-all: using LC_ALL=%s to override bionic setlocale\n", env_locale );
++        unix_name = env_locale;
++    }
++#endif
+     if (!unix_name || !unix_name[0] || !strcmp( unix_name, "C" ))
+     {
+         unix_name = getenv( "LC_ALL" );

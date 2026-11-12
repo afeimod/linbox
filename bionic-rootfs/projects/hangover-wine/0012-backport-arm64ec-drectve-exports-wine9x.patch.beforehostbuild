@@ -1,0 +1,102 @@
+# linbox: wine ≤9.x arm64ec PE 链接炸点根治（v3.2.24，用户问题 4）
+#
+# 【根因】CI official-9.7 arm64ec 实测（wine-build-log-arm64ec）：
+#     lld-link: error: undefined symbol: __wine_stub_ADsDeleteClassDefinition
+#                (EC symbol)
+#     >>> referenced by tmp6af059a7/adsldpc-00000000.spec.o:(.edata)
+#     make: *** [dlls/adsldpc/aarch64-windows/adsldpc.dll] Error 2
+#   （advapi32 等每个 DLL 同款报错，arm64ec PE 全线阵亡）
+#
+#   wine 9.7 的 winebuild（tools/winebuild/spec32.c output_exports）对
+#   ARM64EC 仍走经典 .edata 导出表路径：表项引用 __wine_stub_* / 导出
+#   函数符号的**普通形态**；而 output_stubs（import.c）对 CPU_ARM64EC
+#   用 arm64_name()（"#sym" 前缀）把 stub 定义为 **EC 符号** —— 新版
+#   lld-link（llvm-mingw 20251202+，本配方硬性要求的新工具链）对
+#   .edata 表内引用一律按 EC 符号解析，普通定义无法满足 → 所有 DLL
+#   报 "undefined symbol ... (EC symbol)"。
+#
+# 【修法】原样回填上游 wine-10.0 的官方修复（spec32.c output_exports）：
+#   ARM64EC 目标不再自建 .edata 导出表，改向 .drectve 段输出
+#       -export:<name>=<symbol>,@<ordinal>[,NONAME][,DATA]
+#   链接指令，由 lld-link 生成导出表 + x86_64 thunk + EC 元数据 ——
+#   与 wine 10/11（hangover-11.16 已实证可构建）完全同源机制。代码块
+#   逐字取自 wine-10.0 spec32.c（注释行注明回填来源）。
+#
+# 【互斥】wine 10+ / hangover-11 树已自带该分支 —— hunk 上下文不匹配
+#   （arm64ec 分支已存在）→ patch --forward 失败 → 框架按既有容错
+#   告警跳过，零影响。wine 9.2 树 output_exports 首段与 9.7 相同
+#   （无 arm64ec 分支），同样可应用。
+#
+# 【验证】本补丁由 wine-9.7 官方 tarball 的 spec32.c 程序化生成并
+#   patch --dry-run 实测命中；wine-10.0 tarball dry-run 不命中
+#   （自带分支，符合互斥预期）。
+#
+# 注意：必须作为 .beforehostbuild 补丁（本文件后缀即保证）——
+# winebuild 是【宿主工具】，wine-tools-build 的 make __tooldeps__ 阶段
+# 就要用补丁后的 spec32.c 编译；主补丁循环（*.patch）晚于宿主构建。
+--- a/tools/winebuild/spec32.c	2026-11-04 02:56:16.101302772 +0000
++++ b/tools/winebuild/spec32.c	2026-11-04 02:56:16.102302775 +0000
+@@ -406,16 +406,63 @@
+     int needs_imports = 0;
+     int needs_relay = has_relays( exports );
+     int nr_exports = get_exports_count( exports );
+     const char *func_ptr = is_pe() ? ".rva" : get_asm_ptr_keyword();
+     const char *name;
+ 
+     if (!nr_exports) return;
+ 
++    /* ARM64EC exports are more tricky than other targets. For functions implemented in ARM64EC,
++     * linker generates x86_64 thunk and relevant metadata. Use .drectve section to pass export
++     * directives to the linker. (linbox: verbatim backport of the upstream wine-10.0 winebuild
++     * fix for wine <= 9.x trees: the classic .edata table references plain symbols while stubs
++     * are defined as EC symbols ("#name"), and newer lld-link resolves .edata entries as EC
++     * symbols only -> "undefined symbol __wine_stub_* (EC symbol)" on every arm64ec dll.) */
++    if (target.cpu == CPU_ARM64EC)
++    {
++        output( "\t.section .drectve\n" );
++        for (i = exports->base; i <= exports->limit; i++)
++        {
++            ORDDEF *odp = exports->ordinals[i];
++            const char *symbol;
++
++            if (!odp) continue;
++
++            switch (odp->type)
++            {
++            case TYPE_EXTERN:
++            case TYPE_STDCALL:
++            case TYPE_VARARGS:
++            case TYPE_CDECL:
++                if (odp->flags & FLAG_FORWARD)
++                    symbol = odp->link_name;
++                else if (odp->flags & FLAG_EXT_LINK)
++                    symbol = strmake( "%s_%s", asm_name("__wine_spec_ext_link"), odp->link_name );
++                else
++                    symbol = asm_name( get_link_name( odp ));
++                break;
++            case TYPE_STUB:
++                symbol = asm_name( get_stub_name( odp, spec ));
++                break;
++            default:
++                assert( 0 );
++            }
++
++            output( "\t.ascii \" -export:%s=%s,@%u%s%s\"\n",
++                    odp->name ? odp->name : strmake( "_noname%u", i ),
++                    symbol, i,
++                    odp->name ? "" : ",NONAME",
++                    odp->type == TYPE_EXTERN ? ",DATA" : "" );
++        }
++        return;
++    }
++
++
++
+     output( "\n/* export table */\n\n" );
+     output( "\t%s\n", get_asm_export_section() );
+     output( "\t.balign 4\n" );
+     output( ".L__wine_spec_exports:\n" );
+ 
+     /* export directory header */
+ 
+     output( "\t.long 0\n" );                       /* Characteristics */

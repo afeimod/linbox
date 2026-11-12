@@ -1,0 +1,75 @@
+# linbox: wine-9.7 arm64ec PE 构建炸点修复集（v3.2.10）
+# 
+# 【根因】CI official-9.7 arm64ec 实测（v3.2.9 日志）：主 make 首批 EC 编译趟
+# 于 dlls/crtdll/arm64ec-windows/string.o 阵亡：
+#     dlls/msvcrt/string.c:3056:12: error: call to undeclared function 'sse2_memmove'
+# wine-9.6/9.7 给 memmove 新增 SSE2 快路径：调用点守卫是独立的
+#     #ifdef __x86_64__
+# 0007（9.2 锚点）只覆盖 2789 行的（定义段）总守卫——EC 趟下定义段已被
+# EC 排除，但 3055 行调用点守卫漏网：__x86_64__ 在 llvm-mingw arm64ec 下
+# 为真 → 调用未声明函数 → 2 errors。（上游 wine-10 已把两处守卫统一为
+#     #if defined(__x86_64__) && !defined(__arm64ec__)
+# 本补丁即该上游修法的 9.7 回填。）
+# 
+# rpcrt4/cstub.c：vtbl_thunks 的 x64 THUNK_ENTRY 裸汇编（movq/jmp *offset
+# + .byte 0xff,0xa0 链）在 EC 编译趟必炸（同 0007 根因）；上游 wine-10 起
+# 整段重写为纯 C（fill_delegated_proxy_table），旧树无法整背——EC 趟改走
+# 空桩分支（与上游 #else 不支持架构的兜底同款；delegating stubs 为老式
+# NDR 委派代理路径，aarch64 之外本就无实际用户）。
+# 
+# 【互斥】0007c 锚点均为 wine-9.7 形态：上游 wine-10/11（含 proton_10.0、
+# hangover-11.16）的 string.c 已自带 EC 排除、cstub.c 已重写 → hunk 全不
+# 命中 → 静默跳过；wine-9.2 无 sse2_memmove 快路径（cstub 修法同样有益）。
+# 
+# 【验证】本地 wine-9.7 原始树 patch --dry-run 全 hunk 命中；9.7+0007 顺序
+# 应用后 0007c 独立命中（互不抢占锚点）。
+--- a/dlls/msvcrt/string.c
++++ b/dlls/msvcrt/string.c
+@@ -3049,13 +3049,13 @@
+ # define MERGE(w1, sh1, w2, sh2) ((w1 << sh1) | (w2 >> sh2))
+ #else
+ # define MERGE(w1, sh1, w2, sh2) ((w1 >> sh1) | (w2 << sh2))
+ #endif
+ void * __cdecl memmove(void *dst, const void *src, size_t n)
+ {
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+     return sse2_memmove(dst, src, n);
+ #else
+     unsigned char *d = dst;
+     const unsigned char *s = src;
+     int sh1;
+ 
+--- a/dlls/rpcrt4/cstub.c
++++ b/dlls/rpcrt4/cstub.c
+@@ -132,22 +132,29 @@
+     "mov 0x10(%eax),%eax\n\t" \
+     "mov %eax,4(%esp)\n\t" \
+     "mov (%eax),%eax\n\t" \
+     ".byte 0xff,0xa0\n\t" /* jmp *offset(%eax) */ \
+     ".long 4*("#num")\n\t"
+ 
+-#elif defined(__x86_64__)
++#elif defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ #define THUNK_ENTRY_SIZE 16
+ #define THUNK_ENTRY(num) \
+     ".balign 4\n\t" \
+     "movq 0x20(%rcx),%rcx\n\t" \
+     "movq (%rcx),%rax\n\t" \
+     ".byte 0xff,0xa0\n\t" /* jmp *offset(%rax) */ \
+     ".long 8*("#num")\n\t"
+ 
++#elif defined(__arm64ec__)
++/* linbox: arm64ec 编译趟禁用 x64 thunk 裸汇编（EC clang 不认 x86 指令，
++ * 上游 wine-10 已整段重写为纯 C；旧树 EC 只求可编译，空桩与上游对不支持
++ * 架构的 #else 兜底同款，delegating stubs 在 EC 无实际用户） */
++#define THUNK_ENTRY_SIZE 0
++#define THUNK_ENTRY(num) ""
++
+ #elif defined(__arm__)
+ 
+ #define THUNK_ENTRY_SIZE 12
+ #define THUNK_ENTRY(num) \
+     ".balign 4\n\t" \
+     "ldr r0, [r0, #0x10]\n\t" \

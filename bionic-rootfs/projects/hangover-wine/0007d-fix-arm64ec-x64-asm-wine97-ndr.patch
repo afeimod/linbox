@@ -1,0 +1,48 @@
+# linbox: wine-9.7 ndr_stubless.c call_server_func EC 排除（v3.2.11）
+#
+# 【根因】CI official-9.7 arm64ec 实测（日志 wine-build-log-arm64ec (6).zip）：
+# 主 make 于 dlls/rpcrt4/arm64ec-windows/ndr_stubless.o 阵亡 ——
+#     <inline asm>:10:8: error: invalid operand  "pushq %rbp"
+#     <inline asm>:11:2: error: unknown directive  ".seh_pushreg %rbp"
+#     ...（pushq/movq/cmpq/cmovgq 连片 20 errors）
+# wine-9.7 的 ndr_stubless.c 已被上游重构：NdrClientCall2/NdrAsyncClientCall/
+# NdrClientCall3/Ndr64AsyncClientCall 四处入口均自带 __arm64ec__ naked 分支
+# （先于 __x86_64__ 分支，EC 编译趟不激活 x64 汇编，0007 的 4 个 9.2 锚点
+# hunk 全部失配属预期良性）；唯 call_server_func 仍只有 i386/x86_64/arm/
+# aarch64 四分支 —— llvm-mingw arm64ec 目标同时预定义 __x86_64__ 与
+# __arm64ec__（不定义 __aarch64__）→ x64 AT&T 汇编在 EC 趟激活 → ARM64
+# 代码生成器不认即炸。
+#
+# 【修复】x86_64 分支追加 && !defined __arm64ec__（0007 对 wine-9.2 的同款
+# 手法）。EC 趟实际落点是链尾 #else 的 #warning C 存根 —— v3.2.12 实测
+# 更正：clang 21 的 arm64ec 目标【不定义 __aarch64__】（AArch64Targets.cpp
+# getTargetDefines：EC 定义 __x86_64__/__amd64__/__arm64ec__，__aarch64__
+# 仅非 EC 目标定义；0007 头注的记载才是对的），call_server_func 的
+# __aarch64__ 分支与 assign_args（守卫 #if defined(__aarch64__)||
+# defined(__arm__)，EC 下均假）在 EC 趟都不可见。C 存根编译通过（#warning
+# 非 error），代价是 RPC 无 ThunkTable 的服务端分发在 EC 形态暂返 0 ——
+# wine-9.x EC 本为实验形态，上游 wine-10 起该段迁入 thunks.c 且整文件
+# #pragma makedep arm64ec_x64（x64 汇编走专用 x64 趟产出 ARM64X 混合
+# 镜像），9.7 的 makedep 无此机制，不可移植，编译优先。
+#
+# 【互斥】锚点为 wine-9.7 形态（4 参签名含 const NDR_PROC_HEADER_EXTS *ext）：
+#   * wine-9.2：3 参签名（无 ext）→ 本 hunk 不命中，0007 hunk 2 命中
+#     （顺序 0007c → 0007d → 0007，互不抢占）；
+#   * proton_10.0 / wine-10+ / hangover-11.16：call_server_func 汇编已迁
+#     thunks.c（ndr_stubless.c 仅剩 extern 声明）→ 不命中，静默跳过；
+#   * hangover-11.16：同上。
+#
+# 【验证】本地 wine-9.7 源（wine-mirror wine-9.7 tag）逐行核对 + 模拟
+# patch 全 hunk 命中；0007 后续应用不冲突（其 5 个 9.2 锚点 hunk 在 9.7
+# 树全失配 —— 官方 CI 日志实证 5 out of 5 FAILED，落 .rej 属预期）。
+--- a/dlls/rpcrt4/ndr_stubless.c
++++ b/dlls/rpcrt4/ndr_stubless.c
+@@ -1164,7 +1164,7 @@
+     __ASM_CFI(".cfi_def_cfa %esp,4\n\t")
+     __ASM_CFI(".cfi_same_value %ebp\n\t")
+     "ret" )
+-#elif defined __x86_64__
++#elif defined __x86_64__ && !defined __arm64ec__
+ LONG_PTR __cdecl call_server_func(SERVER_ROUTINE func, unsigned char * args, unsigned int stack_size,
+                                   const NDR_PROC_HEADER_EXTS *ext);
+ __ASM_GLOBAL_FUNC( call_server_func,

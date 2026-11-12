@@ -1,0 +1,32 @@
+# linbox: wine 9.x 树 noexec 回退补丁（x86_64 形态）—— brunodev85 winlator
+#   wine-9.2-custom 同款：EPERM 分支对共享映射的硬失败整块移除，
+#   一切 noexec 失败落入 wine 自带的匿名 mmap + pread + mprotect 回退
+#   （匿名页加执行位不受 noexec 限制，本机内核实验验证）。
+#   wine 9.2 的失败链（用户设备日志实证）：游戏 DEP-off →
+#   force_exec_prot 把所有可读映射强加执行位 → 只读 SECTION 映射
+#   （MAP_SHARED）在 noexec 上 mmap EPERM → 硬失败
+#   STATUS_ACCESS_DENIED → "Could not load required media"。
+#
+# v3.3.7：WARN 行内嵌 "LinBox-noexec-fallback" 生效标记 ——
+#   App 侧 WinePatchDetector grep ntdll.so 判断 wine 包是否含本补丁。
+diff -uNr a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2103,12 +2103,11 @@
+             break;
+         case EACCES:
+         case EPERM:  /* noexec filesystem, fall back to read() */
+-            if (flags & MAP_SHARED)
+-            {
+-                if (prot & PROT_EXEC) ERR( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
+-                return STATUS_ACCESS_DENIED;
+-            }
+-            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
++            /* LinBox: no hard-fail for shared mappings (identical to the fix
++             * brunodev85 ships in winlator's wine-9.2-custom) - fall through
++             * to the anonymous mmap + pread + mprotect fallback below, which
++             * works on noexec mounts and keeps the data fully accessible. */
++            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem? [LinBox-noexec-fallback]\n" );
+             break;
+         default:
+             ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",

@@ -1,0 +1,575 @@
+name: LinBox Bionic Box64 (aarch64)
+
+# ============================================================
+# 构建面向 LinBox bionic rootfs 的 Box64（aarch64 / NDK bionic 链接）
+# ------------------------------------------------------------
+# 与 rootfsbc 体系同链：NDK r29 clang（api=28）+
+# android.toolchain.cmake，上游 -DANDROID=ON 模式
+# （BAD_SIGNAL 自动开、内建 wrappedandroidshmem、Release 限 -O1）。
+# 产物为 bionic ELF（PT_INTERP=/system/bin/linker64），与 rootfs
+# 内 wine / mesa / pulseaudio 等二进制运行形态完全一致。
+#
+# 历史：v3.2.4~v3.2.5 的 glibc 交叉构建（WINLATOR_GLIBC +
+# patchelf 钉 rootfs 私有加载器 ld-linux-aarch64.so.1）与 bionic
+# rootfs 不相容（设备上连 box64 自身都起不来），已连配方一并
+# 废弃。v3.2.4 报废的直接根因是 CMake ASM 探测命中 NDK 里仅支持
+# x86 的 yasm（"unrecognized object format unwind-tables"），
+# 现由配方 pre_setup 显式钉死 ASM=NDK clang 根治。
+#
+# 【完整文件集】box64 配方 deps 挂了 glibc-aarch64 / glibc-x86_64
+# 两个运行时配套层（构建系统按拓扑序先产出），`--build box64`
+# 一次到位，产物不再只有单个 box64 执行文件：
+#   usr/local/bin/box64                              仿真器本体（bionic）
+#   usr/bin/box64 → ../local/bin/box64               PATH 入口链接
+#   usr/lib/box64-x86_64-linux-gnu/libc++_shared.so  x86_64 C++ 库（上游 ANDROID 配套）
+#   usr/etc/box64.box64rc                            系统级调优开关
+#   usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1  aarch64 glibc 运行层
+#     （+ usr/lib/ld-linux-aarch64.so.1 便捷链接；libc.so.6 等）
+#     —— glibc 形态 box64（build-box64.yml 产物）与 rootfs 内
+#     glibc 链接的 aarch64 二进制的私有加载器/运行库
+#   usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2    被仿真 x86_64 程序
+#     （+ libc.so.6 / libstdc++.so.6 等）            的 glibc 运行库
+#
+# 产物：linbox-box64-<ver>-aarch64-bionic.tar.gz（上述完整安装集）。
+# 设备安装：解包至 /（data/data/com.linbox/... 布局自动就位），
+# linbox-container 自动从 /usr/local/bin/box64 探测。
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      box64_ref:
+        description: 'Box64 版本（分支 / 标签，如 v0.4.4 / master）'
+        required: false
+        default: 'v0.4.4'
+        type: string
+      make_release:
+        description: '构建成功后创建 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: bionic-box64-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-box64:
+    name: Bionic Box64 (aarch64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      # ============ 1. 检出代码 ============
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 检查构建系统
+        run: |
+          if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/build-rootfs-arch.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/build-rootfs-arch.sh！"
+            exit 1
+          fi
+          # box64 配方 deps 挂了 glibc-aarch64 / glibc-x86_64 两个运行时
+          # 配套层（ld-linux-aarch64.so.1 私有加载器 + 被仿真程序的
+          # x86_64 glibc 运行库），三个配方缺一即构建不完整
+          for _pj in box64 glibc-aarch64 glibc-x86_64; do
+            if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/projects/${_pj}/build.sh" ]]; then
+              echo "::error::未找到 bionic-rootfs/projects/${_pj}/ 配方（box64 完整文件集的组成部分）！"
+              exit 1
+            fi
+          done
+          echo "构建系统与 box64 完整文件集配方（box64 + glibc-aarch64 + glibc-x86_64）就绪"
+
+      # ============ 2. 宿主依赖 ============
+      # 只装通用构建工具：box64 走 NDK clang，宿主不需要
+      # aarch64 glibc 交叉工具链，也不需要 patchelf
+      - name: 安装宿主依赖（host-deps.sh）
+        run: |
+          sudo -E bash "${GITHUB_WORKSPACE}/bionic-rootfs/host-deps.sh"
+          cmake --version | head -1
+          ccache --version | head -1
+
+      # ============ 3. 前缀目录 ============
+      - name: 准备 LinBox rootfs 前缀目录
+        run: |
+          sudo mkdir -p /data/data/com.linbox/files/rootfs/usr \
+                        /data/data/com.linbox/files/rootfs/home
+          sudo chown -R "$(whoami):$(whoami)" /data
+
+      # ============ 4. 缓存 ============
+      # 与 build-bionic-rootfs 共用同一 NDK 缓存键（r29）
+      - name: 缓存 NDK
+        uses: actions/cache@v4
+        with:
+          path: bionic-rootfs/ndk
+          key: linbox-ndk-r29-v1
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: bionic-rootfs/bionic_ccache
+          key: linbox-bionic-ccache-aarch64-box64-v2
+          restore-keys: |
+            linbox-bionic-ccache-aarch64-v2
+            linbox-bionic-ccache-aarch64-v1
+
+      # ============ 5. 构建 box64（含 deps 配套层） ============
+      # 构建系统自动下载/复用 NDK；配方按 LINBOX_BOX64_REF 检出
+      # 指定版本，NDK 补丁状态变化时自动重打。deps 声明使构建系统
+      # 按拓扑序先产出 glibc-aarch64（ld-linux-aarch64.so.1 私有
+      # 加载器 + aarch64 glibc 运行库）与 glibc-x86_64（被仿真程序
+      # 的 x86_64 glibc 运行库）两个配套层，再产出 box64 本体 ——
+      # "--build box64" 即完整文件集，无需 --build all
+      - name: 构建 Box64 aarch64（NDK bionic，含双 glibc 运行层）
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}/bionic-rootfs"
+          chmod +x *.sh
+          set -o pipefail
+          export LINBOX_BOX64_REF="${{ github.event.inputs.box64_ref }}"
+          ./build-rootfs-arch.sh --arch aarch64 \
+            --build box64 2>&1 | tee build-box64-aarch64.log
+
+      # ============ 5.5 失败自诊断 ============
+      - name: 失败时输出日志尾部
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          LOG="${GITHUB_WORKSPACE}/bionic-rootfs/build-box64-aarch64.log"
+          if [[ -f "$LOG" ]]; then
+            echo "::error::box64 构建失败！以下是日志最后 150 行（完整日志见 artifact）"
+            tail -n 150 "$LOG"
+          else
+            echo "::error::box64 构建失败且未生成日志文件"
+          fi
+          echo "=== 磁盘/内存状态 ==="
+          df -h / | tail -2
+          free -h
+
+      # ============ 5.7 源码级冒烟测试（同源 x86_64 宿主构建 + 实跑） ============
+      # v3.2.13（用户反馈"bionic box64 启动时没有任何日志，构建根本不对，
+      # 冒烟测试估计就不对"）：原校验（步骤 6）全部是静态检查（ELF 头/
+      # PT_INTERP/文件存在），一个"能链接出来"的坏产物照样全绿 —— 冒烟
+      # 名不副实。本步骤用【同一份源码】在 runner 上做一次原生 x86_64 构建
+      # 并真实执行：
+      #   1) ./box64 --version 端到端跑通 main → initialize → 退出路径；
+      #   2) 编译一个最小 x86_64 测试程序，经 box64 实跑断言输出 ——
+      #      验证 ELF 加载器 + wrapper 生成 + 执行引擎整条链路可用。
+      # 该测试不覆盖 Android 特有面（NDK/bionic），但能把"源码级/生成级
+      # 的根本性破坏"（上游坏提交、wrapper 生成逻辑变更等）挡在 CI ——
+      # 配方 install() 里的三道 ANDROID 专项冒烟（v3.2.15 修正：shm
+      # 包装编译单元在链/DYNAREC 符号/NOLOADADDR）与之互补。
+      - name: 源码级冒烟测试（宿主 x86_64 构建并实跑）
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOX64_REF="${{ github.event.inputs.box64_ref }}"
+          SMOKE_SRC="$(mktemp -d)/box64"
+
+          echo "=== 冒烟[取源]: git clone ${BOX64_REF}（独立树，不与 aarch64 构建树互相污染 wrapper） ==="
+          git clone --depth 1 --branch "${BOX64_REF}" https://github.com/ptitSeb/box64.git "${SMOKE_SRC}"
+
+          # v3.2.19 修复：冒烟树必须先打补丁再构建 —— 与 aarch64 交付
+          # 构建同源（冒烟树与交付树不同源，测了个寂寞）。
+          #
+          # v3.3.36 修复（用户："bionic box64-0.3.8 还是构建报错"，而
+          # build-box64-aarch64.log 全绿）：失败点在本步，不在交付构建。
+          # v3.3.34 补丁体系重构把 elfparser.c 的 ANDROID RELR 修复从
+          # 0001 拆分到 0002（v0.4.2+）/0003（v0.3.2..v0.4.1）/0004
+          # （elfparser32.c），本步却仍只打 0001、且用 "0001 命中" 作为
+          # RELR 断言的门：
+          #   * v0.3.8：0001 默认 fuzz 命中（交付日志"fuzz=默认 测试通过"）
+          #     → RELR 断言被激活 → 冒烟树没有 0003 的 elfparser 修复 →
+          #     打包 R_X86_64_RELATIVE 静默跳过 → relr_ok() 解引用链期
+          #     裸指针直接 SIGSEGV（本仓沙箱完整复现：Signal 11）；
+          #   * v0.4.4 同理冒烟树无 0002 —— 本步自 v3.3.34 起对全部 ref
+          #     回归，并非 0.3.8 特有；
+          #   * 尾部"冒烟[补丁在源]"还 grep 0001 里的 6fffe000 —— 拆分后
+          #     该值只在 0002/0003，双保险全炸。
+          # 修复：冒烟树与交付构建 custom_patch() 完全同策略逐补丁门禁
+          # （0001 保留默认 fuzz，其余 --fuzz=0 严格匹配，各自独立成立/
+          # 跳过），断言按落地的补丁组分别激活：0001 → 静态 shm 断言；
+          # 0002/0003 → RELR 断言。0001 未命中 / 0002+0003 全未命中均按
+          # 交付构建同判硬失败（那样的 ref 交付构建也过不了，早失败早诊断）。
+          # 沙箱实测：v0.3.8 树 0001+0003+0004 落位后宿主 x86_64 构建，
+          # LINBOX_SMOKE_OK（动态+静态）与 LINBOX_RELR_OK 全绿。
+          echo "=== 冒烟[打补丁]: 与交付构建 custom_patch 同策略逐补丁门禁（0001 默认 fuzz / 其余 --fuzz=0） ==="
+          SMOKE_0001=0
+          SMOKE_RELR=0
+          SMOKE_PATCHDIR="${GITHUB_WORKSPACE}/bionic-rootfs/projects/box64"
+          [[ -f "${SMOKE_PATCHDIR}/0001-linbox-android-shmem-native.patch" ]] \
+            || { echo "::error::交付树缺失 0001 补丁（前置检查失败）"; exit 1; }
+          for _p in "${SMOKE_PATCHDIR}"/[0-9][0-9][0-9][0-9]-*.patch; do
+            [[ -f "${_p}" ]] || continue
+            _b="$(basename "${_p}")"
+            # fuzz 策略与交付构建 custom_patch() 一字不差：0001 的 CMake
+            # clang-gate / core.c SetRDX hunk 依赖 fuzz 跨版本落位；
+            # 其余（RELR 布局孪生 0002/0003/0004、static-exit/clang-gate
+            # 孪生 0005/0006/0007）fuzz=0 严格锚点、按源码布局自选择。
+            case "${_b}" in
+              0001-*) _fm="" ;;
+              *)      _fm="--fuzz=0" ;;
+            esac
+            if patch -d "${SMOKE_SRC}" -p1 ${_fm} --dry-run < "${_p}" >/dev/null 2>&1; then
+              patch -d "${SMOKE_SRC}" -p1 -N --no-backup-if-mismatch ${_fm} < "${_p}"
+              case "${_b}" in
+                0001-*)        SMOKE_0001=1 ;;
+                0002-*|0003-*) SMOKE_RELR=1 ;;
+              esac
+              echo "  [OK] 冒烟树已打 ${_b}"
+            else
+              echo "  [--] ${_b} 不适用于 ${BOX64_REF}（按设计跳过，与交付构建 custom_patch 同语义）"
+            fi
+          done
+          # 与交付构建同款硬保障：0001（shm/static-exit）任何 v0.3.2+ 树
+          # 都应命中；elfparser.c RELR 孪生 0002/0003 必中其一 —— 缺失
+          # 说明源码树异常漂移（那样的 ref 交付构建同样过不了）。
+          [[ "${SMOKE_0001}" == "1" ]] \
+            || { echo "::error::核心补丁 0001 未命中 ${BOX64_REF} —— 任何 v0.3.2+ 树都应命中（交付构建同判），请核查源码树形态"; exit 1; }
+          [[ "${SMOKE_RELR}" == "1" ]] \
+            || { echo "::error::elfparser.c 的 Android RELR 补丁（0002/0003）一个都没命中 ${BOX64_REF} —— bionic wine 将因 DT_ANDROID_RELR 跳过而 SIGSEGV（交付构建同判），请核查源码树形态"; exit 1; }
+
+          echo "=== 冒烟[宿主构建]: cmake 原生 x86_64（-DARM_DYNAREC=OFF：ARM dynarec 生成的是 aarch64 汇编，x86_64 汇编器必炸（mrs ctr_el0/dc cvau/ic ivau/isb sy 均为 aarch64 专属指令），只有 aarch64 宿主才可开；冒烟只验源码级编译链接与实跑链路，CI=ON 走提交版 wrapper） ==="
+          SMOKEDIR="${SMOKE_SRC}/build"
+          cmake -S "${SMOKE_SRC}" -B "${SMOKEDIR}" \
+            -DCMAKE_BUILD_TYPE=Release -DARM_DYNAREC=OFF -DCI=ON \
+            > /dev/null
+          cmake --build "${SMOKEDIR}" -j"$(nproc)" > /dev/null
+          SMOKE_BIN="${SMOKEDIR}/box64"
+          [[ -x "${SMOKE_BIN}" ]] || { echo "::error::宿主构建未产出 box64"; exit 1; }
+
+          echo "=== 冒烟[版本]: box64 --version ==="
+          VERSION_OUT="$("${SMOKE_BIN}" --version 2>&1 || true)"
+          echo "${VERSION_OUT}"
+          echo "${VERSION_OUT}" | grep -qi "box64" \
+            || { echo "::error::box64 --version 无有效输出 —— 源码级损坏，禁止放行 aarch64 产物"; exit 1; }
+
+          echo "=== 冒烟[实跑]: 最小 x86_64 测试程序经 box64 执行 ==="
+          TESTDIR="$(mktemp -d)"
+          cat > "${TESTDIR}/smoke.c" <<'EOF'
+          #include <stdio.h>
+          #include <sys/ipc.h>
+          #include <sys/shm.h>
+          int main(void) {
+              int id = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
+              if (id < 0) { puts("SMOKE_FAIL_SHM"); return 2; }
+              void *p = shmat(id, NULL, 0);
+              if (p == (void*)-1) { puts("SMOKE_FAIL_SHMAT"); return 3; }
+              *(int*)p = 0x4243;
+              printf("LINBOX_SMOKE_OK %d\n", *(int*)p);
+              shmdt(p); shmctl(id, IPC_RMID, NULL);
+              return 0;
+          }
+          EOF
+          gcc -O2 -o "${TESTDIR}/smoke" "${TESTDIR}/smoke.c"
+          SMOKE_OUT="$("${SMOKE_BIN}" "${TESTDIR}/smoke" 2>&1 || true)"
+          echo "${SMOKE_OUT}"
+          # 动态实跑断言：补丁未应用时 shm 路径在 glibc 宿主上仍走宿主
+          # libc（wrapper 桥接），LINBOX_SMOKE_OK 照常要求通过 —— 只有
+          # 补丁在链时静态链路才有意义，见上。
+          echo "${SMOKE_OUT}" | grep -q "LINBOX_SMOKE_OK" \
+            || { echo "::error::box64 执行 x86_64 测试程序失败（含 SysV shm 路径）—— 源码级损坏，禁止放行"; exit 1; }
+
+          # v3.2.18：静态链接变体 —— 走 box64 的 syscall 层（case 29/30/31/67
+          # 转发，0001-linbox-android-shmem-native.patch 的宿主侧回归测试）。
+          # vanilla v0.4.4 实测此路径 ENOSYS（"shmget: Function not
+          # implemented"），补丁后必须通过。
+          # v3.3.36：门变量改名 SMOKE_0001（0001 落地才跑静态 shm 断言；
+          # v3.3.36 起 0001 是硬保障必落地，此断言恒运行）。
+          if [[ "${SMOKE_0001}" == "1" ]]; then
+            echo "=== 冒烟[静态实跑]: 静态链接 x86_64 测试程序（syscall 层 shm 转发） ==="
+            gcc -O2 -static -o "${TESTDIR}/smoke_static" "${TESTDIR}/smoke.c" \
+              || { echo "::error::静态冒烟程序编译失败（runner 缺 glibc-static？）"; exit 1; }
+            SMOKE_STATIC_OUT="$("${SMOKE_BIN}" "${TESTDIR}/smoke_static" 2>&1 || true)"
+            echo "${SMOKE_STATIC_OUT}"
+            echo "${SMOKE_STATIC_OUT}" | grep -q "LINBOX_SMOKE_OK" \
+              || { echo "::error::box64 静态 x86_64 程序 shm syscall 失败 —— 0001 补丁的 x64syscall.c 转发未生效，禁止放行"; exit 1; }
+          else
+            echo "  [--] 冒烟[静态实跑] 跳过（0001 补丁未在链，静态 shm 路径必 ENOSYS）"
+          fi
+
+          # v3.2.20：ANDROID RELR 打包重定位回归测试（wineboot SIGSEGV 根因）。
+          # NDK r29 lld 默认给 bionic 链接的 .so 发 Android 标签的 RELR 打包
+          # 重定位（DT_ANDROID_RELR=0x6fffe000/RELRSZ=0x6fffe001/RELRENT=
+          # 0x6fffe003，编码同标准 RELR 仅标签号不同），box64 v0.4.4 原生
+          # 只认标准 DT_RELR 系列 → 打包的 R_X86_64_RELATIVE 全部静默跳过
+          # → bionic wine x86_64-unix/ntdll.so 的 .data 自指针（virtual.c
+          # static struct list reserved_areas = LIST_INIT(reserved_areas)）
+          # 保持链期裸地址，wineboot 一进 mmap_add_reserved_area 即 SIGSEGV
+          # （设备日志：ntdll.so+0x770a8，R15=0x928d8 裸值 vs RAX=0x3f000928d8
+          # 正确重定位值，访问 0x928e8 段错误 —— 与本测试同机制同断言面）。
+          # 0002/0003 补丁的 elfparser 修复（DT_ANDROID_RELR* 标签别名，
+          # v3.3.34 起从 0001 拆分 —— v0.4.2+ 走 0002 的 12 空格形态、
+          # v0.3.2..v0.4.1 走 0003 的 16 空格深嵌套形态）必须让此类 .so
+          # 正确重定位。无需 lld：gcc 生成标准 RELR .so 后用
+          # python 把动态标签翻成 Android 风味，经 box64 实跑断言。
+          # v3.3.36：门变量改 SMOKE_RELR（0002/0003 落地才激活；旧逻辑
+          # 用 0001 落地做门，v3.3.34 拆分后冒烟树必然缺 elfparser 修复
+          # → RELR 断言对全部 ref 必炸，即本次 "0.3.8 还是构建报错" 根因）。
+          if [[ "${SMOKE_RELR}" == "1" ]]; then
+          echo "=== 冒烟[ANDROID RELR]: 打包重定位（wine ntdll wineboot 同机制） ==="
+          cat > "${TESTDIR}/relrtest.c" <<'EOF'
+          struct list { struct list *next, *prev; };
+          static struct list head = { &head, &head };
+          static struct list head2 = { &head2, &head2 };
+          int relr_ok(void) {
+              return head.next == &head && head.prev == &head
+                  && head2.next == &head2 && head2.prev == &head2;
+          }
+          EOF
+          cat > "${TESTDIR}/relrdrv.c" <<'EOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          int main(void) {
+              void *h = dlopen("./librelr_android.so", RTLD_NOW);
+              if (!h) { printf("RELR_DLOPEN_FAIL: %s\n", dlerror()); return 1; }
+              int (*fn)(void) = (int(*)(void))dlsym(h, "relr_ok");
+              if (!fn) { printf("RELR_DLSYM_FAIL\n"); return 2; }
+              if (fn()) { printf("LINBOX_RELR_OK\n"); return 0; }
+              printf("RELR_FAIL_UNRELOCATED\n");
+              return 3;
+          }
+          EOF
+          gcc -shared -fPIC -O2 -Wl,-z,pack-relative-relocs \
+            -o "${TESTDIR}/librelr.so" "${TESTDIR}/relrtest.c" \
+            || { echo "::error::RELR 测试库编译失败（runner binutils < 2.38 无 -z pack-relative-relocs？）"; exit 1; }
+          python3 - "${TESTDIR}" <<'PYEOF'
+          import struct, sys, os
+          d = sys.argv[1]
+          src, dst = os.path.join(d, "librelr.so"), os.path.join(d, "librelr_android.so")
+          f = bytearray(open(src, "rb").read())
+          e_shoff, = struct.unpack_from("<Q", f, 0x28)
+          e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", f, 0x3a)
+          shs = [struct.unpack_from("<IIQQQQ", f, e_shoff + i*e_shentsize) for i in range(e_shnum)]
+          # v3.2.22 修复：Elf64_Shdr 前 6 字段 = name/type/flags/addr/offset/size，
+          # 6 元组必须解包进 6 个目标 —— v3.2.20 写成 3 个 _（5 目标），
+          # CI 实炸 "ValueError: too many values to unpack (expected 5)"，
+          # RELR 冒烟从未真正跑起来（沙箱漏测：注释声称的 LINBOX_RELR_OK
+          # 实测不可复现）。shstroff=sh_offset（下标 4）、shstrsize=sh_size（下标 5）。
+          _,_,_,_,shstroff,shstrsize = shs[e_shstrndx]
+          def sname(n):
+              e = f.index(b"\0", shstroff+n); return f[shstroff+n:e].decode()
+          dyn = next((s for s in shs if sname(s[0]) == ".dynamic"), None)
+          assert dyn, "no .dynamic section"
+          dyn_off, dyn_sz = dyn[4], dyn[5]
+          flips = {0x24:0x6fffe000, 0x23:0x6fffe001, 0x25:0x6fffe003}
+          n = 0
+          for i in range(dyn_sz//16):
+              tag, = struct.unpack_from("<q", f, dyn_off+i*16)
+              if tag in flips:
+                  struct.pack_into("<q", f, dyn_off+i*16, flips[tag]); n += 1
+          assert n == 3, f"expected 3 standard RELR tags, flipped {n} (binutils did not emit RELR?)"
+          open(dst, "wb").write(f)
+          print(f"relr: flipped {n} dynamic tags to DT_ANDROID_RELR flavor")
+          PYEOF
+          (cd "${TESTDIR}" && gcc -O2 -o relrdrv relrdrv.c -ldl)
+          RELR_OUT="$(cd "${TESTDIR}" && "${SMOKE_BIN}" ./relrdrv 2>&1 || true)"
+          echo "${RELR_OUT}"
+          echo "${RELR_OUT}" | grep -q "LINBOX_RELR_OK" \
+            || { echo "::error::box64 未应用 ANDROID RELR 打包重定位 —— 0002/0003 补丁的 elfparser 修复未生效，禁止放行（bionic wine ntdll wineboot SIGSEGV 同根因）"; exit 1; }
+          else
+            echo "  [--] 冒烟[ANDROID RELR] 跳过（0002/0003 补丁未在链，elfparser 不认 Android 标签必然失败）"
+          fi
+
+          # v3.2.18：补丁文件本体必须在源码树里（冒烟用独立 clone，此步
+          # 校验交付源码未丢失补丁 —— 与配方 install() 的符号校验互补）。
+          # v3.3.36：6fffe000（DT_ANDROID_RELR 标签值）v3.3.34 起已从 0001
+          # 拆分进 0002/0003 —— 旧校验 grep 0001 必失败，改验孪生补丁。
+          echo "=== 冒烟[补丁在源]: 交付树含核心补丁集（0001 + elfparser RELR 孪生） ==="
+          [[ -f "${GITHUB_WORKSPACE}/bionic-rootfs/projects/box64/0001-linbox-android-shmem-native.patch" ]] \
+            || { echo "::error::交付源码树缺失 0001-linbox-android-shmem-native.patch —— aarch64 产物将缺内建 shm"; exit 1; }
+          grep -q "android_shmem.c" "${GITHUB_WORKSPACE}/bionic-rootfs/projects/box64/0001-linbox-android-shmem-native.patch" \
+            || { echo "::error::0001 补丁内容异常（不含 android_shmem.c 源）"; exit 1; }
+          if ! grep -q "6fffe000" "${GITHUB_WORKSPACE}/bionic-rootfs/projects/box64/0002-linbox-android-relr64.patch" \
+             && ! grep -q "6fffe000" "${GITHUB_WORKSPACE}/bionic-rootfs/projects/box64/0003-linbox-android-relr-legacy.patch"; then
+            echo "::error::elfparser RELR 孪生补丁（0002/0003）内容异常（均不含 DT_ANDROID_RELR 修复 —— wineboot SIGSEGV 会复发）"
+            exit 1
+          fi
+
+          echo "=== 冒烟通过：同源构建物可加载 ELF、可执行、SysV shm 动态/静态路径与 ANDROID RELR 打包重定位均可用 ==="
+
+      # ============ 6. 产物校验 ============
+      # 硬校验 box64 完整文件集（deps 保证三个包 tar 都已产出）：
+      #   a) box64 本体：aarch64 ELF、PT_INTERP 必须是 bionic 的
+      #      /system/bin/linker64（出现 ld-linux-aarch64.so.1 即刻
+      #      失败 —— 说明又混入 glibc 方案）；DT_NEEDED 只允许
+      #      bionic 系统库
+      #   b) PATH 入口链接 usr/bin/box64（相对链接，解包后仍成立）
+      #   c) 上游 ANDROID 模式配套：x86_64 libc++_shared.so + box64rc
+      #   d) aarch64 glibc 运行层：usr/lib/aarch64-linux-gnu/
+      #      ld-linux-aarch64.so.1（+ lib/ 便捷链接、libc.so.6）
+      #   e) x86_64 glibc 运行层：usr/lib/x86_64-linux-gnu/
+      #      ld-linux-x86-64.so.2（+ libc.so.6、libstdc++.so.6）
+      - name: 校验 box64 产物（bionic 形态 + 完整安装集）
+        run: |
+          PKGS="${GITHUB_WORKSPACE}/bionic-rootfs/pkgs"
+          BOX64_TAR=$(ls "${PKGS}/"box64-*aarch64.tar 2>/dev/null | head -n 1)
+          GLIBC_A64_TAR=$(ls "${PKGS}/"glibc-aarch64-*aarch64.tar 2>/dev/null | head -n 1)
+          GLIBC_X64_TAR=$(ls "${PKGS}/"glibc-x86_64-*aarch64.tar 2>/dev/null | head -n 1)
+          for _t in "BOX64_TAR:${BOX64_TAR}" "GLIBC_A64_TAR:${GLIBC_A64_TAR}" "GLIBC_X64_TAR:${GLIBC_X64_TAR}"; do
+            _var="${_t%%:*}"; _val="${_t#*:}"
+            [[ -n "${_val}" ]] || { echo "::error::包 tar 缺失 => ${_var}（pkgs/ 下未找到，deps 未随建？）"; exit 1; }
+          done
+          echo "box64 包: ${BOX64_TAR}"
+          echo "aarch64 glibc 运行层包: ${GLIBC_A64_TAR}"
+          echo "x86_64 glibc 运行层包: ${GLIBC_X64_TAR}"
+
+          # 三个包 tar 都解进同一校验目录 —— 即发行包的最终布局
+          rm -rf /tmp/box64-verify && mkdir -p /tmp/box64-verify
+          tar -xf "${GLIBC_A64_TAR}" -C /tmp/box64-verify
+          tar -xf "${GLIBC_X64_TAR}" -C /tmp/box64-verify
+          tar -xf "${BOX64_TAR}" -C /tmp/box64-verify
+
+          RFS=/tmp/box64-verify/data/data/com.linbox/files/rootfs/usr
+          B="$RFS/local/bin/box64"
+          [[ -f "$B" ]] || { echo "::error::box64 二进制缺失（$B）"; exit 1; }
+
+          echo "=== 二进制架构校验（应为 aarch64 ELF） ==="
+          file "$B" || true
+          if [[ "$(file -b "$B" 2>/dev/null)" == *"ARM aarch64"* ]]; then
+            echo "  [OK] aarch64 ELF"
+          else
+            echo "::error::非 aarch64 ELF，请检查构建"
+            exit 1
+          fi
+
+          echo "=== PT_INTERP 校验（bionic 形态：/system/bin/linker64） ==="
+          INTERP=$(readelf -l "$B" 2>/dev/null | sed -n 's/.*Requesting program interpreter: \(.*\)\]/\1/p' | head -n 1)
+          echo "  实际: ${INTERP:-（无 PT_INTERP）}"
+          if [[ "$INTERP" == *ld-linux* ]]; then
+            echo "::error::box64 本体混入了 glibc 加载器（$INTERP）—— bionic 形态 box64 必须是 NDK bionic 链接！"
+            echo "  注: rootfs 里的 ld-linux-aarch64.so.1 是配套运行层（供 glibc 形态 box64 /"
+            echo "      glibc 二进制使用），box64 本体不应链接它 —— 查构建参数/工具链"
+            exit 1
+          fi
+          [[ "$INTERP" == "/system/bin/linker64" ]] \
+            || { echo "::error::PT_INTERP 不是 bionic 的 /system/bin/linker64！"; exit 1; }
+          echo "  [OK] bionic PT_INTERP"
+
+          echo "=== DT_NEEDED 校验（只允许 bionic 系统库） ==="
+          readelf -d "$B" 2>/dev/null | grep NEEDED || true
+          if readelf -d "$B" 2>/dev/null | grep NEEDED | grep -E "libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libstdc\+\+|libgcc_s\.so\.1"; then
+            echo "::error::box64 链接了 glibc 系 SONAME（libc.so.6 等）—— 不是 bionic 形态！"
+            exit 1
+          fi
+          echo "  [OK] 无 glibc SONAME（bionic 链接：libc.so / libm.so / libdl.so）"
+
+          echo "=== PATH 入口链接校验 ==="
+          if [[ -L "$RFS/bin/box64" && "$(readlink "$RFS/bin/box64")" == "../local/bin/box64" && -e "$RFS/bin/box64" ]]; then
+            echo "  [OK] usr/bin/box64 → ../local/bin/box64"
+          else
+            echo "::error::PATH 入口链接缺失/失效 => $RFS/bin/box64"
+            ls -l "$RFS/bin/box64" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "=== 上游 ANDROID 模式配套文件校验 ==="
+          for f in "lib/box64-x86_64-linux-gnu/libc++_shared.so" \
+                   "etc/box64.box64rc"; do
+            [[ -e "$RFS/$f" ]] && echo "  [OK] $f" \
+              || { echo "::error::产物不完整: $RFS/$f"; exit 1; }
+          done
+
+          echo "=== aarch64 glibc 运行层校验（glibc-aarch64 配方） ==="
+          for f in "lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" \
+                   "lib/aarch64-linux-gnu/libc.so.6" \
+                   "lib/aarch64-linux-gnu/libstdc++.so.6" \
+                   "lib/ld-linux-aarch64.so.1"; do
+            [[ -e "$RFS/$f" || -L "$RFS/$f" ]] && echo "  [OK] $f" \
+              || { echo "::error::产物不完整: $RFS/$f"; exit 1; }
+          done
+          _a64_machine="$(readelf -h "$RFS/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" 2>/dev/null \
+            | awk '/^ *Machine:/{print $2; exit}')"
+          [[ "$_a64_machine" == "AArch64" ]] \
+            && echo "  [OK] ld-linux-aarch64.so.1 为 aarch64 ELF" \
+            || { echo "::error::ld-linux-aarch64.so.1 非 aarch64 ELF（Machine: ${_a64_machine:-未知}）"; exit 1; }
+
+          echo "=== x86_64 glibc 运行层校验（glibc-x86_64 配方） ==="
+          for f in "lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" \
+                   "lib/x86_64-linux-gnu/libc.so.6" \
+                   "lib/x86_64-linux-gnu/libstdc++.so.6"; do
+            [[ -e "$RFS/$f" ]] && echo "  [OK] $f" \
+              || { echo "::error::产物不完整: $RFS/$f"; exit 1; }
+          done
+
+          echo "=== 校验通过：bionic box64 + 完整安装集（双 glibc 运行层） ==="
+          echo "文件清单摘要:"
+          (cd /tmp/box64-verify && find data/data/com.linbox/files/rootfs/usr \
+            -maxdepth 3 \( -name 'box64*' -o -name 'ld-linux*' \) | sort | sed 's/^/  /') || true
+
+      # ============ 7. 打包发行 ============
+      - name: 打包 box64 发行包
+        run: |
+          PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"box64-*aarch64.tar | head -n 1)
+          BOX64_VER=$(basename "$PKG_TAR" | sed -e 's/^box64-//' -e 's/-aarch64\.tar$//')
+          echo "BOX64_VER=${BOX64_VER}" >> "$GITHUB_ENV"
+          PACKAGE_NAME="linbox-box64-${BOX64_VER}-aarch64-bionic"
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> "$GITHUB_ENV"
+          cd "${GITHUB_WORKSPACE}"
+          # /tmp/box64-verify 已含完整安装集（校验步骤已解入三个包：
+          # box64 本体 + bin 入口链接 + 上游 ANDROID 配套 + aarch64
+          # glibc 运行层 + x86_64 glibc 运行层），解包至 / 即自洽
+          tar -czf "${PACKAGE_NAME}.tar.gz" -C /tmp/box64-verify .
+          sha256sum "${PACKAGE_NAME}.tar.gz" > checksums-box64-aarch64.txt
+          echo "=== 打包完成（bionic box64 完整安装集） ==="
+          ls -lh "${PACKAGE_NAME}.tar.gz" checksums-box64-aarch64.txt
+          tar -tzf "${PACKAGE_NAME}.tar.gz" | head -30
+
+      # ============ 8. 上传日志与产物 ============
+      - name: 上传构建日志
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: box64-build-log-aarch64
+          path: bionic-rootfs/build-box64-aarch64.log
+          if-no-files-found: ignore
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-box64-aarch64.txt
+          if-no-files-found: error
+
+      - name: 创建 Release
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bionic-box64-${{ env.BOX64_VER }}
+          name: LinBox Bionic Box64 ${{ env.BOX64_VER }} (aarch64)
+          body: |
+            LinBox bionic rootfs 专用 Box64（aarch64 / NDK bionic 链接 / -DANDROID=ON / ARM_DYNAREC）
+
+            - bionic ELF（PT_INTERP=/system/bin/linker64），与 rootfs 内
+              wine / mesa / pulseaudio 等二进制同链同形态；box64 本体零
+              glibc 依赖
+            - 完整安装集（不再只有单个 box64 执行文件）：
+              `usr/local/bin/box64` + `usr/bin/box64` PATH 入口链接
+              + `usr/lib/box64-x86_64-linux-gnu/libc++_shared.so`
+              （上游 ANDROID 模式配套，被仿真 x86_64 程序的 C++ 标准库）
+              + `usr/etc/box64.box64rc`（系统级调优开关）
+              + `usr/lib/aarch64-linux-gnu/`（`ld-linux-aarch64.so.1`
+              私有加载器与 aarch64 glibc 运行库 —— glibc 形态 box64
+              与 rootfs 内 glibc 二进制的运行层）
+              + `usr/lib/x86_64-linux-gnu/`（被仿真 x86_64 程序的
+              glibc 运行库，box64 经 BOX64_LD_LIBRARY_PATH 查找）
+            - 手动安装: 解包 `linbox-box64-*.tar.gz` 至 /（data/data/com.linbox/...
+              自动就位），或 `linbox-container install-box64 <tar.gz|URL>`
+            - 安装后 linbox-container 自动探测 /usr/local/bin/box64
+            - 用途: 在 aarch64 设备上运行 x86_64 Wine（backend=box64）；
+              v0.4.4 为 hangover-11.16 官方配套版本（错配可致 wineboot SEH 级联崩溃）
+            - 注意: 与完整 rootfs 包（build-bionic-rootfs）同源 —— rootfs 已内置
+              同款 box64 与配套文件，单独升级时才需要本包
+          files: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-box64-aarch64.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

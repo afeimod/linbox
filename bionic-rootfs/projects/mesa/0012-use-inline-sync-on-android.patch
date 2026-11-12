@@ -1,0 +1,22 @@
+LinBox bionic mesa 补丁：用 libsync.h 内联 ioctl 实现替代系统 libsync
+---
+NDK 不提供 libsync.so（平台私有库），而 mesa 的 Android 分支
+#include <android/sync.h> 会引入 extern 声明，压制本文件已有的
+static inline 实现，导致链接期 undefined symbol: sync_merge。
+bionic/内核的 sync_file uapi（SYNC_IOC_MERGE/FILE_INFO）在现代
+设备上均可用，故直接走非 Android 内联分支，功能不变、零系统依赖。
+---
+--- a/src/util/libsync.h
++++ b/src/util/libsync.h
+@@ -47,7 +47,11 @@
+ #endif
+ 
+-#if DETECT_OS_ANDROID
++/* LinBox(bionic): NDK 不提供 libsync.so，系统头文件的 extern 声明
++ * 会压制本文件的 static inline 实现，导致链接期
++ * "undefined symbol: sync_merge"。改为直接使用下方与内核
++ * sync_file uapi 配套的内联实现（现代设备内核均支持）。 */
++#if 0 && DETECT_OS_ANDROID
+ /* On Android, rely on the system's libsync instead of rolling our own
+  * sync_wait() and sync_merge().  This gives us compatibility with pre-4.7
+  * Android kernels.

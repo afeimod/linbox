@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.view.MotionEvent
 import android.view.WindowManager
 import com.linbox.core.input.TrackpadRouter
+import com.linbox.core.window.WindowFocusHook
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -111,6 +112,25 @@ class MainActivity : ComponentActivity() {
                 initial = com.linbox.core.theme.Themes.Win11
             )
             val settingsStore = remember { app.settingsStore }
+
+            // ===== v3.2.14（AnWind 移植）：启动器快捷方式「运行容器」 =====
+            // ShortcutManager 固定的“运行容器”快捷方式携带
+            // linbox_run_container extra（GuanliSupport.Shortcuts 创建），
+            // 这里打开容器管理器窗口，窗口内 launchArgs.autorun 驱动
+            // 选中 + 自动运行（见 ContainerScreens）。
+            val shortcutRunContainer = intent?.getStringExtra(
+                com.linbox.apps.containers.GuanliSupport.Shortcuts.EXTRA_RUN_CONTAINER
+            )
+            LaunchedEffect(shortcutRunContainer) {
+                if (!shortcutRunContainer.isNullOrBlank()) {
+                    com.linbox.core.window.WindowManager.get().open(
+                        appId = "wine-containers",
+                        title = "Bionic 容器",
+                        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
+                        launchArgs = mapOf("autorun" to shortcutRunContainer)
+                    )
+                }
+            }
             // 全局 UI 缩放（乘到密度上，同时缩放所有 dp/sp）
             // v2.16：UI_SCALE_BASE = 0.6，100% 档位现在以旧版 60% 的效果渲染，
             // 整体更紧凑；设置里仍显示 100%，各档位等比映射
@@ -199,6 +219,11 @@ class MainActivity : ComponentActivity() {
      * （processCancel）与指针 id 重映射风暴不再发生。
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // v3.2.2（AnWind 移植）：View 层点击置前 —— 多窗口模式下点击
+        // 窗口任意位置即把该窗口顶到前面（弹窗层除外）。必须在
+        // TrackpadRouter 之前（触控板模式下真实手指会被路由器拦截，
+        // 之后就看不到了）。仅触摸模式生效，绝不消费事件。
+        WindowFocusHook.onMotionEvent(ev)
         if (TrackpadRouter.onMotionEvent(this, ev)) return true
         return super.dispatchTouchEvent(ev)
     }

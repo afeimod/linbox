@@ -1,7 +1,58 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // Room（AnWind 移植：浏览器书签/历史 + 容器运行快捷方式）
+    id("com.google.devtools.ksp")
 }
+
+// ============================================================
+// v3.0（AnWind 移植）：assets 打包期过滤 + 归档资产改名
+// ============================================================
+// 1) ruffle/ 白名单过滤：历次交付均为 zip 覆盖 app/，zip 无法表达
+//    "删除" —— 仓库 assets/ruffle/ 会残留旧引擎文件（0.3.0 的双 wasm
+//    + 双 core.js，约 28MB 死重）。Ruffle 自托管包为"双核"结构
+//    （ruffle.js 按设备特性二选一加载 core+wasm），下列白名单即当前
+//    引擎的可加载全集；白名单之外的文件不可能被请求，打包期剔除。
+// 2) *.tar.gz → *.tgz / *.tar.xz → *.txz 打包期改名：部分 APK 打包
+//    管线会把 assets 内 *.tar.gz 强制 gunzip 成 .tar；单后缀 .tgz/
+//    .txz 不在强制解压名单里。运行时三重防御已具备：
+//    ① 双名候选（TermuxBootstrapInstaller.installXkbData）；
+//    ② LinBoxTzstAssets.scanDxvkAssets 后缀启发 + 目录扫描；
+//    ③ 魔数裁定（sniffType / XkbExtractor 直读 gzip/xz/zstd/ustar 头）。
+// ============================================================
+val ruffleAssetWhitelist = setOf(
+    "ruffle.js",
+    "simhei.ttf",
+    "1ef41ff58c9763bed027.wasm",
+    "63468f5322aed2e768a8.wasm",
+    "core.ruffle.0875e44536e955474b0c.js",
+    "core.ruffle.831c4f4a93befb9e84af.js"
+)
+val filteredAssetsDir = layout.buildDirectory.dir("filteredAssets")
+val filterRuffleAssets = tasks.register<Sync>("filterRuffleAssets") {
+    description = "同步 src/main/assets 到过滤目录，ruffle/ 只保留白名单文件；归档资产 *.tar.gz→*.tgz / *.tar.xz→*.txz 打包期改名"
+    into(filteredAssetsDir)
+    from("src/main/assets") {
+        exclude("ruffle/*")
+        rename { name ->
+            when {
+                name.endsWith(".tar.gz") -> name.removeSuffix(".tar.gz") + ".tgz"
+                name.endsWith(".tar.xz") -> name.removeSuffix(".tar.xz") + ".txz"
+                else -> name
+            }
+        }
+    }
+    from("src/main/assets/ruffle") {
+        into("ruffle")
+        include(ruffleAssetWhitelist)
+    }
+}
+// 保险丝：preBuild / merge*Assets 先行触发同步（双锚点保证过滤目录在
+// 资源合并前就绪，不依赖单一任务链假设）
+tasks.matching {
+    it.name == "preBuild" ||
+        (it.name.startsWith("merge") && it.name.endsWith("Assets"))
+}.configureEach { dependsOn(filterRuffleAssets) }
 
 // ============================================================
 // v2.22.1：linbox-reprefix 可执行构建（打包为 lib*.so 形式）
@@ -127,9 +178,10 @@ android {
         // 唯一代价：Android 10+ 安装时提示“此应用为旧版 Android 打造”。
         // ============================================================
         // v2.33.2 fix：DAC 桥低版本设备可加载（v1.19，版本号随功能递增）
+        // v3.0（AnWind 全量移植）：Wine 容器管理化改造
         targetSdk = 28
-        versionCode = 61
-        versionName = "2.33.2"
+        versionCode = 100
+        versionName = "3.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -143,10 +195,13 @@ android {
         }
     }
 
-    // bootstrap 归档（assets/termux/*.zip）保持不压缩：
-    // 避免二次压缩浪费构建时间，安装期拷贝更快
+    // bootstrap 归档（assets/termux/*.zip）、启动视频（mp4）、
+    // 归档资产（gz/tgz/zst/xz：dxvk tarball、wrapper-stack.tzst、
+    // rootfs-*.tzst）保持不压缩：避免二次压缩浪费构建时间，
+    // 安装期拷贝更快，且防部分管线对 *.tar.gz 的强制解压改写
+    // （v3.2.24：*.tar.gz → *.tgz 打包期改名，见下方 filterAssets 任务）
     androidResources {
-        noCompress += listOf("zip")
+        noCompress += listOf("zip", "mp4", "gz", "tgz", "zst", "xz")
     }
 
     // ============================================================
@@ -204,6 +259,14 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+    sourceSets {
+        getByName("main") {
+            // v3.0（AnWind 移植）：用白名单过滤目录整体替换默认 assets 源
+            //（Sync 任务产出；preBuild 保险丝保证合并前就绪，
+            // 仓库残留旧 ruffle 文件不再进 APK；*.tar.gz → *.tgz 打包期改名）
+            assets.setSrcDirs(listOf(filteredAssetsDir))
+        }
     }
     buildFeatures {
         compose = true
@@ -297,6 +360,23 @@ dependencies {
     // ============================================================
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.preference:preference:1.1.1")
+
+    // ============================================================
+    // v3.0（AnWind 全量移植）：Room 数据库
+    // （浏览器书签/历史 + 容器运行快捷方式，data/db）
+    // ============================================================
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+
+    // ============================================================
+    // v3.0（AnWind 移植）：压缩/归档处理
+    // （文件管理器 FileOps 的 zip/tar/7z/xz 解压与打包直接引用
+    // commons-compress；zstd 走 termux-x11 的 TarCompressorUtils ——
+    // 该模块已含同版本依赖，此处为 :app 编译期显式声明，版本一致）
+    // ============================================================
+    implementation("org.apache.commons:commons-compress:1.20")
+    implementation("org.tukaani:xz:1.7")
 
     // Test
     testImplementation("junit:junit:4.13.2")

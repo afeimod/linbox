@@ -1,0 +1,66 @@
+# linbox: wine 11.x 树 noexec 回退补丁（x86_64 形态）
+#   11.x 的 map_file_into_view 初始 mmap 只 RW（Flow B）：文件映射成功、
+#   事后 mprotect(+EXEC) 在 noexec 上 EACCES → 执行页不可执行 → SIGSEGV。
+#   修法三件：① 执行段初始即带执行位 mmap（EPERM → 匿名回退）；
+#   ② EPERM/EACCES 分支不再硬失败可写映射；③ 尾部共享映射硬失败软化。
+#
+# v3.3.7：WARN 行内嵌 "LinBox-noexec-fallback" 生效标记 ——
+#   App 侧 WinePatchDetector grep ntdll.so 判断 wine 包是否含本补丁。
+diff -uNr a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2371,6 +2371,15 @@
+ #endif
+     }
+
++    /* LinBox: request PROT_EXEC up-front for executable mappings.  On noexec
++     * mounts (Android sdcardfs/FUSE) the mmap fails with EPERM and we fall
++     * back to anonymous memory + pread() below; a later mprotect(+EXEC) on
++     * those anonymous pages is allowed, so PE images can be loaded and
++     * executed from noexec storage with zero copy.  Without this, sections
++     * are mapped file-backed RW and the later mprotect(+EXEC) itself fails
++     * on noexec mounts, leaving executable pages non-exec. */
++    if (vprot & VPROT_EXEC) prot |= PROT_EXEC;
++
+     map_size = ROUND_SIZE( start, size, page_mask );
+     map_addr = ROUND_ADDR( (char *)view->base + start, page_mask );
+     host_addr = ROUND_ADDR( (char *)view->base + start, host_page_mask );
+@@ -2398,8 +2407,11 @@
+             }
+             break;
+         case EACCES:
+-        case EPERM:  /* access error, fall back to read() */
+-            if (vprot & VPROT_WRITE) return STATUS_ACCESS_DENIED;
++        case EPERM:  /* noexec filesystem, fall back to read() */
++            /* LinBox: never hard-fail writable mappings here (上游参考's
++             * wine-9.2-custom drops the same refusal) - the private read()
++             * fallback below still gives the caller full data access. */
++            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem? [LinBox-noexec-fallback]\n" );
+             break;
+         default:
+             ERR( "mmap error %s, range %p-%p, unix_prot %#x\n",
+@@ -2410,8 +2422,12 @@
+
+     if (vprot & VPROT_WRITE)
+     {
+-        ERR( "unaligned shared mapping %p-%p not supported\n", map_addr, map_addr + map_size );
+-        return STATUS_INVALID_PARAMETER;
++        /* LinBox: shared mapping could not be created with mmap (noexec /
++         * unaligned) - degrade to a private read copy instead of failing so
++         * games on /storage keep working (same semantics as 上游参考's
++         * wine-9.2-custom fallback). */
++        WARN( "shared mapping %p-%p not supported, falling back to private read\n",
++              map_addr, map_addr + map_size );
+     }
+
+     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
+@@ -3177,7 +3193,8 @@
+             end > ((st.st_size + sector_align) & ~sector_align) ||
+             end < file_start ||
+             map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
+-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
++                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY |
++                                (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE ? VPROT_EXEC : 0),
+                                 removable ) != STATUS_SUCCESS)
+         {
+             ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",

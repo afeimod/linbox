@@ -1,0 +1,94 @@
+# linbox: wineserver 握手超时兜底（Android 冻结/挂死守护防永久挂死）v3.3.1
+#
+# 【根因】（2026-11-01 设备会话日志 + proton_10.0 源码逐行核实）
+#   wineserver 守护在 server/request.c open_master_socket() 里 setsid()
+#   脱离会话树后自管生命周期 —— 它不在 App 会话执行器的进程组里：
+#   上次会话被杀 / Android cgroup freezer 冻结后台应用全组时，该守护以
+#   "socket 仍在监听、但进程永不 accept/应答"的形态残留。新 wine 客户端
+#   server_connect() 发现 socket 已存在 → 不再拉起新 server → connect()
+#   成功（内核 backlog）→ 阻塞在 receive_fd() 的 recvmsg() 上：
+#   **无任何输出、无退出码、system.reg 永不落盘** —— proton arm64ec
+#   前缀构建"无任何输出挂死"的直接载体（会话日志特征：客户端打出
+#   "linbox: bionic heap tagging disabled"后戛然而止，连 wineserver 侧
+#   的 heap-tagging 打印都不出现 —— 因为根本没有新 server 被拉起）。
+#   wineserver -k 救不了（-k 客户端同样阻塞在同一个 socket 上）。
+#
+# 【修法】双保险（App 侧 WineServerUtils.hardRecoverStaleServer 已按
+#   pid SIGKILL 硬清理 + 清残留 socket/lock —— 本补丁是 wine 自身的
+#   最后防线，旧 App / 终端用法下依然自愈）：
+#   1) server_init_process()：握手 receive_fd() 前给 fd_socket 设
+#      SO_RCVTIMEO=60s、握手完成后立即清零 —— 只影响首次握手，后续
+#      正常 server 通信不受任何影响；
+#   2) receive_fd()：EAGAIN/EWOULDBLOCK（超时）时不再落入
+#      server_protocol_perror 的笼统 "recvmsg: Resource temporarily
+#      unavailable"，改为给出可操作指引的明确致命错误（删 .wineserver
+#      或 wineserver -k 后重试）。
+#   桌面 Linux（非 __ANDROID__）零行为变化。
+#
+# 【锚点稳定性】两处锚点均为上游十余年未动的稳定代码（receive_fd 的
+#   errno 处理块 / server_init_process 的握手行），hangover-11.16 /
+#   official / proton_10.0 树逐字一致，仅行号漂移 —— patch 按上下文
+#   搜索自动偏移套用（proton_10.0 实测干净套用）。
+#
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -43,6 +43,13 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/types.h>
++#ifdef __ANDROID__
++/* LINBOX_FIX_HANDSHAKE_TIMEOUT (v3.3.1): the SO_RCVTIMEO handshake
++ * budget below needs struct timeval. The ntdll/unix side includes
++ * <sys/time.h> unconditionally elsewhere (see sync.c); still gated
++ * here to keep non-Android builds byte-identical. */
++#include <sys/time.h>
++#endif
+ #include <sys/mman.h>
+ #include <sys/socket.h>
+ #include <sys/wait.h>
+@@ -984,6 +991,17 @@
+         if (!ret) break;
+         if (errno == EINTR) continue;
+         if (errno == EPIPE) break;
++#ifdef __ANDROID__
++        /* LINBOX_FIX_HANDSHAKE_TIMEOUT (v3.3.1): recvmsg() timed out
++         * (SO_RCVTIMEO set around the first handshake in
++         * server_init_process) => the socket is held by a stale/frozen
++         * wineserver daemon. Die loudly with actionable guidance instead
++         * of the generic "Resource temporarily unavailable". */
++        if (errno == EAGAIN || errno == EWOULDBLOCK)
++            server_protocol_error( "wineserver handshake timed out: the server socket is held by a "
++                                   "stale or frozen wineserver. Remove '%s/.wineserver' "
++                                   "(or run wineserver -k) and try again.\n", config_dir );
++#endif
+         server_protocol_perror("recvmsg");
+     }
+     /* the server closed the connection; time to die... */
+@@ -1592,7 +1610,27 @@
+     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
+ 
+     /* receive the first thread request fd on the main socket */
++#ifdef __ANDROID__
++    /* LINBOX_FIX_HANDSHAKE_TIMEOUT (v3.3.1): a stale/frozen wineserver
++     * (setsid-detached daemon from a previous dirty session, or frozen by
++     * the Android cgroup freezer) still holds a listening socket; the
++     * client would then block in receive_fd() forever with zero output
++     * (the silent prefix-creation hang). Give the handshake a 60s budget
++     * via SO_RCVTIMEO and clear it right after, so normal server
++     * communication is unaffected. */
++    {
++        struct timeval _linbox_tv;
++        _linbox_tv.tv_sec = 60;
++        _linbox_tv.tv_usec = 0;
++        setsockopt( fd_socket, SOL_SOCKET, SO_RCVTIMEO, &_linbox_tv, sizeof(_linbox_tv) );
++        ntdll_get_thread_data()->request_fd = receive_fd( &version );
++        _linbox_tv.tv_sec = 0;
++        _linbox_tv.tv_usec = 0;
++        setsockopt( fd_socket, SOL_SOCKET, SO_RCVTIMEO, &_linbox_tv, sizeof(_linbox_tv) );
++    }
++#else
+     ntdll_get_thread_data()->request_fd = receive_fd( &version );
++#endif
+ 
+ #ifdef SO_PASSCRED
+     /* now that we hopefully received the server_pid, disable SO_PASSCRED */

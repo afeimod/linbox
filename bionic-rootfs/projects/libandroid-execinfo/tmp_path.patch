@@ -1,0 +1,35 @@
+diff --color -urN a/execinfo.c b/execinfo.c
+--- a/execinfo.c	2026-07-27 23:31:10.460051455 +0800
++++ b/execinfo.c	2026-07-27 23:36:02.202806773 +0800
+@@ -40,6 +40,15 @@
+ #include <unistd.h>
+ #include <unwind.h>
+ 
++// Fix for Android Bionic libc: _PATH_TMP is not defined in <paths.h>
++#ifndef _PATH_TMP
++#ifdef __ANDROID__
++#define _PATH_TMP "/data/local/tmp/"
++#else
++#define _PATH_TMP "/tmp/"
++#endif
++#endif
++
+ #if defined(__ANDROID__) && __ANDROID_API__ < 30
+ #define memfd_create(name,flags) syscall(SYS_memfd_create,name,flags)
+ #endif
+@@ -48,11 +57,12 @@
+ #endif
+ 
+ static inline int __tmpfile_crate() {
+-  char name[] = _PATH_TMP ".backtrace-FFFFFFFF-XXXXXXXX";
++  char name[256];
+   snprintf(name, sizeof(name), _PATH_TMP ".backtrace-%0x-XXXXXXXX", getpid() & 0xFFFFFFFF);
+-  // XXX: It is almost impossible to have file conflicts, isn't it?
+   int fd = mkstemp(name);
+-  unlink(name);
++  if (fd != -1) {
++    unlink(name);
++  }
+   return fd;
+ }
+ 

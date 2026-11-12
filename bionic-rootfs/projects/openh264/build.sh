@@ -1,0 +1,7 @@
+revision="v2.6.0"
+url="https://github.com/cisco/openh264.git"
+urlType="git"
+arch="aarch64 x86_64"
+buildSys="meson"
+license="BSD-2-Clause"
+args="-Dtests=disabled"

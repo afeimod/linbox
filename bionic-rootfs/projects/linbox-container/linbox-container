@@ -1,0 +1,793 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# ============================================================
+# linbox-container — LinBox Wine 容器管理（bionic rootfs / X11）
+# ------------------------------------------------------------
+# 数据模型参考 上游参考/上游实现/上游项目：每个容器 = 独立
+# wine 前缀 + 后端(box64/hangover/fexcore/native) + 个性化环境。
+#
+#   容器根目录 : /data/data/com.linbox/files/rootfs/home/.linbox/containers
+#   容器结构   : <name>/container.conf + <name>/prefix (WINEPREFIX)
+#
+# 命令一览：
+#   create <name> [--backend auto|box64|hangover|fexcore|native]
+#                 [--preset performance|compatibility]
+#                 [--screen native|WxH] [--gallium auto|zink|freedreno|llvmpipe]
+#                 [--env "K=V K2=V2"]
+#   list                          列出全部容器（* 为默认容器）
+#   info <name>                   容器详情
+#   set <name> k=v [...]          修改配置（backend/preset/screen/gallium/env/wine）
+#   default [name]                查看/设置默认容器
+#   clone <src> <new>             克隆容器
+#   remove <name>                 删除容器
+#   run <name> <exe> [args...]    在容器中运行 exe（等价 linbox-wine）
+#   cmd <name> <winecmd> [...]    运行 wine 子命令（wineboot/winecfg/reg...）
+#   stop <name>                   结束容器内全部 wine 进程（wineserver -k）
+#   install-wine <tarball|URL>    安装 x86_64 wine 发行包（.tar.gz/.tzst 均可）
+#   install-box64 <tarball|URL>   安装/升级 box64（bionic 形态，随包带
+#                                 x86_64 配套库，免重建 rootfs）
+#   install-dxvk <name> [文件|URL|版本] 向容器安装 DXVK（tzst/tar.gz;
+#                                 顶层 system32/syswow64 直解, x64/x32 自动重映射）
+#   install-vkd3d <name> [文件|URL|版本] 向容器安装 VKD3D-Proton（Vulkan D3D12）
+#   install-driver <zip|tar|URL> 安装 Vulkan 驱动包（yuzu zip / adpkg zip /
+#                                wrapper 栈 tar；独立目录多驱动共存）
+#   driver list/select/remove   Vulkan 驱动管理（查看/容器选择/卸载）
+#   doctor                        体检：X11 / 后端 / 音频 / 容器
+#
+# 显示：X11（LinBox 内置 X 服务，socket 在 App 侧 tmp/.X11-unix）。
+# 音频：PulseAudio TCP 127.0.0.1:4713（linbox-x11 会话自动拉起）。
+# ============================================================
+
+RFS_ROOT="/data/data/com.linbox/files/rootfs"
+RFS_USR="$RFS_ROOT/usr"
+APP_PREFIX="/data/data/com.linbox/files/usr"
+CONT_ROOT="$RFS_ROOT/home/.linbox/containers"
+CONF_GLOBAL="$RFS_USR/etc/linbox/container.conf"
+AW_WINE="$RFS_USR/bin/linbox-wine"
+
+# ---------- 运行时目录兜底（在任何子命令执行前） ----------
+# wine 按 termux 风格构建，把 /tmp 硬编码为 $RFS_USR/tmp（wineserver 的
+# .wine-<uid> 运行时目录）；容器/日志目录可能随发行包缺失，统一补建。
+mkdir -p "$RFS_USR/tmp" "$APP_PREFIX/tmp/.X11-unix" "$CONT_ROOT/logs" 2>/dev/null || true
+X11_SOCK_DIR="$APP_PREFIX/tmp/.X11-unix"
+DL_TMP="$APP_PREFIX/tmp/linbox-dl"
+
+BLUE='\033[1;34m'; GRN='\033[1;32m'; YLW='\033[1;33m'; RST='\033[0m'
+msg()  { printf "${GRN}[linbox-container]${RST} %s\n" "$*"; }
+warn() { printf "${YLW}[警告]${RST} %s\n" "$*"; }
+die()  { printf "%b[错误]%b %s\n" "$YLW" "$RST" "$*" >&2; exit 1; }
+
+# ---------- 配置文件读写 ----------
+conf_read() { # <file> <key> [default]
+    local _v=""
+    [ -r "$1" ] && _v="$(sed -n "s/^$2=//p" "$1" | head -n 1 | tr -d '\r')"
+    [ -z "$_v" ] && [ -n "${3:-}" ] && _v="$3"
+    printf '%s' "$_v"
+}
+conf_write_kv() { # <file> <key> <value>
+    local _f="$1" _k="$2" _v="$3"
+    [ -f "$_f" ] || touch "$_f"
+    if grep -q "^$_k=" "$_f" 2>/dev/null; then
+        sed -i "s/^$_k=.*/$_k=$_v/" "$_f"
+    else
+        printf '%s=%s\n' "$_k" "$_v" >> "$_f"
+    fi
+}
+valid_name() { case "$1" in *[!A-Za-z0-9._-]*|"") return 1 ;; *) return 0 ;; esac; }
+
+arch_now() { uname -m; }
+
+# ---------- create ----------
+cmd_create() {
+    local name="$1"; shift || true
+    [ -n "$name" ] || die "用法: linbox-container create <name> [选项]"
+    valid_name "$name" || die "容器名只能含字母/数字/./_/-"
+    [ -e "$CONT_ROOT/$name" ] && die "容器已存在: $name"
+
+    local backend="auto" preset="performance" screen="native" gallium="auto" envextra=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --backend)  backend="$2";  shift 2 ;;
+            --preset)   preset="$2";   shift 2 ;;
+            --screen)   screen="$2";   shift 2 ;;
+            --gallium)  gallium="$2";  shift 2 ;;
+            --env)      envextra="$2"; shift 2 ;;
+            *) die "未知选项: $1" ;;
+        esac
+    done
+
+    mkdir -p "$CONT_ROOT/$name/prefix" "$CONT_ROOT/logs"
+    local _c="$CONT_ROOT/$name/container.conf"
+    {
+        echo "name=$name"
+        echo "backend=$backend"
+        echo "preset=$preset"
+        echo "screen=$screen"
+        echo "gallium=$gallium"
+        echo "env=$envextra"
+        echo "dxvk=off"
+        echo "vkd3d=off"
+        echo "dxoverrides="
+        echo "wine="
+        echo "created=$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$_c"
+
+    # 默认容器：首个容器自动设为默认
+    if [ -z "$(conf_read "$CONF_GLOBAL" default_container "")" ]; then
+        conf_write_kv "$CONF_GLOBAL" default_container "$name"
+    fi
+    msg "容器已创建: $name"
+    msg "  后端=$backend 预设=$preset 显示(screen)=$screen GL=$gallium"
+    msg "运行示例: linbox-container run $name winecfg"
+    echo "  提示: 首次运行会自动执行 wineboot 初始化前缀（需要先安装 wine：install-wine）"
+}
+
+cmd_list() {
+    [ -d "$CONT_ROOT" ] || { echo "（暂无容器，create 创建）"; return 0; }
+    local _def _d _b _p
+    _def="$(conf_read "$CONF_GLOBAL" default_container "")"
+    local _found=0
+    for _d in "$CONT_ROOT"/*/; do
+        [ -d "$_d" ] || continue
+        [ -f "$_d/container.conf" ] || continue   # 跳过 logs 等非容器目录
+        _found=1
+        local _n; _n="$(basename "$_d")"
+        _b="$(conf_read "$_d/container.conf" backend auto)"
+        _p="$(conf_read "$_d/container.conf" preset performance)"
+        local _mark=" "
+        [ "$_n" = "$_def" ] && _mark="*"
+        printf "%s %-20s backend=%-10s preset=%s\n" "$_mark" "$_n" "$_b" "$_p"
+    done
+    [ "$_found" = 1 ] || echo "（暂无容器）"
+    return 0
+}
+
+cmd_info() {
+    local name="$1"; [ -n "$name" ] || die "用法: linbox-container info <name>"
+    local _d="$CONT_ROOT/$name"
+    [ -d "$_d" ] || die "容器不存在: $name"
+    echo "====== 容器: $name ======"
+    while IFS= read -r _line; do
+        [ -n "$_line" ] && echo "  $_line"
+    done < "$_d/container.conf"
+    echo "  prefix大小: $(du -sh "$_d/prefix" 2>/dev/null | cut -f1)"
+    echo "  位置: $_d"
+}
+
+cmd_set() {
+    local name="$1"; shift
+    [ -n "$name" ] && [ -d "$CONT_ROOT/$name" ] || die "容器不存在"
+    local _c="$CONT_ROOT/$name/container.conf" k v
+    for kv in "$@"; do
+        k="${kv%%=*}"; v="${kv#*=}"
+        [ "$k" = "$kv" ] && die "参数格式: key=value（收到: $kv）"
+        case "$k" in
+            backend|preset|screen|gallium|env|wine|dxoverrides|wrapper|turnip)
+                conf_write_kv "$_c" "$k" "$v"
+                msg "已设置 $name: $k=$v"
+                ;;
+            *) die "不允许修改的键: $k（可改: backend/preset/screen/gallium/env/wine/dxoverrides/wrapper/turnip）" ;;
+        esac
+    done
+}
+
+cmd_default() {
+    if [ -n "${1:-}" ]; then
+        [ -d "$CONT_ROOT/$1" ] || die "容器不存在: $1"
+        conf_write_kv "$CONF_GLOBAL" default_container "$1"
+        msg "默认容器: $1"
+    else
+        local _d; _d="$(conf_read "$CONF_GLOBAL" default_container "")"
+        [ -n "$_d" ] && echo "$_d" || echo "（未设置）"
+    fi
+}
+
+cmd_clone() {
+    local src="$1" dst="$2"
+    [ -d "$CONT_ROOT/$src" ] || die "源容器不存在: $src"
+    [ -n "$dst" ] || die "用法: linbox-container clone <src> <new>"
+    valid_name "$dst" || die "容器名非法"
+    [ -e "$CONT_ROOT/$dst" ] && die "目标已存在: $dst"
+    cp -a "$CONT_ROOT/$src" "$CONT_ROOT/$dst" || die "克隆失败"
+    conf_write_kv "$CONT_ROOT/$dst/container.conf" name "$dst"
+    msg "已克隆: $src → $dst"
+}
+
+cmd_remove() {
+    local name="$1"
+    [ -d "$CONT_ROOT/$name" ] || die "容器不存在: $name"
+    # v3.2.11（用户问题 1）：rm -rf 前的路径防御 —— 空名时 "$CONT_ROOT/" 即容器
+    # 根本身（-d 判真），rm -rf 会把所有容器连根删光；"."/".."/含分隔符同理。
+    # App 端 ContainerManager.remove 已同款加固，双端一致。
+    case "$name" in ""|"."|".."|*[!A-Za-z0-9._-]*|*/*)
+        die "拒绝删除：容器名非法（\"$name\"）" ;;
+    esac
+    printf '确认删除容器 "%s"（含全部数据）? [y/N] ' "$name"
+    local _a; read -r _a
+    case "$_a" in y|Y|yes)
+        "$AW_WINE" --container "$name" wineserver -k >/dev/null 2>&1 || true
+        rm -rf -- "$CONT_ROOT/$name"
+        msg "已删除: $name"
+        [ "$(conf_read "$CONF_GLOBAL" default_container "")" = "$name" ] \
+            && sed -i '/^default_container=/d' "$CONF_GLOBAL" 2>/dev/null
+        ;;
+    *) echo "已取消" ;;
+    esac
+}
+
+cmd_run() {
+    local name="$1"; shift
+    [ -n "$name" ] || die "用法: linbox-container run <name> <exe> [args...]"
+    exec "$AW_WINE" --container "$name" "$@"
+}
+
+cmd_cmd() {
+    local name="$1"; shift
+    [ -n "$name" ] || die "用法: linbox-container cmd <name> <winecmd> [args...]"
+    exec "$AW_WINE" --container "$name" "$@"
+}
+
+cmd_stop() {
+    local name="$1"
+    [ -n "$name" ] || die "用法: linbox-container stop <name>"
+    msg "结束容器 $name 内全部 wine 进程..."
+    "$AW_WINE" --container "$name" wineserver -k || warn "wineserver -k 返回非零（可能本无进程）"
+    msg "完成"
+}
+
+# ---------- 解压工具（rev40: 支持 tzst = tar+zstd） ----------
+fetch() { # <url> <outfile>
+    local url="$1" out="$2"
+    mkdir -p "$(dirname "$out")"
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail --connect-timeout 20 -o "$out" "$url" || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$out" "$url" || return 1
+    else
+        die "需要 curl 或 wget"
+    fi
+}
+# 归档解压自动适配: .tar.gz/.tgz → gzip; .tzst/.tar.zst → zstd
+# (zstd 程序在则 zstd -dc | tar 兩段式; 否则兑底 tar --zstd); 其余裸 tar
+# $1=归档 $2=目标目录
+tar_extract_any() {
+    local a="$1" d="$2" _t _rc
+    [ -f "$a" ] || { echo "[错误] 归档不存在: $a" >&2; return 1; }
+    mkdir -p "$d" 2>/dev/null
+    case "$a" in
+        *.tar.gz|*.tgz)
+            if command -v tar >/dev/null 2>&1; then
+                tar -xzf "$a" -C "$d" || return 1
+            elif [ -x /system/bin/tar ]; then
+                /system/bin/tar -xzf "$a" -C "$d" || return 1
+            else
+                return 1
+            fi
+            ;;
+        *.tzst|*.tar.zst)
+            if command -v zstd >/dev/null 2>&1 || [ -x "$APP_PREFIX/bin/zstd" ]; then
+                _t="$d/.zstd-$$.tar"
+                zstd -dc "$a" > "$_t" 2>/dev/null || "$APP_PREFIX/bin/zstd" -dc "$a" > "$_t" \
+                    || { rm -f "$_t"; return 1; }
+                if command -v tar >/dev/null 2>&1; then
+                    tar -xf "$_t" -C "$d"; _rc=$?
+                else
+                    /system/bin/tar -xf "$_t" -C "$d"; _rc=$?
+                fi
+                rm -f "$_t"
+                return ${_rc}
+            fi
+            if command -v tar >/dev/null 2>&1; then
+                tar --zstd -xf "$a" -C "$d" 2>/dev/null && return 0
+            fi
+            echo "[错误] 需要 zstd 解压 .tzst: 先在 LinBox 终端执行 pkg install zstd" >&2
+            return 1
+            ;;
+        *)
+            if command -v tar >/dev/null 2>&1; then
+                tar -xf "$a" -C "$d" || return 1
+            elif [ -x /system/bin/tar ]; then
+                /system/bin/tar -xf "$a" -C "$d" || return 1
+            else
+                return 1
+            fi
+            ;;
+    esac
+}
+tar_extract() { # <archive> [extra opts]（兼容旧签名: 解到 / ）
+    local a="$1"; shift
+    if command -v tar >/dev/null 2>&1; then
+        tar -xzf "$a" -C / "$@" 2>/dev/null || tar -xf "$a" -C / "$@" || return 1
+    elif [ -x /system/bin/tar ]; then
+        /system/bin/tar -xzf "$a" -C / "$@" || return 1
+    else
+        return 1
+    fi
+}
+
+cmd_install_wine() {
+    local src="$1"
+    [ -n "$src" ] || die "用法: linbox-container install-wine <本地tar.gz/tzst | URL>"
+    local _f="$src" _tmp=0
+    case "$src" in
+        http://*|https://*)
+            mkdir -p "$DL_TMP"
+            _f="$DL_TMP/$(basename "$src")"
+            msg "下载: $src"
+            fetch "$src" "$_f" || die "下载失败: $src"
+            _tmp=1
+            ;;
+        *)
+            [ -f "$_f" ] || die "文件不存在: $_f"
+            ;;
+    esac
+    case "$_f" in
+        *.tzst|*.tar.zst)
+            msg "解包 wine(tzst) 到 / （data/data/com.linbox/... 路径自动就位）..."
+            mkdir -p "$DL_TMP/extract.$$"
+            tar_extract_any "$_f" "$DL_TMP/extract.$$" || die "解包失败（需要 zstd: pkg install zstd）"
+            if [ -d "$DL_TMP/extract.$$/data" ]; then
+                cp -a "$DL_TMP/extract.$$/data/" / 2>/dev/null || die "落位失败"
+            else
+                cp -a "$DL_TMP/extract.$$/." "$RFS_ROOT/" || die "落位失败"
+            fi
+            rm -rf "$DL_TMP/extract.$$"
+            ;;
+        *)
+            msg "解包 wine 到 / （data/data/com.linbox/... 路径自动就位）..."
+            tar_extract "$_f" || die "解包失败（需要 rootfs 发行包格式: data/data/... 开头）"
+            ;;
+    esac
+    [ -x "$RFS_USR/opt/wine/bin/wine" ] && {
+        msg "wine 安装成功: $RFS_USR/opt/wine/bin/wine"
+        sed -n '1p;5,6p' "$RFS_USR/opt/wine/.linbox-wine-info" 2>/dev/null || true
+    } || warn "解包完成，但未找到 $RFS_USR/opt/wine/bin/wine —— 请确认这是 LinBox wine x86_64 bionic 发行包"
+    [ "$_tmp" = 1 ] && rm -f "$_f"
+    return 0
+}
+
+# ---------- v3.3.0：box64 安装/升级（bionic 形态发行包） ----------
+# build-box64-bionic 工作流产物 linbox-box64-<ver>-aarch64-bionic.tar.gz
+#   布局 data/data/com.linbox/files/rootfs/usr/{local/bin/box64,
+#   lib/box64-x86_64-linux-gnu/libc++_shared.so, etc/box64.box64rc}
+# bionic 形态 box64（NDK clang 链接，PT_INTERP=/system/bin/linker64）
+# 与 rootfs 内其它二进制同链同形态；上游 ANDROID 模式的配套
+# x86_64 C++ 标准库一并落位，免整包重建 rootfs 即完成升级。
+cmd_install_box64() {
+    local src="$1"
+    [ -n "$src" ] || die "用法: linbox-container install-box64 <本地tar.gz | URL>（build-box64-bionic 工作流产物 linbox-box64-*-aarch64-bionic.tar.gz）"
+    local _f="$src" _tmp=0
+    case "$src" in
+        http://*|https://*)
+            mkdir -p "$DL_TMP"
+            _f="$DL_TMP/$(basename "$src")"
+            msg "下载: $src"
+            fetch "$src" "$_f" || die "下载失败: $src"
+            _tmp=1
+            ;;
+        *)
+            [ -f "$_f" ] || die "文件不存在: $_f"
+            ;;
+    esac
+    # 备份现有 box64（失败/产物不完整时回滚，旧版可继续用）
+    local _bak="$DL_TMP/box64.backup.$$"
+    local _b64="$(find_box64)"
+    if [ -n "$_b64" ]; then
+        cp -p "$_b64" "$_bak" 2>/dev/null || true
+        msg "已备份现有 box64 → $_bak"
+    fi
+    msg "解包 box64 到 / （data/data/com.linbox/... 路径自动就位，含 x86_64 配套库）..."
+    tar_extract "$_f" || {
+        if [ -n "$_b64" ] && [ -f "$_bak" ]; then
+            cp -p "$_bak" "$_b64" 2>/dev/null || true
+            msg "解包失败，已回滚原 box64"
+        fi
+        die "解包失败（需要 rootfs 发行包格式: data/data/... 开头）"
+    }
+    local _ok=1
+    if [ -x "$RFS_USR/local/bin/box64" ]; then
+        msg "box64 就位: $RFS_USR/local/bin/box64"
+    else
+        _ok=0
+    fi
+    if [ -e "$RFS_USR/lib/box64-x86_64-linux-gnu/libc++_shared.so" ]; then
+        msg "x86_64 配套库就位: $RFS_USR/lib/box64-x86_64-linux-gnu/libc++_shared.so"
+    else
+        _ok=0
+    fi
+    if [ "$_ok" != 1 ]; then
+        if [ -n "$_b64" ] && [ -f "$_bak" ]; then
+            cp -p "$_bak" "$_b64" 2>/dev/null || true
+            warn "产物不完整，已回滚原 box64（备份: $_bak）"
+        fi
+        warn "请确认这是 linbox-box64-*-aarch64-bionic.tar.gz（应含 usr/local/bin/box64 与 usr/lib/box64-x86_64-linux-gnu/）"
+        [ "$_tmp" = 1 ] && rm -f "$_f"
+        return 1
+    fi
+    # 形态确认：bionic 形态的 .interp 是 /system/bin/linker64，该字符串
+    # 直接出现在 ELF 头部区域；若出现 ld-linux-aarch64.so.1 说明装进了
+    # v3.2.5 废弃的 glibc 形态包（与 bionic rootfs 不相容）
+    if grep -aq "ld-linux-aarch64.so.1" "$RFS_USR/local/bin/box64" 2>/dev/null; then
+        warn "注意: 该 box64 是 glibc 形态（v3.2.5 废弃方案，bionic rootfs 不相容）"
+        warn "→ 请改装 build-box64-bionic 新产物（linbox-box64-*-aarch64-bionic.tar.gz，NDK bionic 链接）"
+        if [ -n "$_b64" ] && [ -f "$_bak" ]; then
+            cp -p "$_bak" "$_b64" 2>/dev/null || true
+            msg "已回滚原 box64（备份: $_bak）"
+        fi
+        [ "$_tmp" = 1 ] && rm -f "$_f"
+        return 1
+    fi
+    msg "box64 为 bionic 形态（NDK clang 链接，PT_INTERP => /system/bin/linker64）—— 安装成功"
+    [ -n "$_b64" ] && [ -f "$_bak" ] && rm -f "$_bak"
+    [ "$_tmp" = 1 ] && rm -f "$_f"
+    return 0
+}
+
+# ---------- DXVK / VKD3D-Proton ----------
+wine_reg_set() { # <container> <dll> <value>
+    "$AW_WINE" --container "$1" reg add "HKCU\\Software\\Wine\\DllOverrides" /v "$2" /d "$3" /f
+}
+
+# rev40: DLL 归位 —— 暂存目录 → system32/syswow64。
+# 用户资产样式(顶层 system32/ + syswow64/)直接归位; 上游发布包
+# (x64/ + x32|x86/)自动重映射; 裸 *.dll 按 64 位归 system32。
+# 单根目录包装(如 dxvk-2.4/x64)沿"仅单子目录且无散文件"链下钻。
+dxvk_layout_root() { # $1=staging → 回显布局根
+    local _d="$1" _f _sub _c _e
+    while :; do
+        _f="$(find "$_d" -maxdepth 1 -type f 2>/dev/null | head -n 1)"
+        [ -n "$_f" ] && break
+        _sub=""; _c=0
+        for _e in "$_d"/*/; do
+            [ -d "$_e" ] || continue
+            _sub="$_e"; _c=$((_c+1))
+        done
+        [ "$_c" = "1" ] || break
+        _d="$_sub"
+    done
+    printf '%s\n' "$_d"
+}
+dxvk_place_layout() { # $1=staging $2=syswow64-dir $3=system32-dir
+    local _p32="$2" _p64="$3" _d _hit=0
+    local _s="$(dxvk_layout_root "$1")"
+    mkdir -p "$_p32" "$_p64" 2>/dev/null
+    for _d in "$_s"/*/; do
+        [ -d "$_d" ] || continue
+        case "$(basename "$_d")" in
+            system32) cp -rf "$_d"/. "$_p64/" 2>/dev/null; _hit=1 ;;
+            syswow64) cp -rf "$_d"/. "$_p32/" 2>/dev/null; _hit=1 ;;
+            x64)      cp -rf "$_d"/. "$_p64/" 2>/dev/null; _hit=1 ;;
+            x32|x86)  cp -rf "$_d"/. "$_p32/" 2>/dev/null; _hit=1 ;;
+        esac
+    done
+    [ "$_hit" = "1" ] && return 0
+    find "$_s" -type f -name "*.dll" -exec cp -f {} "$_p64/" \; 2>/dev/null
+    return 0
+}
+
+cmd_install_dxvk() {
+    local name="$1" src="${2:-}"
+    [ -d "$CONT_ROOT/$name" ] || die "容器不存在: $name"
+    local _f _tmp=0 _dir _ver
+    if [ -n "$src" ] && [ -f "$src" ]; then
+        # 本地发行包（.tzst/.tar.zst/.tar.gz 均可, rev40）
+        _f="$src"
+    elif [ -n "$src" ] && case "$src" in http://*|https://*) true ;; *) false ;; esac; then
+        _f="$DL_TMP/$(basename "$src")"
+        msg "下载: $src"
+        fetch "$src" "$_f" || die "下载失败: $src"
+        _tmp=1
+    else
+        # 无参/本地缺失: 官方 release 兑底
+        _ver="${src:-2.4}"
+        local _url="https://github.com/doitsujin/dxvk/releases/download/v${_ver}/dxvk-${_ver}.tar.gz"
+        mkdir -p "$DL_TMP"
+        _f="$DL_TMP/dxvk-${_ver}.tar.gz"
+        msg "下载 DXVK v${_ver} ..."
+        fetch "$_url" "$_f" || die "下载失败: $_url"
+        _tmp=1
+    fi
+    _dir="$DL_TMP/dxvk-stage.$$"
+    msg "解包 $(basename "$_f")..."
+    rm -rf "$_dir"
+    tar_extract_any "$_f" "$_dir" || die "解包失败（.tzst 需要 zstd: pkg install zstd）"
+    local _p32="$CONT_ROOT/$name/prefix/drive_c/windows/syswow64"
+    local _p64="$CONT_ROOT/$name/prefix/drive_c/windows/system32"
+    mkdir -p "$_p32" "$_p64"
+    dxvk_place_layout "$_dir" "$_p32" "$_p64" || die "DLL 归位失败"
+    local _d
+    for _d in d3d8 d3d9 d3d10core d3d11 dxgi; do
+        wine_reg_set "$name" "$_d" "native,builtin" >/dev/null 2>&1 || warn "注册表写入失败: $_d（可先 wineboot 后重试）"
+    done
+    _ver="$(basename "$_f" | sed -e 's/^dxvk-//' -e 's/\.tar\.zst$//;s/\.tzst$//;s/\.tar\.gz$//;s/\.tgz$//')"
+    conf_write_kv "$CONT_ROOT/$name/container.conf" dxvk "$_ver"
+    conf_write_kv "$CONT_ROOT/$name/container.conf" dxoverrides "d3d8,d3d9,d3d10core,d3d11,dxgi=native,builtin"
+    rm -rf "$_dir"
+    [ "$_tmp" = 1 ] && rm -f "$_f"
+    msg "DXVK（$(basename "$_f")）安装完成（容器 $name）: 64 位 DLL → system32, 32 位 → syswow64。需要 Vulkan 驱动（turnip/Freedreno）才能硬件加速"
+    return 0
+}
+
+cmd_install_vkd3d() {
+    local name="$1" src="${2:-}"
+    [ -d "$CONT_ROOT/$name" ] || die "容器不存在: $name"
+    local _f _tmp=0 _dir _ver
+    if [ -n "$src" ] && [ -f "$src" ]; then
+        _f="$src"
+    elif [ -n "$src" ] && case "$src" in http://*|https://*) true ;; *) false ;; esac; then
+        _f="$DL_TMP/$(basename "$src")"
+        msg "下载: $src"
+        fetch "$src" "$_f" || die "下载失败: $src"
+        _tmp=1
+    else
+        _ver="${src:-2.14}"
+        local _url="https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v${_ver}/vkd3d-proton-${_ver}.tar.zst"
+        mkdir -p "$DL_TMP"
+        _f="$DL_TMP/vkd3d-proton-${_ver}.tar.zst"
+        msg "下载 VKD3D-Proton v${_ver} ..."
+        fetch "$_url" "$_f" || die "下载失败: $_url"
+        _tmp=1
+    fi
+    _dir="$DL_TMP/vkd3d-stage.$$"
+    msg "解包 $(basename "$_f")..."
+    rm -rf "$_dir"
+    tar_extract_any "$_f" "$_dir" || die "解包失败（.tzst/.tar.zst 需要 zstd: pkg install zstd）"
+    local _p32="$CONT_ROOT/$name/prefix/drive_c/windows/syswow64"
+    local _p64="$CONT_ROOT/$name/prefix/drive_c/windows/system32"
+    mkdir -p "$_p32" "$_p64"
+    dxvk_place_layout "$_dir" "$_p32" "$_p64" || die "DLL 归位失败"
+    wine_reg_set "$name" "d3d12" "native,builtin" >/dev/null 2>&1 || warn "注册表写入失败: d3d12"
+    _ver="$(basename "$_f" | sed -e 's/^vkd3d-proton-//' -e 's/\.tar\.zst$//;s/\.tzst$//;s/\.tar\.gz$//;s/\.tgz$//')"
+    conf_write_kv "$CONT_ROOT/$name/container.conf" vkd3d "$_ver"
+    conf_write_kv "$CONT_ROOT/$name/container.conf" dxoverrides "d3d12=native,builtin"
+    rm -rf "$_dir"
+    [ "$_tmp" = 1 ] && rm -f "$_f"
+    msg "VKD3D-Proton（$(basename "$_f")）安装完成（容器 $name）"
+    return 0
+}
+
+# ---------- Vulkan 驱动管理（v3.3.20：yuzu zip / adpkg zip / wrapper tar） ----------
+# 驱动库 = usr/share/linbox-wrapper/drivers/<slot>/（App 图形驱动页同款，
+# 上游实现 DriverPackages 独立目录模型）。安装实现委托 linbox-wine
+# --install-driver（zip/tar 通吃 + meta.json libraryName + ABI 门禁 +
+# 自生成 ICD/meta 全套语义），此处补 list/select/remove 管理面。
+DRIVERS_ROOT="$RFS_USR/share/linbox-wrapper/drivers"
+
+cmd_install_driver() {
+    local src="$1"
+    [ -n "$src" ] || die "用法: linbox-container install-driver <zip|tar(.gz/.xz/.bz2/.zst)|URL>"
+    exec "$AW_WINE" --install-driver "$src" "${2:-}"
+}
+
+cmd_driver() {
+    local sub="${1:-list}"
+    shift || true
+    case "$sub" in
+        list)
+            [ -d "$DRIVERS_ROOT" ] || { echo "（暂无已装驱动，install-driver 安装）"; return 0; }
+            local _d _n=0 _lib _ws _sel _selw
+            for _d in "$DRIVERS_ROOT"/*/; do
+                [ -f "$_d/meta.json" ] || continue
+                _n=$((_n+1))
+                _lib="$(sed -n 's/.*"libraryName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_d/meta.json" | head -n 1)"
+                _ws="$(sed -n 's/.*"wrapperStack"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$_d/meta.json" | head -n 1)"
+                printf "  %-40s %s  库=%s\n" "$(basename "$_d")" \
+                    "$([ "$_ws" = "true" ] && echo '[wrapper栈]' || echo '[turnip]')" "${_lib:-?}"
+            done
+            [ "$_n" = 0 ] && { echo "（暂无已装驱动，install-driver 安装）"; return 0; }
+            echo
+            echo "容器选择（driver select）查看/设置；App 图形驱动页同款槽位"
+            ;;
+        select)
+            local name="$1" slot="${2:-}"
+            [ -d "$CONT_ROOT/$name" ] || die "容器不存在: $name"
+            local _c="$CONT_ROOT/$name/container.conf"
+            if [ -z "$slot" ]; then
+                echo "wrapper=$(conf_read "$_c" wrapper "")  turnip=$(conf_read "$_c" turnip "")"
+                return 0
+            fi
+            if [ "$slot" = "off" ] || [ "$slot" = "-" ]; then
+                conf_write_kv "$_c" wrapper ""
+                conf_write_kv "$_c" turnip ""
+                msg "容器 $name: Vulkan 驱动切回 Mesa 内置 Turnip"
+                return 0
+            fi
+            [ -f "$DRIVERS_ROOT/$slot/icd.json" ] \
+                || die "驱动未安装: $slot（driver list 查看；install-driver 安装）"
+            # wrapper 栈槽位（含 libvulkan_wrapper.so）落 wrapper= 键，
+            # turnip 驱动落 turnip= 键（App 图形驱动页同款键位）
+            if [ -f "$DRIVERS_ROOT/$slot/libvulkan_wrapper.so" ]; then
+                conf_write_kv "$_c" wrapper "$slot"
+                conf_write_kv "$_c" turnip ""
+                msg "容器 $name: wrapper=$slot（wrapper 栈；配对/路由的 turnip 由激活链自动处理）"
+            else
+                conf_write_kv "$_c" turnip "$slot"
+                conf_write_kv "$_c" wrapper ""
+                msg "容器 $name: turnip=$slot（android 平台构建将自动经 wrapper 栈路由）"
+            fi
+            ;;
+        remove)
+            local slot="$1"
+            [ -n "$slot" ] || die "用法: linbox-container driver remove <slot>"
+            local _dir="$DRIVERS_ROOT/$slot"
+            [ -d "$_dir" ] || die "驱动未安装: $slot"
+            # 上游实现 removeDriver 同语义：引用该槽位的容器先重置回内置
+            local _cd _val _hit=0
+            for _cd in "$CONT_ROOT"/*/; do
+                [ -f "$_cd/container.conf" ] || continue
+                _val="$(conf_read "$_cd/container.conf" wrapper "")"
+                [ "$_val" = "$slot" ] && { conf_write_kv "$_cd/container.conf" wrapper ""; _hit=1; }
+                _val="$(conf_read "$_cd/container.conf" turnip "")"
+                [ "$_val" = "$slot" ] && { conf_write_kv "$_cd/container.conf" turnip ""; _hit=1; }
+            done
+            [ "$_hit" = 1 ] && msg "已把引用 $slot 的容器切回 Mesa 内置 Turnip"
+            rm -rf "$_dir"
+            msg "已卸载驱动: $slot"
+            ;;
+        *)
+            die "用法: linbox-container driver <list|select|remove> ..."
+            ;;
+    esac
+}
+
+# ---------- doctor ----------
+cmd_doctor() {
+    echo "==== LinBox Wine 容器体检 ===="
+    echo
+    echo "[1/5] rootfs 与 X11（显示核心）"
+    [ -d "$RFS_USR/lib" ] && echo "  [OK] rootfs 前缀就绪: $RFS_USR" || { echo "  [!!] rootfs 未安装"; return 1; }
+    local _n _any=0
+    for _n in 0 1 2 3 4 5 6 7 8 9; do
+        if [ -S "$X11_SOCK_DIR/X$_n" ]; then
+            echo "  [OK] X 服务 socket 就绪: X$_n（DISPLAY=:$_n 可用）"
+            _any=1
+        fi
+    done
+    [ "$_any" = 1 ] || echo "  [!!] 未发现 X11 socket —— 先在 LinBox 中运行 linbox-x11 :1 启动 X 服务"
+    [ -r "$RFS_USR/lib/libX11.so.6" ] && echo "  [OK] rootfs libX11 就绪（已打 App 侧 socket 路径补丁）" \
+        || echo "  [!!] rootfs libX11 缺失 —— 请用 bionic-rootfs workflow 重建 rootfs"
+
+    echo
+    echo "[2/5] Wine 运行时"
+    if [ -x "$RFS_USR/opt/wine/bin/wine" ]; then
+        echo "  [OK] x86_64 wine（box64 用）: $RFS_USR/opt/wine/bin/wine"
+    else
+        echo "  [--] x86_64 wine 未安装 → linbox-container install-wine <CI Release 的 tar.gz>"
+    fi
+    if [ -x "$RFS_USR/opt/bin/wine" ]; then
+        echo "  [OK] hangover wine（aarch64 qemu 模拟）: $RFS_USR/opt/bin/wine"
+    else
+        echo "  [--] hangover wine 未安装（aarch64 rootfs 构建包含）"
+    fi
+
+    echo
+    echo "[3/5] CPU 翻译后端"
+    if [ -n "$(find_box64)" ]; then
+        echo "  [OK] box64: $(find_box64)"
+        # v3.3.0：box64 形态体检 —— bionic 形态（NDK clang 链接，
+        # PT_INTERP=/system/bin/linker64）与 rootfs 其它二进制同链；
+        # 若检出 glibc 加载器字符串即 v3.2.5 废弃形态（bionic rootfs
+        # 不相容），提示直接换装新产物
+        if grep -aq "ld-linux-aarch64.so.1" "$(find_box64)" 2>/dev/null; then
+            echo "  [!!] box64 为 glibc 形态（v3.2.5 废弃方案，bionic rootfs 不相容）"
+            echo "       → linbox-container install-box64 <linbox-box64-*-aarch64-bionic.tar.gz|URL>"
+        else
+            echo "  [OK] box64 为 bionic 形态（NDK clang 链接，PT_INTERP => /system/bin/linker64）"
+        fi
+        # 上游 ANDROID 模式配套的 x86_64 C++ 标准库（v3.3.0 起随包安装）
+        if [ -e "$RFS_USR/lib/box64-x86_64-linux-gnu/libc++_shared.so" ]; then
+            echo "  [OK] box64 x86_64 配套库: $RFS_USR/lib/box64-x86_64-linux-gnu/libc++_shared.so"
+        else
+            echo "  [--] x86_64 配套库未安装（重装 box64 或重建 rootfs 补齐）"
+        fi
+    else
+        echo "  [--] box64 未安装 → 运行 build-box64-bionic workflow 或安装其 Release 产物"
+    fi
+    if [ -x "$RFS_USR/opt/fex/bin/FEXInterpreter" ]; then
+        echo "  [OK] fexcore: $RFS_USR/opt/fex/bin/FEXInterpreter"
+    else
+        echo "  [--] fexcore 未安装（FEX-Emu 暂无 bionic 官方构建；安装到 $RFS_USR/opt/fex/ 后自动启用）"
+    fi
+    local _auto="无可用后端" _archnow
+    _archnow="$(arch_now)"
+    case "$_archnow" in
+        x86_64)
+            [ -x "$RFS_USR/opt/wine/bin/wine" ] && _auto="native"
+            ;;
+        aarch64|arm64)
+            if [ -x "$RFS_USR/opt/wine/bin/wine" ] && [ -n "$(find_box64)" ]; then _auto="box64"
+            elif [ -x "$RFS_USR/opt/bin/wine" ]; then _auto="hangover"
+            fi
+            ;;
+    esac
+    echo "  架构: $_archnow → 自动后端: $_auto"
+    echo "  说明: aarch64 设备默认 box64；hangover 无需 box64；x86_64 设备原生运行"
+
+    echo
+    echo "[4/5] 音频（PulseAudio TCP）"
+    if bash -c '(exec 3<>/dev/tcp/127.0.0.1/4713) 2>/dev/null'; then
+        echo "  [OK] pulseaudio TCP 127.0.0.1:4713 就绪"
+    else
+        echo "  [--] 4713 未监听 —— 运行 linbox-x11 :1 时会自动拉起；或手动:"
+        echo "       pulseaudio --start --load=\"module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1\" --exit-idle-time=-1"
+    fi
+
+    echo
+    echo "[5/5] 容器"
+    cmd_list
+    echo
+    echo "==== 体检结束 ===="
+    return 0
+}
+
+find_box64() {
+    local _c
+    for _c in "$RFS_USR/local/bin/box64" "$RFS_USR/bin/box64" "$APP_PREFIX/bin/box64"; do
+        [ -x "$_c" ] && { printf '%s' "$_c"; return 0; }
+    done
+    return 1
+}
+
+usage() {
+    cat << 'EOF'
+linbox-container — LinBox Wine 容器管理（bionic rootfs / X11）
+
+命令一览:
+  create <name> [--backend auto|box64|hangover|fexcore|native]
+                [--preset performance|compatibility]
+                [--screen native|WxH] [--gallium auto|zink|freedreno|llvmpipe]
+                [--env "K=V K2=V2"]   创建容器
+  list                          列出全部容器（* 为默认容器）
+  info <name>                   容器详情
+  set <name> k=v [...]          修改配置（backend/preset/screen/gallium/env/wine）
+  default [name]                查看/设置默认容器
+  clone <src> <new>             克隆容器
+  remove <name>                 删除容器
+  run <name> <exe> [args...]    在容器中运行 exe
+  cmd <name> <winecmd> [...]    运行 wine 子命令（wineboot/winecfg/reg...）
+  stop <name>                   结束容器内全部 wine 进程（wineserver -k）
+  install-wine <tarball|URL>    安装 x86_64 wine 发行包（.tar.gz/.tzst 均可）
+  install-box64 <tarball|URL>   安装/升级 box64（glibc 形态，随包带
+                                aarch64 glibc 运行库，免重建 rootfs）
+  install-dxvk <name> [文件|URL|ver]
+                                向容器安装 DXVK（tzst/tar.gz; 64 位→system32,
+                                32 位→syswow64; x64/x32 布局自动重映射）
+  install-vkd3d <name> [文件|URL|ver]
+                                向容器安装 VKD3D-Proton（Vulkan D3D12）
+  install-driver <zip|tar|URL>  安装 Vulkan 驱动包（yuzu zip / adpkg zip /
+                                wrapper 栈 tar → 独立目录多驱动共存）
+  driver list                   列出已装 Vulkan 驱动（turnip / wrapper 栈）
+  driver select <容器> [槽位|off] 查看/设置容器的 Vulkan 驱动
+  driver remove <槽位>          卸载驱动（引用它的容器自动切回 Mesa 内置）
+  doctor                        体检：X11 / 后端 / 音频 / 容器
+
+显示: X11（LinBox 内置 X 服务，socket 在 App 侧 tmp/.X11-unix）
+音频: PulseAudio TCP 127.0.0.1:4713（linbox-x11 会话自动拉起）
+EOF
+}
+
+# ---------- 主分发 ----------
+CMD="${1:-}"
+[ -n "$CMD" ] || { usage; exit 0; }
+shift
+
+case "$CMD" in
+    create)        cmd_create "$@" ;;
+    list|ls)       cmd_list ;;
+    info)          cmd_info "$@" ;;
+    set)           cmd_set "$@" ;;
+    default)       cmd_default "$@" ;;
+    clone)         cmd_clone "$@" ;;
+    remove|rm)     cmd_remove "$@" ;;
+    run)           cmd_run "$@" ;;
+    cmd|wine)      cmd_cmd "$@" ;;
+    stop)          cmd_stop "$@" ;;
+    install-wine)  cmd_install_wine "$@" ;;
+    install-box64) cmd_install_box64 "$@" ;;
+    install-dxvk)  cmd_install_dxvk "$@" ;;
+    install-vkd3d) cmd_install_vkd3d "$@" ;;
+    install-driver) cmd_install_driver "$@" ;;
+    driver)        cmd_driver "$@" ;;
+    doctor)        cmd_doctor ;;
+    help|--help|-h) usage ;;
+    *) die "未知命令: $CMD（help 查看用法）" ;;
+esac

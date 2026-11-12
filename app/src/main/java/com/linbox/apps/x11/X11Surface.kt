@@ -318,6 +318,12 @@ fun X11Screen() {
                         // fix15：自适应客户端同步当前 X 屏幕尺寸（已铺满则跳过判断）
                         X11FitClient.screenW = screenW
                         X11FitClient.screenH = screenH
+                        // v3.1.7（AnWind 移植）：当前 X 屏幕尺寸落盘
+                        // （.linbox-x11-screen）—— 容器启动链构建"跟随窗口"
+                        // 模式的 wine 虚拟桌面命令时读取（RootfsLauncher
+                        // currentXScreenResolution），无 WM 的 X 服务上
+                        // 虚拟桌面按当前 X 屏幕尺寸创建才能铺满又跟随。
+                        X11ResolutionLink.writeScreenSize(screenW, screenH)
                         // 同步 Winlator 侧 xserver 状态（screenInfo 消费方依赖）。
                         try {
                             lv.screenInfo.handleHostSizeChanged(surfaceW, surfaceH)
@@ -1071,6 +1077,10 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 val px = p[0]
                 val py = p[1]
                 tapX = px; tapY = py
+                // v3.0（AnWind 移植）：点击置前 —— 把包含落点的最顶层可见
+                // 根子窗提到最前（无 WM 的 X 屏上多 wine 会话堆叠时的
+                // click-to-raise；fire-and-forget，不阻塞触摸线程）。
+                X11WindowOps.raiseAt(px.toInt(), py.toInt())
                 postSend {
                     if (LorieView.connected())
                         view.sendMouseEvent(px, py, InputStub.BUTTON_LEFT, true, false)

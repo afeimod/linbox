@@ -1,0 +1,80 @@
+--- a/shmem.c
++++ b/shmem.c
+@@ -11,6 +11,7 @@
+ #include <string.h>
+ #include <sys/mman.h>
+ #include <sys/socket.h>
++#include <sys/syscall.h>
+ #include <sys/un.h>
+ #include <unistd.h>
+ #include <paths.h>
+@@ -153,6 +154,58 @@
+ #endif
+ }
+ 
++/* ------------------------------------------------------------------
++ * LinBox 追加：POSIX shm_open/shm_unlink
++ *
++ * bionic 刻意不提供 POSIX 共享内存接口（bionic docs/status.md 将
++ * shm_open/shm_unlink 列为 "Missing functions ... explicitly disallowed
++ * by SELinux"，任何 API 级别都没有声明与实现）。而 Wine(proton 树)
++ * 的 esync/fsync（dlls/ntdll/unix 与 server 共 4 个文件）直接调用
++ * 这两个函数：bionic 头文件无声明 -> clang 的
++ * -Wimplicit-function-declaration 直接判错；libc 亦无符号可链接。
++ *
++ * 实现策略（与 Wine 的用法完全匹配：Wine 只做 create -> ftruncate ->
++ * mmap -> close/shm_unlink，从不依赖名字的持久性）：
++ *   1. 优先 memfd_create(2)（内核 >= 3.17，Android 8+ 设备基本都有；
++ *      bionic libc API 30 才有包装函数，故走 syscall 直调）；
++ *   2. 失败回退 ashmem（复用本文件 ashmem_create_region：API>=26 走
++ *      ASharedMemory_create，更老走 /dev/ashmem ioctl）。
++ * shm_unlink：两个后端都是匿名 fd，无名字空间可摘除，no-op 返回 0。
++ * oflag/mode 忽略（调用方恒为 O_RDWR 语义，尺寸由后续 ftruncate 决定）。
++ * ------------------------------------------------------------------ */
++int shm_open(const char *name, int oflag, mode_t mode)
++{
++	int fd;
++
++	(void)oflag;
++	(void)mode;
++
++	if (name == NULL) {
++		errno = EINVAL;
++		return -1;
++	}
++
++#if defined(__NR_memfd_create)
++	/* MFD_CLOEXEC 不可用：fd 需要跨 fork（wineserver 语义）传递给子进程 */
++	fd = (int)syscall(__NR_memfd_create, name, 0u);
++	if (fd >= 0)
++		return fd;
++	DBG("shm_open: memfd_create failed (%s), fallback to ashmem", strerror(errno));
++#endif
++
++	fd = ashmem_create_region(name, 0);
++	if (fd < 0)
++		DBG("shm_open: ashmem_create_region failed (%s)", strerror(errno));
++	return fd;
++}
++
++int shm_unlink(const char *name)
++{
++	(void)name;
++	/* memfd/ashmem 均为匿名对象，名字仅作标签，无需真正 unlink */
++	return 0;
++}
++
+ static void ashv_check_pid()
+ {
+ 	pid_t mypid = getpid();
+--- a/exports.txt
++++ b/exports.txt
+@@ -10,6 +10,8 @@
+ 		shmget;
+ 		shmat;
+ 		shmdt;
++		shm_open;
++		shm_unlink;
+ 
+ 	local: *;         # hide everything else
+ };

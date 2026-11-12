@@ -1,0 +1,56 @@
+# linbox: wine 10.x 树 noexec 回退补丁（x86_64 形态）
+#   10.x 的 map_file_into_view 初始 mmap 已含执行位（Flow A）：
+#   只读执行映射本就能走匿名回退；剩两个硬点：
+#   ① EPERM 分支对 VPROT_WRITE 映射硬失败（DEP-off 游戏的共享
+#     可写映射被强加执行位后必撞）—— 本补丁移除（上游参考 同款）；
+#   ② 尾部"未对齐共享映射"硬失败 —— 软化为私有读拷贝。
+#   另：map_image_into_view 的节映射带上 IMAGE_SCN_MEM_EXECUTE →
+#   VPROT_EXEC，执行段初始即带执行位 mmap → noexec EPERM →
+#   直接走匿名回退（不再依赖事后 mprotect）。
+#
+# v3.3.7：WARN 行内嵌 "LinBox-noexec-fallback" 生效标记 ——
+#   App 侧 WinePatchDetector grep ntdll.so 判断 wine 包是否含本补丁。
+diff -uNr a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2394,11 +2394,9 @@
+             break;
+         case EACCES:
+         case EPERM:  /* noexec filesystem, fall back to read() */
+-            if (vprot & VPROT_WRITE)
+-            {
+-                if (prot & PROT_EXEC) ERR( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
+-                return STATUS_ACCESS_DENIED;
+-            }
+-            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem?\n" );
++            /* LinBox: never hard-fail writable mappings here (上游参考's
++             * wine-9.2-custom drops the same refusal) - the private read()
++             * fallback below still gives the caller full data access. */
++            if (prot & PROT_EXEC) WARN( "failed to set PROT_EXEC on file map, noexec filesystem? [LinBox-noexec-fallback]\n" );
+             break;
+         default:
+@@ -2410,8 +2408,12 @@
+
+     if (vprot & VPROT_WRITE)
+     {
+-        ERR( "unaligned shared mapping %p-%p not supported\n", map_addr, map_addr + map_size );
+-        return STATUS_INVALID_PARAMETER;
++        /* LinBox: shared mapping could not be created with mmap (noexec /
++         * unaligned) - degrade to a private read copy instead of failing so
++         * games on /storage keep working (same semantics as 上游参考's
++         * wine-9.2-custom fallback). */
++        WARN( "shared mapping %p-%p not supported, falling back to private read\n",
++              map_addr, map_addr + map_size );
+     }
+
+     mprotect( map_addr, map_size, PROT_READ | PROT_WRITE );
+@@ -3173,7 +3175,8 @@
+             end > ((st.st_size + sector_align) & ~sector_align) ||
+             end < file_start ||
+             map_file_into_view( view, fd, sec[i].VirtualAddress, file_size, file_start,
+-                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY,
++                                VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY |
++                                (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE ? VPROT_EXEC : 0),
+                                 removable ) != STATUS_SUCCESS)
+         {
+             ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",

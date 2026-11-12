@@ -1,0 +1,32 @@
+proton 树（proton_10.0）wineboot.c 的 xstate 初始化在 aarch64 PE 架构下缺空桩，
+aarch64-windows/arm64ec-windows 的 wineboot.o 编译直接报错：
+
+  programs/wineboot/wineboot.c:539:5: error: call to undeclared function
+  'initialize_xstate_features'; ISO C99 and later do not support implicit
+  function declarations [-Wimplicit-function-declaration]
+
+结构：#if defined(__i386__)||defined(__x86_64__) 分支内定义了完整实现，
+#elif defined(__aarch64__) 分支只定义了 read_tsc_frequency（漏掉
+initialize_xstate_features），而 #else 分支两者都有空桩。539 行的调用
+无条件。修法与 #else 分支一致：给 aarch64 分支补空桩。
+hangover-11.16 树无 xstate 代码（整个函数不存在），补丁不适用 —— 由
+build.sh 条件应用（.patch.proton 后缀避开主补丁循环 *.patch 通配，
+且 hangover 树结构相近会 fuzz 误匹配，故必须条件+--fuzz=0 精确套用）。
+
+--- a/programs/wineboot/wineboot.c
++++ b/programs/wineboot/wineboot.c
+@@ -378,10 +378,14 @@
+     return freq;
+ }
+ 
+ #elif defined(__aarch64__)
+ 
++static void initialize_xstate_features(struct _KUSER_SHARED_DATA *data)
++{
++}
++
+ static UINT64 read_tsc_frequency(void)
+ {
+     UINT64 tsc_frequency;
+     __asm__ volatile( "mrs %[Res], CNTFRQ_EL0" : [Res] "=r" (tsc_frequency) );
+     return tsc_frequency;

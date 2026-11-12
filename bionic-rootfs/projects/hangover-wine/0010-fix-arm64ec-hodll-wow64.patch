@@ -1,0 +1,92 @@
+# linbox: wow64 CPU 仿真 DLL 的 HODLL 环境变量机制（v3.2.10，Hangover 兼容移植）
+# 
+# 【根因】vanilla wine（9.x/10.x/11.x 的非 hangover 树）wow64 i386 进程初始化
+# （dlls/wow64/syscall.c get_cpu_dll_name）按【注册表】HKLM\Software\
+# Microsoft\Wow64\x86 选 CPU 仿真 DLL；wine.inf（ntarm64 段）写入的默认值
+# 为 xtajit.dll——Linux 上不存在 → 32 位进程 wow64 初始化直接
+#     err:wow:load_64bit_module failed to load dll c0000135
+# （设备实测 wine-proton10 arm64ec：wineboot -i 的 Wow64Install 段靠 32 位
+# syswow64\rundll32.exe 执行，进程初始化即死 → C:\windows\syswow64 整个
+# 目录无内容、x86 游戏全不可用）。
+# 
+# 【修复】对齐 hangover-11.16 的 get_cpu_dll_name（dlls/wow64/syscall.c）：
+#   * 新增 wow64GetEnvironmentVariableW（RtlQueryEnvironmentVariable_U 封装）
+#   * HODLL 环境变量优先（Hangover ABI：本仓 wine 包自带 libwow64fex.dll，
+#     App 侧 WineEnvironment 探测注入 HODLL=libwow64fex.dll，用户可覆盖）
+#   * I386 默认（ARM64/ARM64EC 宿主）改 libwow64fex.dll，不再读注册表
+#     （ARMNT 分支的注册表逻辑保持原样）
+# 
+# 【互斥】锚点为 vanilla 形态（注册表版 get_cpu_dll_name，9.7 与 proton_10.0、
+# wine-11.16 该区域逐字一致）；hangover-11.16 树自带 HODLL 机制（函数头含
+# wowbox64 默认与 env 读取）→ hunk 不命中 → 静默跳过。
+# 
+# 【验证】wine-9.7 与 proton_10.0 原始树 patch --dry-run 全 hunk 命中；
+# hangover-11.16 树全 hunk 不命中（预期互斥）。
+--- a/dlls/wow64/syscall.c
++++ b/dlls/wow64/syscall.c
+@@ -724,31 +724,62 @@
+         NtTerminateProcess( GetCurrentProcess(), status );
+     }
+     return module;
+ }
+ 
+ 
++static DWORD wow64GetEnvironmentVariableW( LPCWSTR name, LPWSTR val, DWORD size )
++{
++    UNICODE_STRING us_name, us_value;
++    NTSTATUS status;
++    DWORD len;
++
++    RtlInitUnicodeString( &us_name, name );
++    us_value.Length = 0;
++    us_value.MaximumLength = (size ? size - 1 : 0) * sizeof(WCHAR);
++    us_value.Buffer = val;
++
++    status = RtlQueryEnvironmentVariable_U( NULL, &us_name, &us_value );
++    len = us_value.Length / sizeof(WCHAR);
++    if (status == STATUS_BUFFER_TOO_SMALL) return len + 1;
++    if (status) return 0;
++    if (!size) return len + 1;
++    val[len] = 0;
++    return len;
++}
++
+ /**********************************************************************
+  *           get_cpu_dll_name
+  */
+ static const WCHAR *get_cpu_dll_name(void)
+ {
+     static ULONG buffer[32];
+     KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
++    WCHAR *cpu_dll = (WCHAR*)buffer;
+     OBJECT_ATTRIBUTES attr;
+     UNICODE_STRING nameW;
+     const WCHAR *ret;
+     HANDLE key;
+     ULONG size;
++    UINT res;
++
++    /* linbox v3.2.10: HODLL 环境变量优先（Hangover ABI；App 侧注入
++     * HODLL=libwow64fex.dll，用户可覆盖）；ARM64/ARM64EC 宿主缺省
++     * libwow64fex.dll——vanilla 的注册表默认 xtajit.dll 在 Linux 不存在，
++     * 32 位 wow64 进程必死于 load_64bit_module c0000135 */
++    if ((res = wow64GetEnvironmentVariableW( L"HODLL", cpu_dll, ARRAY_SIZE(buffer))) &&
++        res < ARRAY_SIZE(buffer))
++        return cpu_dll;
+ 
+     switch (current_machine)
+     {
+     case IMAGE_FILE_MACHINE_I386:
+-        RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\x86" );
+-        ret = (native_machine == IMAGE_FILE_MACHINE_ARM64 ? L"xtajit.dll" : L"wow64cpu.dll");
+-        break;
++        if (native_machine == IMAGE_FILE_MACHINE_ARM64 ||
++            native_machine == IMAGE_FILE_MACHINE_ARM64EC)
++            return L"libwow64fex.dll";
++        return L"wow64cpu.dll";
+     case IMAGE_FILE_MACHINE_ARMNT:
+         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\arm" );
+         ret = L"wowarmhw.dll";
+         break;
+     default:
+         ERR( "unsupported machine %04x\n", current_machine );

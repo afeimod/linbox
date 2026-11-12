@@ -1,0 +1,4 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# LinBox winecfg 包装器（APK assets 自动部署，勿手改）
+# 等价: linbox-wine winecfg（容器自持环境 + X 服务自启 + DISPLAY=:1）
+exec /data/data/com.linbox/files/rootfs/usr/bin/linbox-wine winecfg "$@"

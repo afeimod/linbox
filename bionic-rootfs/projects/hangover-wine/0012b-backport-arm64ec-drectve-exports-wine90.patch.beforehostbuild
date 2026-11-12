@@ -1,0 +1,104 @@
+# linbox: 0012 drectve 导出 backport 的 wine-9.0 形态变体（v3.3.9）
+#
+# 【根因】0012 锚定 wine-9.7 形态（output_exports 参数名为 exports）；
+#   wine-9.0 / 9.2 / proton_9.0 的同一函数参数名为 spec（实测比对：
+#   wine-9.0 tarball 406 行、wine-9.2 tarball 402 行、proton_9.0 406 行
+#   均为 "DLLSPEC *spec"；9.7 为 "DLLSPEC *exports"；10/11 虽为 spec 但
+#   函数头多一行 "struct exports *exports = &spec->exports;" 且
+#   has_relays/get_exports_count 的实参是 exports）→ 0012 在 9.0 形态树
+#   上 hunk 失败 → winebuild 走经典 .edata 导出表路径，而 output_stubs
+#   对 CPU_ARM64EC 用 arm64_name（"#sym" EC 符号）定义 stub → 新版
+#   lld-link 对 .edata 引用按 EC 符号解析 → 每个 arm64ec PE 链接报
+#     "undefined symbol: __wine_stub_* (EC symbol)"
+#   （0012 头注释记录的 official-9.7 同款炸点）。proton_9.0 arm64ec
+#   修完 crtdll/amd_ags 后必折在此处。
+#
+# 【修法】与 0012 完全相同的上游 wine-10.0 官方修复（.drectve 导出
+#   指令交由 lld-link 生成导出表 + x86_64 thunk + EC 元数据），仅两处
+#   适配 wine-9.0 形态：
+#   * 锚点上下文：has_relays( spec ) / get_exports_count( spec )；
+#   * 块内变量引用：spec->base / spec->limit / spec->ordinals[i] /
+#     get_stub_name( odp, spec )。
+#   locale 排序保证 0012b 在 0012 之后应用（"0012-" < "0012b"）。
+#
+# 【互斥 —— v2 加固】本补丁上下文扩展到函数头（12 行），判别行
+#   get_exports_count( spec ) 位于上下文第 3 行：GNU patch 默认最大
+#   fuzz=2 只丢弃头/尾各 2 行上下文，判别行在窗口外必被校验 ——
+#   9.7（exports 实参）、10/11（struct exports 行 + exports 实参）在
+#   任何 fuzz 下都无法命中，杜绝 v1 短锚点在 hangover-11.16/wine-9.7
+#   上 fuzz 误插导致的 drectve 块重复（本地实测复现并修正）。
+#   * wine-9.7：0012 命中（exports 形态），0012b 不命中 → 跳过；
+#   * wine-9.0 / 9.2 / proton_9.0：0012 落空，0012b 命中 → 生效；
+#   * wine-10+ / hangover-11.16：output_exports 已自带 arm64ec 分支，
+#     两者皆不命中 → 跳过。
+#   注意：必须作为 .beforehostbuild（winebuild 是宿主工具，host 构建
+#   阶段就要用补丁后的 spec32.c）。
+#
+# 【验证】proton_9.0 / wine-9.0 树 patch --dry-run 命中；wine-9.7 /
+#   wine-10.0 / proton_10.0 / hangover-11.16 在默认 fuzz=2 下 dry-run
+#   不命中（本地五树实测）。
+
+--- a/tools/winebuild/spec32.c
++++ b/tools/winebuild/spec32.c
+@@ -409,16 +409,61 @@
+     int needs_imports = 0;
+     int needs_relay = has_relays( spec );
+     int nr_exports = get_exports_count( spec );
+     const char *func_ptr = is_pe() ? ".rva" : get_asm_ptr_keyword();
+     const char *name;
+ 
+     if (!nr_exports) return;
+ 
++    /* ARM64EC exports are more tricky than other targets. For functions implemented in ARM64EC,
++     * linker generates x86_64 thunk and relevant metadata. Use .drectve section to pass export
++     * directives to the linker. (linbox: verbatim backport of the upstream wine-10.0 winebuild
++     * fix for wine <= 9.x trees: the classic .edata table references plain symbols while stubs
++     * are defined as EC symbols ("#name"), and newer lld-link resolves .edata entries as EC
++     * symbols only -> "undefined symbol __wine_stub_* (EC symbol)" on every arm64ec dll.) */
++    if (target.cpu == CPU_ARM64EC)
++    {
++        output( "\t.section .drectve\n" );
++        for (i = spec->base; i <= spec->limit; i++)
++        {
++            ORDDEF *odp = spec->ordinals[i];
++            const char *symbol;
++
++            if (!odp) continue;
++
++            switch (odp->type)
++            {
++            case TYPE_EXTERN:
++            case TYPE_STDCALL:
++            case TYPE_VARARGS:
++            case TYPE_CDECL:
++                if (odp->flags & FLAG_FORWARD)
++                    symbol = odp->link_name;
++                else if (odp->flags & FLAG_EXT_LINK)
++                    symbol = strmake( "%s_%s", asm_name("__wine_spec_ext_link"), odp->link_name );
++                else
++                    symbol = asm_name( get_link_name( odp ));
++                break;
++            case TYPE_STUB:
++                symbol = asm_name( get_stub_name( odp, spec ));
++                break;
++            default:
++                assert( 0 );
++            }
++
++            output( "\t.ascii \" -export:%s=%s,@%u%s%s\"\n",
++                    odp->name ? odp->name : strmake( "_noname%u", i ),
++                    symbol, i,
++                    odp->name ? "" : ",NONAME",
++                    odp->type == TYPE_EXTERN ? ",DATA" : "" );
++        }
++        return;
++    }
++
+     output( "\n/* export table */\n\n" );
+     output( "\t%s\n", get_asm_export_section() );
+     output( "\t.balign 4\n" );
+     output( ".L__wine_spec_exports:\n" );
+ 
+     /* export directory header */
+ 
+     output( "\t.long 0\n" );                       /* Characteristics */

@@ -1,0 +1,653 @@
+name: LinBox Bionic Wine (X11 / x86_64 + arm64ec)
+
+# ============================================================
+# 构建面向 LinBox bionic rootfs 的 Wine（两种形态 × 三种源码源）
+# ------------------------------------------------------------
+# 形态一 x86_64（配方 projects/wine）：
+#   * Unix 侧 x86_64-android(bionic) + PE 侧 i386/x86_64（新 WoW64）
+#   * aarch64 设备上由 box64 加载运行（MiceWine 同款模型）
+#   * x86_64 设备上原生运行
+# 形态二 arm64ec（配方 projects/hangover-wine）：
+#   * Unix 侧 aarch64-android(bionic) + PE 侧 arm64ec/aarch64/i386（新 WoW64）
+#   * aarch64 设备原生运行（无需整机模拟），安装于 $prefix/opt
+# 源码源（wine_kind 下拉选择，两种形态通用）：
+#   hangover  AndreRH/wine        tag hangover-<ver>（默认，移植版 + 补丁集）
+#   official  wine-mirror/wine    tag wine-<ver>    （WineHQ 官方源码 GitHub 镜像）
+#   proton    ValveSoftware/wine  branch proton_<ver>（Valve Proton 的 wine 源码树）
+#   custom    自行填写 wine_url 直链（任意 wine 源码 tarball）
+#   ※ 三大源均支持 arm64ec（实证：official-11.0 / proton_10.0 configure 全过）；
+#     过旧自定义树自动降级 aarch64,i386
+# 共同点：
+#   * 显示仅 X11（--with-x 全套扩展，无 wayland），连接 LinBox 内置
+#     termux-x11/libXlorie X 服务（App 侧 tmp/.X11-unix/X1，默认 :1）
+#   * 音频 PulseAudio（TCP 127.0.0.1:4713）、GStreamer、OpenGL、Vulkan
+#   * 依赖自动补齐：build-rootfs-arch.sh 依据 toposort 先构建全部依赖
+# 产物（<ver-token> 按 kind 生成：hangover 保持原样，official/proton
+# 带 kind 前缀避免与 hangover 同号冲突）：
+#   linbox-wine-<ver-token>-x86_64-bionic.tar.gz   （x86_64 形态）
+#   linbox-wine-<ver-token>-arm64ec-bionic.tar.gz  （arm64ec 形态）
+#   设备上用 `linbox-container install-wine <tar.gz>` 一键安装
+# ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_kind:
+        description: 'Wine 源码类型'
+        required: false
+        default: 'hangover'
+        type: choice
+        options:
+          - hangover
+          - official
+          - proton
+          - custom
+      wine_version:
+        description: '版本号 — hangover 仅发版里程碑有 tag：11.16/11.9/11.4/11.0/10.18/10.14/10.11/10.10/10.9/10.6/10.4/10.2/10.0（10.15、10.16 不存在！）；official 任意 tag：9.0~11.20（10.15、10.16 可用）；proton 仅主版本分支：11.0/10.0/9.0/8.0/7.0/6.3/5.13/5.0。三大源均支持 arm64ec；过旧自定义树自动降级 aarch64+i386'
+        required: false
+        default: '11.16'
+        type: string
+      wine_url:
+        description: 'custom 模式专用：源码 tarball 直链（其余模式留空自动推导）'
+        required: false
+        default: ''
+        type: string
+      wine_target:
+        description: '构建形态'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - x86_64
+          - arm64ec
+      make_release:
+        description: '构建成功后创建 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: bionic-wine-${{ github.ref }}-${{ github.event.inputs.wine_kind }}-${{ github.event.inputs.wine_target }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-wine:
+    name: Bionic Wine (${{ matrix.flavor }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        # both 展开为双形态矩阵；单选时只构建对应形态
+        flavor: ${{ fromJSON(github.event.inputs.wine_target == 'both' && '["x86_64", "arm64ec"]' || format('["{0}"]', github.event.inputs.wine_target)) }}
+
+    steps:
+      # ============ 1. 检出代码 ============
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 检查构建系统与配方
+        run: |
+          if [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/build-rootfs-arch.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/build-rootfs-arch.sh！"
+            echo "请将 bionic-rootfs/ 目录提交到仓库根目录后再运行。"
+            exit 1
+          fi
+          if [[ "${{ matrix.flavor }}" == "x86_64" ]] && [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/projects/wine/build.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/projects/wine/ 配方！"; exit 1
+          fi
+          if [[ "${{ matrix.flavor }}" == "arm64ec" ]] && [[ ! -f "${GITHUB_WORKSPACE}/bionic-rootfs/projects/hangover-wine/build.sh" ]]; then
+            echo "::error::未找到 bionic-rootfs/projects/hangover-wine/ 配方！"; exit 1
+          fi
+          echo "构建系统与 wine 配方就绪（${{ matrix.flavor }}）"
+
+      # ============ 1.5 解析 Wine 源码地址（三种来源 + custom） ============
+      - name: 解析 Wine 源码地址
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIND="${{ github.event.inputs.wine_kind }}"
+          # printf '%s' 不带换行——echo 的行尾 \n 会被 tr -c 误译为 _（产生 404 URL）
+          VER="$(printf '%s' "${{ github.event.inputs.wine_version }}" | tr -c 'A-Za-z0-9._-' '_')"
+          URL_IN="${{ github.event.inputs.wine_url }}"
+          [[ -n "${VER}" ]] || { echo "::error::wine_version 不能为空"; exit 1; }
+
+          case "${KIND}" in
+            hangover)
+              # AndreRH/wine 移植版（tag）—— 与默认行为一致，命名保持旧约定
+              WINE_URL="https://github.com/AndreRH/wine/archive/refs/tags/hangover-${VER}.tar.gz"
+              WINE_LABEL="hangover-${VER}"
+              WINE_TAG_X86="hangover-${VER}"   # x86_64 包名含 hangover- 前缀（旧约定）
+              WINE_TAG_ARM="${VER}"            # arm64ec 包名用裸版本（旧约定）
+              KIND_DESC="AndreRH hangover 移植版（含 GLES/mesa 适配补丁集）"
+              ;;
+            official)
+              # WineHQ 官方源码（GitHub 官方镜像 wine-mirror/wine，tag wine-<ver>）
+              WINE_URL="https://github.com/wine-mirror/wine/archive/refs/tags/wine-${VER}.tar.gz"
+              WINE_LABEL="official-${VER}"
+              WINE_TAG_X86="official-${VER}"
+              WINE_TAG_ARM="official-${VER}"
+              KIND_DESC="WineHQ 官方源码 wine-${VER}（wine-mirror GitHub 镜像）"
+              ;;
+            proton)
+              # Valve Proton 的 wine 源码树（分支 proton_<ver>，非 tag）
+              WINE_URL="https://github.com/ValveSoftware/wine/archive/refs/heads/proton_${VER}.tar.gz"
+              WINE_LABEL="proton-${VER}"
+              WINE_TAG_X86="proton-${VER}"
+              WINE_TAG_ARM="proton-${VER}"
+              KIND_DESC="Valve Proton 源码树 proton_${VER}（fsync/proton 补丁集）"
+              ;;
+            custom)
+              [[ -n "${URL_IN}" ]] || { echo "::error::custom 模式必须在 wine_url 填入源码 tarball 直链"; exit 1; }
+              WINE_URL="${URL_IN}"
+              WINE_LABEL="custom-${VER}"
+              WINE_TAG_X86="custom-${VER}"
+              WINE_TAG_ARM="custom-${VER}"
+              KIND_DESC="自定义源码：${URL_IN}"
+              ;;
+            *)
+              echo "::error::未知 wine_kind: ${KIND}"; exit 1
+              ;;
+          esac
+
+          echo "Wine 源码类型: ${KIND}"
+          echo "版本标识: ${WINE_LABEL}"
+          echo "源码 URL: ${WINE_URL}"
+
+          # ============ 源码 URL 预检（v3.1.3 新增） ============
+          # hangover 源只在发版里程碑打 tag（11.16/11.9/11.4/11.0/10.18/10.14/
+          # 10.11/10.10/10.9/10.6/10.4/10.2/10.0...），中间小版本（10.15/10.16/
+          # 10.17/10.19/10.20）没有 tag，URL 必然 404；proton 源只有主版本分支
+          # （proton_9.0/10.0/11.0），填 10.15 同样 404。此前这种错误要等全部
+          # 依赖编译完（约 2 小时）才在 wine 源码下载阶段暴露——这里在参数
+          # 解析阶段就用 1 字节 Range 请求探测，404/410 立即失败并打印可用
+          # 版本清单。custom 源 URL 任意，只探测不强判（5xx/超时仅告警放行，
+          # 交给构建系统自身的 5 次重试兜底）。
+          if [[ "$KIND" != "custom" ]]; then
+            PROBE=""
+            _try=0
+            while [[ $_try -lt 3 ]]; do
+              _try=$((_try + 1))
+              PROBE="$(curl -sL --max-time 60 -r 0-0 -o /dev/null -w '%{http_code}' "${WINE_URL}" 2>/dev/null || true)"
+              if [[ "$PROBE" == 2* || "$PROBE" == 4* ]]; then break; fi
+              sleep 5
+            done
+            case "$PROBE" in
+              2*)
+                echo "源码 URL 预检通过（HTTP ${PROBE}）: ${WINE_URL}"
+                ;;
+              404|410)
+                echo "::error::Wine 源码不存在（HTTP ${PROBE}）: ${WINE_URL}"
+                echo "::error::${KIND} 源没有版本 ${VER}，可用版本如下："
+                case "$KIND" in
+                  hangover)
+                    echo "::error::  hangover（AndreRH/wine，仅发版里程碑有 tag）:"
+                    echo "::error::    11.16 / 11.9 / 11.4 / 11.0 / 10.18 / 10.14 / 10.11 / 10.10 / 10.9 / 10.6 / 10.4 / 10.2 / 10.0"
+                    echo "::error::    更早：9.22 / 9.20 / 9.17 / 9.13 / 9.9 / 9.1 / 9.0 / 8.21 / 8.19 / 8.17 / 8.15 / 8.13 / 8.11"
+                    echo "::error::  ※ 10.15 / 10.16 / 10.17 / 10.19 / 10.20 等中间版本不存在，10.x 最新为 10.18"
+                    echo "::error::  ※ 需要精确的 10.15 / 10.16：请改选 official 源（全版本有 tag）"
+                    ;;
+                  official)
+                    echo "::error::  official（wine-mirror/wine）: 任意 wine-X.Y tag，9.0 ~ 11.20"
+                    echo "::error::  示例: 10.15 / 10.16 / 11.0 / 11.16（版本号不带 wine- 前缀）"
+                    ;;
+                  proton)
+                    echo "::error::  proton（ValveSoftware/wine，分支 proton_<主版本>）:"
+                    echo "::error::    11.0 / 10.0 / 9.0 / 8.0 / 7.0 / 6.3 / 5.13 / 5.0"
+                    echo "::error::  ※ proton 没有小版本分支（10.15 / 10.16 不存在）"
+                    ;;
+                esac
+                exit 1
+                ;;
+              *)
+                echo "::warning::源码 URL 预检未确认（HTTP ${PROBE:-无响应}），不阻断——若 URL 无效将在下载阶段重试 5 次后失败"
+                ;;
+            esac
+          fi
+
+          {
+            echo "WINE_URL=${WINE_URL}"
+            echo "WINE_LABEL=${WINE_LABEL}"
+            echo "WINE_TAG_X86=${WINE_TAG_X86}"
+            echo "WINE_TAG_ARM=${WINE_TAG_ARM}"
+            echo "WINE_KIND=${KIND}"
+            echo "KIND_DESC=${KIND_DESC}"
+          } >> "$GITHUB_ENV"
+
+      # ============ 2. 释放磁盘空间 ============
+      # v3.2.9：proton arm64ec runner 失联修复（CI run 41287894412：构建步骤
+      # failure、连 if:always() 的日志上传都 skipped = runner 层崩溃失联，
+      # 磁盘写满是头号嫌凶）。清理面扩大：Swift/Node/CodeQL/Rust 工具链
+      # 全清 + docker 镜像/卷/构建缓存全清，构建前后各打一次水位。
+      - name: 释放 Runner 磁盘空间
+        run: |
+          echo "清理前可用空间:"
+          df -h / | tail -1
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/share/swift /usr/local/lib/node_modules /opt/az \
+            /usr/local/graalvm /usr/local/julia* /opt/arduino* \
+            "${HOME}/.cache" 2>/dev/null || true
+          sudo docker system prune -af --volumes >/dev/null 2>&1 || true
+          sudo docker builder prune -af >/dev/null 2>&1 || true
+          echo "清理后可用空间:"
+          df -h / | tail -1
+
+      # ============ 3. 宿主依赖（bison/flex/gettext/libtool 为 wine 工具链必需） ============
+      - name: 安装宿主依赖（host-deps.sh）
+        run: |
+          sudo -E bash "${GITHUB_WORKSPACE}/bionic-rootfs/host-deps.sh"
+          echo "=== 工具版本 ==="
+          bison --version | head -1
+          flex --version
+          make --version | head -1
+          ccache --version | head -1
+          libtoolize --version | head -1 || true
+          clang --version | head -1 || true
+
+      # ============ 4. 前缀目录（build 系统按绝对路径安装依赖包） ============
+      - name: 准备 LinBox rootfs 前缀目录
+        run: |
+          sudo mkdir -p /data/data/com.linbox/files/rootfs/usr \
+                        /data/data/com.linbox/files/rootfs/home \
+                        /data/data/com.linbox/files/rootfs/tmp/.X11-unix \
+                        /data/data/com.linbox/files/usr/tmp/.X11-unix
+          sudo chown -R "$(whoami):$(whoami)" /data
+          echo "前缀目录就绪"
+
+      # ============ 5. 缓存（NDK / ccache / llvm-mingw） ============
+      - name: 缓存 NDK
+        uses: actions/cache@v4
+        with:
+          path: bionic-rootfs/ndk
+          key: linbox-ndk-r28b-v1
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            bionic-rootfs/bionic_ccache
+            bionic-rootfs/host_ccache
+          key: linbox-bionic-ccache-wine-${{ matrix.flavor }}-v1
+          restore-keys: |
+            linbox-bionic-ccache-wine-${{ matrix.flavor }}-v1
+            linbox-bionic-ccache-v1
+
+      - name: 缓存 llvm-mingw（PE 交叉编译器）
+        uses: actions/cache@v4
+        with:
+          path: |
+            bionic-rootfs/tmp/llvm-mingw-21
+            bionic-rootfs/tmp/llvm-mingw-22
+          key: linbox-llvm-mingw-wine-v2
+
+      # ============ 6. 构建 wine（自动拓扑补齐全部依赖） ============
+      - name: 构建 Wine ${{ matrix.flavor }}（含全部依赖）
+        shell: bash
+        run: |
+          cd "${GITHUB_WORKSPACE}/bionic-rootfs"
+          chmod +x *.sh
+          set -o pipefail
+
+          # 源码链接与版本标识由“解析 Wine 源码地址”步骤按 kind 推导
+          echo "Wine 源码: ${WINE_KIND} => ${WINE_URL}"
+
+          if [[ "${{ matrix.flavor }}" == "x86_64" ]]; then
+            # x86_64 形态：unix x86_64 + PE i386/x86_64（box64 加载）
+            export LINBOX_WINE_URL="${WINE_URL}"
+            export LINBOX_WINE_TAG="${WINE_TAG_X86}"
+            export LINBOX_WINE_LABEL="${WINE_LABEL}"
+            ./build-rootfs-arch.sh --arch x86_64 \
+              --build wine 2>&1 | tee build-wine-x86_64.log; _rc=${PIPESTATUS[0]}
+          else
+            # arm64ec 形态：unix aarch64 + PE arm64ec/aarch64/i386（原生）
+            export LINBOX_WINE_URL="${WINE_URL}"
+            export LINBOX_HANGOVER_TAG="${WINE_TAG_ARM}"
+            export LINBOX_WINE_LABEL="${WINE_LABEL}"
+            ./build-rootfs-arch.sh --arch aarch64 \
+              --build hangover-wine 2>&1 | tee build-wine-arm64ec.log; _rc=${PIPESTATUS[0]}
+          fi
+          # v3.2.9：无论成败都打磁盘快照（`;` 链接 —— 失败路径也会执行；
+          # runner 失联前的最后水位进步骤日志，供事后诊断）
+          echo "=== 构建步骤收尾磁盘/内存快照（exit=${_rc}）==="; df -h / | tail -2; free -h || true
+          exit ${_rc}
+
+      # ============ 6.5 音频驱动探测诊断（configure 期结果直接亮出来） ============
+      # 背景：wine 10/11 音频驱动（winepulse/winealsa）为纯 unixlib（无 .drv
+      # PE 文件）。configure 探测不到 libpulse/alsa-lib 时只打一行 NOTICE 告警
+      # 并静默禁用驱动，构建照样"成功"——产物里悄悄少了 winepulse.so/
+      # winealsa.so，设备上表现为 winecfg 音频页无设备、游戏无声。此步骤把
+      # 探测失败原因直接亮在步骤页；最终裁决仍由第 8 步 .so 文件存在性校验
+      # 负责（本步骤不因告警而 fail，避免与文件校验重复判定）。
+      - name: 音频驱动探测诊断（PulseAudio / ALSA configure 检测）
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          LOG="${GITHUB_WORKSPACE}/bionic-rootfs/build-wine-${{ matrix.flavor }}.log"
+          if [[ ! -f "$LOG" ]]; then echo "（构建日志不存在，跳过诊断）"; exit 0; fi
+          echo "=== configure 音频探测失败告警（应无输出）==="
+          NEG_HITS=$(grep -nE \
+            "(PulseAudio|ALSA) won't be supported|pulse/pulseaudio\.h\.\.\. no|alsa/asoundlib\.h\.\.\. no|for -lpulse soname\.\.\. no|for -lasound soname\.\.\. no|in -lasound\.\.\. no" \
+            "$LOG" | head -5 || true)
+          if [[ -n "$NEG_HITS" ]]; then
+            echo "$NEG_HITS"
+            echo "::error::configure 未探测到音频开发库 —— winepulse/winealsa 不会构建！"
+            echo "请检查依赖配方 pulseaudio / alsa-lib 是否构建成功（构建顺序见日志 '构建顺序:' 行）。"
+          else
+            echo "  [OK] 未出现 libpulse / alsa-lib 探测失败告警"
+          fi
+          echo "=== configure 音频探测正向证据（soname / 符号命中）==="
+          grep -nE \
+            "for -lpulse soname\.\.\. libpulse|in -lasound\.\.\. yes|for -lasound soname\.\.\. libasound" \
+            "$LOG" | head -6 || \
+            echo "  （未匹配到正向探测行——若上方无失败告警，以第 8 步 .so 文件校验为准）"
+
+      # ============ 7. 失败自诊断（把日志尾部直接打进步骤输出） ============
+      # v3.2.9：尾附磁盘/内存快照改不论成败都打（`;` 语法确保构建失败后也
+      # 执行）—— runner 失联前的最后水位可直接从步骤日志读到。
+      - name: 失败时输出日志尾部
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          LOG="${GITHUB_WORKSPACE}/bionic-rootfs/build-wine-${{ matrix.flavor }}.log"
+          if [[ -f "$LOG" ]]; then
+            echo "::error::wine 构建失败！以下是日志最后 150 行（完整日志见 artifact）"
+            tail -n 150 "$LOG"
+          else
+            echo "::error::wine 构建失败且未生成日志文件"
+          fi
+          echo "=== 磁盘/内存状态 ==="
+          df -h / | tail -2
+          free -h
+
+      # ============ 8. 产物校验 ============
+      # 布局说明（wine 11 新 WoW64）：
+      #   * arm64ec 形态：arm64ec PE 代码以 ARM64X 混合形式并入 aarch64-windows/ 的
+      #     DLL（load config 内含 CHPE 元数据），不再产出独立 arm64ec-windows/ 目录
+      #     —— 与官方 hangover 发布包（hangover_11.16_arm64.deb）布局逐字节一致；
+      #     音频/显示等 unix 侧模块为 aarch64-unix/ 下的 .so（wine11 起音频驱动
+      #     是纯 unixlib，winepulse.drv/winealsa.drv 的 PE 侧文件已不存在）
+      #   * x86_64 形态：PE 为 i386-windows/ + x86_64-windows/，unix 为 x86_64-unix/
+      - name: 校验 wine 产物（${{ matrix.flavor }}）
+        run: |
+          if [[ "${{ matrix.flavor }}" == "x86_64" ]]; then
+            PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"wine-*x86_64.tar | head -n 1)
+          else
+            PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"hangover-wine-*.tar | head -n 1)
+          fi
+          [[ -n "$PKG_TAR" ]] || { echo "::error::未找到 wine 包 tar"; exit 1; }
+          echo "wine 包: $PKG_TAR"
+          rm -rf /tmp/wine-verify && mkdir -p /tmp/wine-verify
+          tar -xf "$PKG_TAR" -C /tmp/wine-verify
+          W=/tmp/wine-verify/data/data/com.linbox/files/rootfs/usr
+          echo "=== 关键文件校验 ==="
+          MISS=0
+          check() { if [[ -e "$1" ]]; then echo "  [OK] $1"; else echo "  [MISS] $1"; MISS=1; fi; }
+          if [[ "${{ matrix.flavor }}" == "x86_64" ]]; then
+            check "$W/opt/wine/bin/wine"
+            check "$W/opt/wine/bin/wineboot"
+            check "$W/opt/wine/bin/wineserver"
+            check "$W/opt/wine/lib/wine/x86_64-windows/kernel32.dll"
+            check "$W/opt/wine/lib/wine/i386-windows/kernel32.dll"
+            check "$W/opt/wine/lib/wine/x86_64-unix/ntdll.so"
+            check "$W/opt/wine/lib/wine/x86_64-unix/winex11.so"
+            check "$W/opt/wine/lib/wine/x86_64-unix/winepulse.so"
+            check "$W/opt/wine/lib/wine/x86_64-unix/winealsa.so"
+            # winegstreamer（--with-gstreamer：WMF/编解码后端，缺它视频无解）
+            check "$W/opt/wine/lib/wine/x86_64-unix/winegstreamer.so"
+            # amd_ags_x64（AMD AGS，unixlib 链接 libdrm_amdgpu —— 验证 amdgpu 链路）
+            # v3.1.7：该 dll 为 wine 10.19+/proton 树新增（proton_10.0 反向移植
+            # 了它）；hangover-10.18 等老树源码里根本没有（源码包内无
+            # dlls/amd_ags*，构建日志无 amd_ags_x64 任何痕迹）—— 按构建日志
+            # 判定：日志有构建痕迹而产物缺失 = 真失败；源码树没有 = 跳过
+            # （旧版无条件硬卡，hangover-10.18 两形态全折在此处，v3.1.6
+            # hangover x86_64+arm64ec 全报错的直接根因）。
+            if grep -q "amd_ags_x64" "${GITHUB_WORKSPACE}/bionic-rootfs/build-wine-x86_64.log" 2>/dev/null; then
+              check "$W/opt/wine/lib/wine/x86_64-unix/amd_ags_x64.so"
+            else
+              echo "  [SKIP] amd_ags_x64：本源码树无该 dll（wine <10.19），跳过校验"
+            fi
+            # NLS 数据（locale.nls 为 wine 启动必需）与自带字体
+            check "$W/opt/wine/share/wine/nls/locale.nls"
+            check "$W/opt/wine/share/wine/fonts/tahoma.ttf"
+            echo "--- lib/wine 目录布局 ---"
+            ls "$W/opt/wine/lib/wine/" || true
+          else
+            check "$W/opt/bin/wine"
+            check "$W/opt/bin/wineboot"
+            check "$W/opt/bin/wineserver"
+            check "$W/opt/lib/wine/aarch64-windows/kernel32.dll"
+            check "$W/opt/lib/wine/aarch64-windows/ntdll.dll"
+            check "$W/opt/lib/wine/i386-windows/kernel32.dll"
+            check "$W/opt/lib/wine/aarch64-unix/ntdll.so"
+            check "$W/opt/lib/wine/aarch64-unix/winex11.so"
+            check "$W/opt/lib/wine/aarch64-unix/winepulse.so"
+            check "$W/opt/lib/wine/aarch64-unix/winealsa.so"
+            # winegstreamer（--with-gstreamer：WMF/编解码后端，缺它视频无解）
+            check "$W/opt/lib/wine/aarch64-unix/winegstreamer.so"
+            # amd_ags_x64（AMD AGS，unixlib 链接 libdrm_amdgpu —— 验证 amdgpu 链路）
+            # v3.1.7：同 x86_64 形态 —— 按 build 日志判定源码树是否含该 dll
+            # （hangover-10.18 arm64ec 与 x86_64 同源码树，都没有）。
+            if grep -q "amd_ags_x64" "${GITHUB_WORKSPACE}/bionic-rootfs/build-wine-arm64ec.log" 2>/dev/null; then
+              check "$W/opt/lib/wine/aarch64-unix/amd_ags_x64.so"
+            else
+              echo "  [SKIP] amd_ags_x64：本源码树无该 dll（wine <10.19），跳过校验"
+            fi
+            # NLS 数据（locale.nls 为 wine 启动必需）与自带字体
+            check "$W/opt/share/wine/nls/locale.nls"
+            check "$W/opt/share/wine/fonts/tahoma.ttf"
+            check "$W/opt/.linbox-wine-info"
+            echo "--- lib/wine 目录布局 ---"
+            ls "$W/opt/lib/wine/" || true
+          fi
+          echo "=== ARM64X 混合校验（arm64ec 代码应并入 aarch64-windows DLL） ==="
+          # .linbox-wine-info 的 kind 反映源码树真实能力：
+          #   arm64ec-wow64-x11 = 完整新 WoW64（含 arm64ec/ARM64X；三大默认源均如此）
+          #   arm64-wow64-x11   = 源码树无 arm64ec（极旧自定义树）
+          #                       自动降级 aarch64,i386 —— 跳过 ARM64X 校验
+          WINE_KIND_ARM=$(grep -E '^kind=' "$W/opt/.linbox-wine-info" 2>/dev/null | cut -d= -f2 || true)
+          echo "  运行时 kind: ${WINE_KIND_ARM:-未知}"
+          if [[ "${{ matrix.flavor }}" == "arm64ec" ]]; then
+            if [[ "$WINE_KIND_ARM" == "arm64ec-wow64-x11" ]]; then
+              python3 "${GITHUB_WORKSPACE}/bionic-rootfs/verify-arm64x.py" \
+                "$W/opt/lib/wine/aarch64-windows/kernel32.dll" \
+                "$W/opt/lib/wine/aarch64-windows/ntdll.dll" \
+                "$W/opt/lib/wine/aarch64-windows/winex11.drv" || MISS=1
+            elif [[ "$WINE_KIND_ARM" == "arm64ec-split-wow64-x11" ]]; then
+              # v3.2.4：wine <10 树（official 9.x 等）无 ARM64X 混合 —— arm64ec PE
+              # 独立 arm64ec-windows/ 目录，aarch64-windows/ 为纯 aarch64 DLL（校验
+              # CHPE 元数据必失败）。改为校验 EC 侧关键产物存在性。
+              echo "  [SKIP-ARM64X] wine<10 split 布局：arm64ec PE 独立目录（无 ARM64X 混合）"
+              check "$W/opt/lib/wine/arm64ec-windows/ntdll.dll"
+              check "$W/opt/lib/wine/arm64ec-windows/kernel32.dll"
+            else
+              echo "  [SKIP] 源码树不支持 arm64ec，已降级 aarch64,i386（跳过 ARM64X 校验）"
+              echo "         该包运行 ARM64/i386 Windows 程序；x86_64 PE 需换用三大默认源或 x86_64 形态"
+            fi
+          else
+            echo "  [SKIP] x86_64 形态无需 ARM64X 校验"
+          fi
+          echo "=== X11 驱动校验（必须有 winex11.drv，且无 wayland 驱动）==="
+          if find "$W" -name "winex11.drv*" | grep -q .; then
+            echo "  [OK] winex11.drv 存在（X11 显示驱动）"
+          else
+            echo "  [MISS] winex11.drv 缺失！X11 构建失败"; MISS=1
+          fi
+          if find "$W" -name "winewayland.drv*" | grep -q .; then
+            echo "  [FOUND] winewayland.drv 不应存在！"; MISS=1
+          else
+            echo "  [OK] 无 wayland 驱动残留"
+          fi
+          echo "=== 音频驱动校验（wine 11 音频驱动为 unix 侧模块 .so） ==="
+          for drv in winepulse.so winealsa.so; do
+            found=$(find "$W" -name "$drv" 2>/dev/null | head -n 1 || true)
+            if [[ -n "$found" ]]; then
+              echo "  [OK] $drv => $found"
+            else
+              echo "  [MISS] $drv 缺失！音频将无声"; MISS=1
+            fi
+          done
+          [[ "$MISS" == "0" ]] || { echo "::error::wine 产物校验失败！"; exit 1; }
+
+      # ============ 8.5a. x86_64-bionic 依赖库打包（仅 x86_64 形态） ============
+      # 背景（v3.1.4 设备实测根因）：aarch64 rootfs 只组装 aarch64 包
+      # （make-rootfs.sh --arch aarch64），而 x86_64 形态 wine 的 unix 侧
+      # .so 是 x86_64-bionic 构建，运行期由 box64 仿真加载 —— 其 DT_NEEDED
+      # （libpulse.so.0 / libasound.so.2 / libX11.so.6 / libandroid-shmem.so
+      # / gstreamer 全家桶……）在设备 rootfs 里【根本不存在】（usr/lib 里
+      # 只有 aarch64 版），box64 报 "Symbol shm_open not found, cannot
+      # apply R_X86_64_JUMP_SLOT" 之类错误、wine 直接起不来。
+      # 修法：把本次 CI 依赖闭包（pkgs/ 下的 x86_64 tar，构建时本就全量
+      # 编译过）中的运行库打进发行包 wine 私有目录 opt/wine/lib/
+      # x86_64-bionic/，App 启动器把它加进 BOX64_LD_LIBRARY_PATH。
+      # 排除项：wine 本体（发行产物本体）/ hangover-wine（arm64ec 配方，
+      # x86_64 矩阵不会出现）/ box64 / glibc-x86_64（rootfs 侧通用 glibc
+      # 层）/ mesa（GL/EGL 走 box64 原生包装，捆绑反而降级回软件渲染）/
+      # rootfs 级数据包。保留目录结构（gstreamer-1.0/ 插件子目录必需）。
+      - name: 打包 x86_64-bionic 依赖库（x86_64 形态）
+        if: ${{ matrix.flavor == 'x86_64' }}
+        run: |
+          set -e
+          WROOT="/tmp/wine-verify/data/data/com.linbox/files/rootfs/usr"
+          OUT="$WROOT/opt/wine/lib/x86_64-bionic"
+          mkdir -p "$OUT" /tmp/dep-extract
+          for pkg in "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"*-x86_64.tar; do
+            [[ -f "$pkg" ]] || continue
+            base="$(basename "$pkg" -x86_64.tar)"
+            case "$base" in
+              wine-*|hangover-wine*|box64*|glibc-x86_64*|mesa*|rootfs-*|linbox-container*|base-config*|tzdata*|pthread-stub*)
+                continue ;;
+            esac
+            rm -rf /tmp/dep-extract; mkdir -p /tmp/dep-extract
+            # 只取 usr/lib（含子目录：gstreamer-1.0 插件等运行期 dlopen 件）
+            tar -xf "$pkg" -C /tmp/dep-extract --wildcards '*/usr/lib/*' 2>/dev/null || true
+            srclib="$(find /tmp/dep-extract -type d -path '*/usr/lib' | head -n 1 || true)"
+            if [[ -n "$srclib" ]]; then
+              cp -rn "$srclib/." "$OUT/" 2>/dev/null || true
+            fi
+          done
+          # 清掉非运行时文件（.a/.la/pkgconfig/cmake 等静态开发残留）
+          find "$OUT" \( -name '*.a' -o -name '*.la' -o -name '*.pc' -o -name '*.sh' \) -delete 2>/dev/null || true
+          rm -rf "$OUT/pkgconfig" "$OUT/cmake" "$OUT/icu" 2>/dev/null || true
+          COUNT=$(find "$OUT" -name '*.so*' | wc -l)
+          echo "已打包 ${COUNT} 个 x86_64-bionic 运行库 → opt/wine/lib/x86_64-bionic/"
+          [[ "${COUNT:-0}" -gt 20 ]] || { echo "::error::依赖库打包异常（仅 ${COUNT} 个 .so）"; exit 1; }
+          # 关键库兜底校验（缺任何一个，box64 加载 wine unix .so 必失败）
+          # v3.1.7：bionic rootfs 按 Android 惯例产【无版本 .so】（libX11.so
+          # 而非 libX11.so.6）—— 配方按需额外建 SONAME 别名（libX11.so.6/
+          # libpulse.so.0/libasound.so.2 有；freetype/gstreamer 无）。旧版
+          # 只认 glibc 版本化名，无别名的库永远 MISS —— 8.5a 自 v3.1.4
+          # 加入以来 100% 误报（proton x86_64 每次构建必挂的直接根因）。
+          # 现按"无版本名或任一版本化别名"双形态命中即通过。
+          for lib in libandroid-shmem libpulse libasound libX11 libfreetype libgstreamer-1.0; do
+            hit=""
+            for cand in "$OUT/$lib.so" "$OUT/$lib.so.0" "$OUT/$lib.so.2" "$OUT/$lib.so.6"; do
+              [[ -e "$cand" ]] && hit="$cand" && break
+            done
+            [[ -n "$hit" ]] || { echo "::error::关键依赖库缺失: $lib.so(.0/.2/.6)"; exit 1; }
+            echo "  [OK] $hit"
+          done
+          echo "--- 关键依赖库就位确认 ---"
+          for lib in libandroid-shmem libpulse libasound; do
+            for cand in "$OUT/$lib.so" "$OUT/$lib.so.0" "$OUT/$lib.so.2"; do
+              [[ -e "$cand" ]] && ls -lh "$cand" && break
+            done
+          done
+          du -sh "$OUT"
+
+      # ============ 8.5b. 仿真器 DLL 校验（仅 arm64ec 形态） ============
+      # FEX/box64 仿真器 DLL（libarm64ecfex/libwow64fex/wowbox64）由配方
+      # hangover-wine 的 pre_package 自动下载注入（rootfs 产线共用同一实现），
+      # 此处仅做存在性把关 —— 缺它们 arm64ec 形态跑不了任何 x86_64/i386
+      # Windows 程序（前缀能建、程序必挂，错误信息为 could not load
+      # libarm64ecfex.dll / wowbox64.dll）。
+      - name: 校验仿真器 DLL（arm64ec 形态）
+        if: ${{ matrix.flavor == 'arm64ec' }}
+        run: |
+          W="/tmp/wine-verify/data/data/com.linbox/files/rootfs/usr"
+          PE_DIR="$W/opt/lib/wine/aarch64-windows"
+          MISS=0
+          echo "=== 仿真器 DLL 校验（aarch64-windows/ → 前缀 system32） ==="
+          for dll in libarm64ecfex.dll libwow64fex.dll wowbox64.dll; do
+            if [[ -f "$PE_DIR/$dll" ]]; then
+              echo "  [OK] $dll ($(du -h "$PE_DIR/$dll" | cut -f1))"
+            else
+              echo "  [MISS] $dll"; MISS=1
+            fi
+          done
+          [[ "$MISS" == "0" ]] || { echo "::error::仿真器 DLL 缺失（配方 pre_package 注入未生效）"; exit 1; }
+          echo "运行期选择（App 启动器 v3.1.4 已默认）："
+          echo "  HODLL64=libarm64ecfex.dll  # x86_64 程序（FEX）"
+          echo "  HODLL=libwow64fex.dll      # i386 程序（FEX；备选 HODLL=wowbox64.dll 走 box64）"
+
+      # ============ 9. 打包发行 ============
+      - name: 打包 wine 发行包
+        run: |
+          if [[ "${{ matrix.flavor }}" == "x86_64" ]]; then
+            PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"wine-*x86_64.tar | head -n 1)
+            # 从包名提取版本：wine-<revision>-x86_64.tar
+            WINE_VER=$(basename "$PKG_TAR" | sed -e 's/^wine-//' -e 's/-x86_64\.tar$//')
+            WINE_ROOT="opt/wine"
+          else
+            PKG_TAR=$(ls "${GITHUB_WORKSPACE}/bionic-rootfs/pkgs/"hangover-wine-*.tar | head -n 1)
+            WINE_VER=$(basename "$PKG_TAR" | sed -e 's/^hangover-wine-//' -e 's/-aarch64\.tar$//')
+            WINE_ROOT="opt"
+          fi
+          echo "WINE_VER=${WINE_VER}" >> "$GITHUB_ENV"
+          PACKAGE_NAME="linbox-wine-${WINE_VER}-${{ matrix.flavor }}-bionic"
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> "$GITHUB_ENV"
+          cd "${GITHUB_WORKSPACE}"
+          tar -czf "${PACKAGE_NAME}.tar.gz" -C /tmp/wine-verify .
+          sha256sum "${PACKAGE_NAME}.tar.gz" > "checksums-wine-${{ matrix.flavor }}.txt"
+          echo "=== 打包完成（wine 根目录: ${WINE_ROOT}）==="
+          ls -lh "${PACKAGE_NAME}.tar.gz" "checksums-wine-${{ matrix.flavor }}.txt"
+          echo "设备安装方式: linbox-container install-wine ${PACKAGE_NAME}.tar.gz"
+
+      # ============ 10. 上传日志与产物 ============
+      - name: 上传构建日志
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: wine-build-log-${{ matrix.flavor }}
+          path: bionic-rootfs/build-wine-${{ matrix.flavor }}.log
+          if-no-files-found: ignore
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-wine-${{ matrix.flavor }}.txt
+          if-no-files-found: error
+
+      - name: 创建 Release
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bionic-wine-${{ env.WINE_VER }}-${{ matrix.flavor }}
+          name: LinBox Bionic Wine ${{ env.WINE_VER }} (${{ matrix.flavor }} / X11)
+          body: |
+            LinBox bionic rootfs 专用 Wine（${{ matrix.flavor }} / X11）
+
+            ${{ matrix.flavor == 'x86_64' && '- 形态: x86_64（unix x86_64 + PE i386/x86_64 WoW64，aarch64 设备经 box64 加载）' || '- 形态: arm64ec（unix aarch64 + PE arm64ec/aarch64/i386 WoW64，aarch64 设备原生运行）' }}
+            - 源码类型: ${{ env.KIND_DESC }}
+            - 运行时标识: ${{ env.WINE_LABEL }}（.linbox-wine-info）
+            - ※ 过旧自定义树无 arm64ec 支持时自动降级 aarch64+i386（详见构建日志与包内 .linbox-wine-info 的 kind 字段）；official/proton 默认版本均支持完整 arm64ec
+            - 显示: X11（LinBox 内置 X 服务, 默认 :1）
+            - 音频: PulseAudio (TCP 127.0.0.1:4713)
+            - 自包含运行库（v3.1.4）: ${{ matrix.flavor == 'x86_64' && 'x86_64-bionic 依赖闭包（opt/wine/lib/x86_64-bionic，box64 仿真加载所需全量 .so + gstreamer 插件）' || 'FEX/box64 仿真器 DLL（libarm64ecfex + libwow64fex + wowbox64 → aarch64-windows/，wineboot 后自动进前缀 system32；App 启动器默认 HODLL64/HODLL 指向 FEX）' }}
+            - Android 兼容（v3.1.4）: fsync futex_waitv 探测 SIGSYS 守卫（proton 树退出码 159 根治）+ bin 工具规整（loader 副本）
+            - 设备安装: `linbox-container install-wine linbox-wine-${{ env.WINE_VER }}-${{ matrix.flavor }}-bionic.tar.gz`
+            - ※ 需配合 v3.1.4+ App（启动器 wineboot 走 loader + BOX64_LD_LIBRARY_PATH/HODLL 环境默认）
+          files: |
+            ${{ env.PACKAGE_NAME }}.tar.gz
+            checksums-wine-${{ matrix.flavor }}.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

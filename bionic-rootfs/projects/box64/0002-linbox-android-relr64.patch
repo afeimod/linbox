@@ -1,0 +1,47 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH 2/7] LinBox box64: Android RELR tags in elfparser.c (v0.4.2+ layout)
+
+THE wineboot SIGSEGV fix: NDK lld emits DT_ANDROID_RELR (0x6fffe000) /
+DT_ANDROID_RELRSZ (0x6fffe001) / DT_ANDROID_RELRENT (0x6fffe003) packed
+relocations for bionic-linked .so; vanilla box64 only handles the standard
+DT_RELR family, so ALL packed R_X86_64_RELATIVE relocs are silently skipped
+-> the bionic wine x86_64-unix/ntdll.so keeps raw link-time self-pointers
+in .data (virtual.c reserved_areas = LIST_INIT(...)) and SIGSEGVs inside
+mmap_add_reserved_area on the very first wineboot. Device log signature:
+"SIGSEGV ... ntdll.so+0x77038 for accessing 0x92818, R15=0x92808 (raw) vs
+RAX=0x3f00092808 (relocated)" - exactly what the wine-9.2 container logs
+show with an unpatched box64.
+
+This variant matches the v0.4.2+ source layout (12-space case indent);
+v0.3.0-v0.4.1 use a deeper switch nest and are covered by 0003. The anchor
+pair ("case DT_RELR:" + "h->relr = ptr;") is unique in every tag.
+The hunk headers carry v0.4.4 line numbers; patch locates the
+(unique) anchors by scanning, so line drift across tags is fine. A hunk that
+cannot find its anchors fails the dry-run and is skipped whole
+(patchOptional=1 in build.sh) - it is NEVER force-placed at a wrong offset.
+
+---
+diff --git a/src/elfs/elfparser.c b/src/elfs/elfparser.c
+--- a/src/elfs/elfparser.c
++++ b/src/elfs/elfparser.c
+@@ -290,2 +290,12 @@
+             case DT_RELR:
++            case 0x6fffe000:
++                // LinBox: DT_ANDROID_RELR - Android/bionic flavored RELR packed
++                // relocations. NDK r29 lld emits these by default
++                // (--use-android-relr-tags) for bionic-linked .so: the SAME
++                // standard RELR encoding (address entries + bitmaps), only the
++                // dynamic tag numbers differ. Without this alias, all packed
++                // R_X86_64_RELATIVE relocs are silently skipped and any
++                // statically self-referencing .data symbol (wine virtual.c
++                // reserved_areas = LIST_INIT(reserved_areas) etc.) keeps its
++                // raw link-time address -> SIGSEGV on first dereference.
+                 h->relr = ptr;
+@@ -293,2 +303,3 @@
+             case DT_RELRSZ:
++            case 0x6fffe001:  // DT_ANDROID_RELRSZ (see DT_ANDROID_RELR above)
+                 h->relrsz = val;
+@@ -296,2 +307,3 @@
+             case DT_RELRENT:
++            case 0x6fffe003:  // DT_ANDROID_RELRENT (see DT_ANDROID_RELR above)
+                 h->relrent = val;

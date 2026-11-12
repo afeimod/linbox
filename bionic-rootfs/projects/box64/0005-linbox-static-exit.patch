@@ -1,0 +1,38 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH] LinBox box64: static-binary exit fix backport (v0.3.2..v0.4.3)
+
+Upstream v0.4.4 hasElfInterp backport: for STATIC binaries (no PT_INTERP)
+RDX must be 0, not the exit bridge, at process entry - else glibc's
+__libc_start_main registers the bridge with __cxa_atexit and the emulation
+dies mid-exit (buffered stdout never flushed, exit code = truncated bridge
+address; reproduced with a vanilla pre-0.4.4 static printf binary).
+
+Anchor (3 lines, whitespace-insensitive via -l):
+    "SetRDX(emu, Pop64(emu));    // RDX is exit function" / "}" / "DynaRun(emu);"
+This sequence exists ONLY in the emulate() epilogue of v0.3.2..v0.4.3:
+  - v0.3.0 ends with Run(emu, 0) and has no { } block (covered by 0006);
+  - v0.4.4+ interleaves "if(!box64_hasinterp) SetRDX(emu, 0);" between the
+    SetRDX and the "}", breaking the sequence - and upstream already carries
+    the fix natively there, so skipping is exactly right.
+Requires 0001 (declares linbox_hasinterp); sort order applies it first.
+---
+diff --git a/src/core.c b/src/core.c
+--- a/src/core.c
++++ b/src/core.c
+@@ -1564,4 +1564,16 @@
+         SetRDX(emu, Pop64(emu));    // RDX is exit function
+     }
++    // LinBox backport of upstream v0.4.4 fix: for STATIC binaries (no
++    // PT_INTERP) RDX must be 0, not the exit bridge. The SysV process-entry
++    // ABI passes rtld_fini in RDX; glibc's __libc_start_main registers it
++    // with __cxa_atexit, and __run_exit_handlers calls atexit handlers
++    // BEFORE RUN_HOOK(__libc_atexit) (_IO_cleanup, the stdio flush). With
++    // the exit bridge in RDX the emulation ended inside the rtld_fini call:
++    // buffered stdout was never flushed (empty output) and the exit code
++    // became the truncated bridge address (128). Upstream v0.4.4 gates this
++    // on box64_hasinterp right after the Push64/SetRDX pair above; this
++    // backport applies the same SetRDX(emu,0) right before DynaRun starts
++    // the program.
++    if(!linbox_hasinterp) SetRDX(emu, 0);
+     DynaRun(emu);
+     // Get EAX

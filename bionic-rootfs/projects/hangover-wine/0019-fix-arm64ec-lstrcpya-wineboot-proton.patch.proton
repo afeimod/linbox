@@ -1,0 +1,83 @@
+# linbox: proton_9.0 树 arm64ec EC 编译趟第三批炸点修复（v3.3.17）
+#
+# 【根因】llvm-mingw 的 arm64ec 目标【同时预定义 __arm64ec__ 和 __x86_64__】，
+# wine-9.0 基树的裸 `#ifdef __x86_64__` 分支在 EC 编译趟被激活 → x86 AT&T
+# 汇编 / x86 专属内建送入 ARM64 代码生成器即报错。0007 系列（9.2/9.7 锚点）
+# 与 0015/0016 已覆盖绝大多数站点；CI wine-build-log-arm64ec (1).zip 实证
+# proton_9.0 树在修完前两批后，仍于主 make 阶段阵亡于：
+#     make: *** [Makefile:95265: dlls/kernel32/arm64ec-windows/virtual.o] Error 1
+#     <inline asm>:11:8: error: unknown token in expression  "pushq %rbp"
+#     ...（pushq/movq/.seh_pushreg/.seh_setframe/call lstrcpyA_impl 连片 15 errors）
+#     error: Incorrect size for lstrcpyA prologue: 8 bytes of instructions in range,
+#     but .seh directives corresponding to 0 bytes
+#
+# 【本地全树静态扫描结论】（补丁复现树 = CI 同序全量补丁应用后）：
+#   * dlls/kernel32/virtual.c:297 lstrcpyA —— wine-9.0 新引入的 x64 汇编包装
+#     （CVE 级必炸点，本补丁 hunk 1；wine-9.2 上游已整体删除该汇编，
+#      EC 走 #else 通用 C 实现与 9.2 上游形态一致）；
+#   * programs/wineboot/wineboot.c:196 —— do_xgetbv 的 xgetbv/shlq/orq x64
+#     汇编 + __cpuidex/__xgetbv 内建（hunk 2；EC 走 #else 空桩，wine-10
+#     上游对 EC 同款空桩形态）。0005 的 xstate 空桩补丁在 proton_9.0 树
+#     hunk 失败（9.0 分支结构不同），本补丁一并根治；
+#   * programs/wineboot/wineboot.c:518 —— get_identifier/get_vendorid 的
+#     __cpuid 内建（hunk 3；EC 走 #else 空桩）。
+#   其余候选站点逐一核验均安全：relay.c（外层 && !__arm64ec__）、
+#   ntdll/loader.c stub（内层 __aarch64__||__arm64ec__ 分支）、
+#   ndr_stubless.c call_server_func（0007 hunk2 已守卫，0007d 拒绝属冗余）、
+#   math.c（0009 已带 EC 内层守卫）、setjmp.c（proton 自带 __arm64ec__ 分支）、
+#   atlthunk/mscoree（BYTE 数组数据模板，非编译期汇编）、
+#   wow64/syscall.c（configure 对 EC 架构整体禁用）、
+#   msvcirt/msvcp90/concurrency/except/exception_ptr（纯 C 调用）。
+#
+# 【互斥】锚点均为 proton_9.0/wine-9.0 形态：
+#   * proton_10.0 / wine-10+：上游已带等价修复（本补丁锚点不命中，静默跳过）；
+#   * hangover-11.16：lstrcpyA 汇编不存在（hunk 不命中）；wineboot 已带
+#     EC 处理形态（含 __arm64ec__ 字样，内容门控直接跳过）；
+#   * x86_64/i386 单架构形态：无 EC 编译趟，补丁无行为影响（守卫恒真/恒假
+#     语义与原 #if 完全一致）。
+#
+# 【验证】本地 CI 同序补丁复现树上 patch --dry-run --fuzz=0 全 hunk 命中；
+#     守卫后 EC 趟三文件的 x86 汇编/内建引用归零（#else 空桩/C 实现承接）。
+--- a/dlls/kernel32/virtual.c	2025-01-20 21:30:19.000000000 +0000
++++ b/dlls/kernel32/virtual.c	2026-11-07 14:01:20.824171296 +0000
+@@ -294,7 +294,12 @@
+  *           lstrcpyA   (KERNEL32.@)
+  *           lstrcpy    (KERNEL32.@)
+  */
+-#ifdef __x86_64__
++/* linbox: arm64ec 编译趟排除 x64 汇编包装（llvm-mingw 的 EC 目标同时预定义
++ * __arm64ec__ 与 __x86_64__；上段 x64 AT&T 汇编送 ARM64 代码生成器即
++ * "unknown token in expression" 连片报错 —— CI 实证 dlls/kernel32/
++ * arm64ec-windows/virtual.o 15 errors。EC 走 #else 通用 C 实现
++ * （wine-9.2 上游已删此汇编，形态一致；x86_64/i386 趟行为逐字节不变） */
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ LPSTR WINAPI lstrcpyA_impl( LPSTR dst, LPCSTR src )
+ {
+     __TRY
+--- a/programs/wineboot/wineboot.c	2025-01-20 21:30:19.000000000 +0000
++++ b/programs/wineboot/wineboot.c	2026-11-07 14:01:20.824171296 +0000
+@@ -193,8 +193,10 @@
+     return RegSetValueExW( hkey, name, 0, REG_DWORD, (const BYTE *)&value, sizeof(value) );
+ }
+ 
+-#if defined(__i386__) || defined(__x86_64__)
+-
++#if (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
++/* linbox: arm64ec 编译趟排除 —— do_xgetbv 的 xgetbv/shlq/orq x64 汇编 +
++ * __cpuidex/__xgetbv x86 内建在 EC 目标全部不可用（asm 报错 + 隐式声明）；
++ * EC 走 #else 空桩（wine-10 上游对 EC 同款空桩形态） */
+ extern UINT64 WINAPI do_xgetbv( unsigned int cx);
+ #ifdef __i386__
+ __ASM_STDCALL_FUNC( do_xgetbv, 4,
+@@ -515,8 +517,9 @@
+     UnmapViewOfFile( data );
+ }
+ 
+-#if defined(__i386__) || defined(__x86_64__)
+-
++#if (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__)
++/* linbox: arm64ec 编译趟排除 —— 本块 get_identifier/get_vendorid 的
++ * __cpuid 内建在 EC 目标不可用（隐式声明判错）；EC 走 #else 空桩 */
+ static void regs_to_str( int *regs, unsigned int len, WCHAR *buffer )
+ {
+     unsigned int i;

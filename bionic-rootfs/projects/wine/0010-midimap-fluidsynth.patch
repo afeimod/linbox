@@ -1,0 +1,1466 @@
+# linbox: midimap 内置 FluidSynth 软合成器（"Wine Software Synth"端口）v3.3.2
+#
+# 【来源】用户提供的 wine 10.5 修改树（参考源码）完整移植 —— 修复 wine
+#   在 Android 上无任何 MIDI 输出设备（游戏 BGM 全哑）的问题：
+#   midimap 枚举端口时经 synth_setup() 追加一个内置软合成端口，
+#   mapper 的 open/close/short/long/reset 按端口类型分发（MIDIMAP_Port*），
+#   真实设备照旧走 midiOut*，合成端口走 unix 侧 synth_unix.c。
+#
+# 【运行时依赖】（全部运行期 dlopen，缺哪个都静默回落、不影响构建）：
+#   - libfluidsynth.so/.so.3/.so.2（rootfs 需预装，缺失则无内置合成端口）
+#   - SoundFont：WINE_MIDI_SOUNDFONT 环境变量指定 .sf2 文件或目录，
+#     未设时自动扫描 /usr/share/soundfonts、/usr/local/share/soundfonts、
+#     /usr/share/sounds/sf2 下的 .sf2（rootfs 放一份 FluidR3_GM.sf2 即可）
+#
+# 【适用树】midimap 的 unix 库架构（UNIXLIB=midimap.so）为 wine 10.x+ 结构
+#   —— official 10.x/11.x、proton 10.x/11.x、hangover 树可干净应用；
+#   official 9.x 等旧树该文件结构不同，hunk 失败仅告警不中断（--forward），
+#   MIDI 部分对旧树无效（语言修复见 0009，不受影响）。
+diff --git a/dlls/midimap/Makefile.in b/dlls/midimap/Makefile.in
+index 35ae704..1872039 100644
+--- a/dlls/midimap/Makefile.in
++++ b/dlls/midimap/Makefile.in
+@@ -1,5 +1,9 @@
+ MODULE    = midimap.dll
++UNIXLIB   = midimap.so
+ IMPORTS   = winmm user32 advapi32
++UNIX_LIBS = $(PTHREAD_LIBS)
+ 
+ SOURCES = \
+-	midimap.c
++	midimap.c \
++	synth.c \
++	synth_unix.c
+diff --git a/dlls/midimap/midimap.c b/dlls/midimap/midimap.c
+index e04fe72..98ef0ba 100644
+--- a/dlls/midimap/midimap.c
++++ b/dlls/midimap/midimap.c
+@@ -32,6 +32,7 @@
+ #include "mmddk.h"
+ #include "winreg.h"
+ #include "wine/debug.h"
++#include "synth.h"
+ 
+ /*
+  * Here's how Windows stores the midiOut mapping information.
+@@ -283,6 +284,62 @@ static void MIDIMAP_NotifyClient(MIDIMAPDATA* mom, WORD wMsg,
+ 		   wMsg, mom->midiDesc.dwInstance, dwParam1, dwParam2);
+ }
+ 
++/* MIDI out ports are either real devices, or the built-in synthesizer that
++ * this module registers as an extra port.  The helpers below dispatch the
++ * mapper's calls to the right one; everything the synthesizer needs to
++ * know is kept in synth.c and synth_unix.c. */
++
++static BOOL	MIDIMAP_IsSynthPort(MIDIOUTPORT* port)
++{
++	return port && synth_is_port(port->uDevID);
++}
++
++static DWORD	MIDIMAP_PortOpen(MIDIOUTPORT* port)
++{
++	if (MIDIMAP_IsSynthPort(port))
++	    return synth_port_open(port->uDevID) ? MMSYSERR_NOERROR : MMSYSERR_ERROR;
++	return midiOutOpen(&port->hMidi, port->uDevID, 0L, 0L, CALLBACK_NULL);
++}
++
++static DWORD	MIDIMAP_PortClose(MIDIOUTPORT* port)
++{
++	if (MIDIMAP_IsSynthPort(port))
++	    return synth_port_close(port->uDevID);
++	return midiOutClose(port->hMidi);
++}
++
++static DWORD	MIDIMAP_PortShortMsg(MIDIOUTPORT* port, DWORD_PTR dwParam)
++{
++	if (MIDIMAP_IsSynthPort(port))
++	    return synth_port_short_msg(port->uDevID, (DWORD)dwParam);
++	return midiOutShortMsg(port->hMidi, dwParam);
++}
++
++static DWORD	MIDIMAP_PortLongMsg(MIDIOUTPORT* port, LPMIDIHDR lpMidiHdr)
++{
++	DWORD	ret;
++
++	if (MIDIMAP_IsSynthPort(port))
++	{
++	    ret = synth_port_long_msg(port->uDevID, lpMidiHdr->lpData, lpMidiHdr->dwBufferLength);
++	    /* the synthesizer plays the buffer here and now */
++	    lpMidiHdr->dwFlags |= MHDR_DONE;
++	    return ret;
++	}
++
++	midiOutPrepareHeader(port->hMidi, lpMidiHdr, sizeof(*lpMidiHdr));
++	ret = midiOutLongMsg(port->hMidi, lpMidiHdr, sizeof(*lpMidiHdr));
++	midiOutUnprepareHeader(port->hMidi, lpMidiHdr, sizeof(*lpMidiHdr));
++	return ret;
++}
++
++static DWORD	MIDIMAP_PortReset(MIDIOUTPORT* port)
++{
++	if (MIDIMAP_IsSynthPort(port))
++	    return synth_port_reset(port->uDevID);
++	return midiOutReset(port->hMidi);
++}
++
+ static DWORD modOpen(DWORD_PTR *lpdwUser, LPMIDIOPENDESC lpDesc, DWORD dwFlags)
+ {
+     MIDIMAPDATA*	mom = HeapAlloc(GetProcessHeap(), 0, sizeof(MIDIMAPDATA));
+@@ -307,8 +364,7 @@ static DWORD modOpen(DWORD_PTR *lpdwUser, LPMIDIOPENDESC lpDesc, DWORD dwFlags)
+ 	for (chn = 0; chn < 16; chn++)
+ 	{
+ 	    if (mom->ChannelMap[chn]->loaded) continue;
+-	    if (midiOutOpen(&mom->ChannelMap[chn]->hMidi, mom->ChannelMap[chn]->uDevID,
+-			    0L, 0L, CALLBACK_NULL) == MMSYSERR_NOERROR)
++	    if (MIDIMAP_PortOpen(mom->ChannelMap[chn]) == MMSYSERR_NOERROR)
+ 		mom->ChannelMap[chn]->loaded = 1;
+ 	    else
+ 		mom->ChannelMap[chn]->loaded = -1;
+@@ -335,7 +391,7 @@ static	DWORD	modClose(MIDIMAPDATA* mom)
+ 	DWORD	t;
+ 	if (mom->ChannelMap[i] && mom->ChannelMap[i]->loaded > 0)
+ 	{
+-	    t = midiOutClose(mom->ChannelMap[i]->hMidi);
++	    t = MIDIMAP_PortClose(mom->ChannelMap[i]);
+ 	    if (t == MMSYSERR_NOERROR)
+ 	    {
+ 		mom->ChannelMap[i]->loaded = 0;
+@@ -373,12 +429,10 @@ static DWORD modLongData(MIDIMAPDATA* mom, LPMIDIHDR lpMidiHdr, DWORD_PTR dwPara
+ 	if (mom->ChannelMap[chn] && mom->ChannelMap[chn]->loaded > 0)
+ 	{
+ 	    mh.dwFlags = 0;
+-	    midiOutPrepareHeader(mom->ChannelMap[chn]->hMidi, &mh, sizeof(mh));
+-	    ret = midiOutLongMsg(mom->ChannelMap[chn]->hMidi, &mh, sizeof(mh));
++	    ret = MIDIMAP_PortLongMsg(mom->ChannelMap[chn], &mh);
+ 	    /* As of 2009, wineXYZ.drv's LongData handlers are synchronous */
+ 	    if (!ret && !(mh.dwFlags & MHDR_DONE))
+ 		FIXME("wait until MHDR_DONE\n");
+-	    midiOutUnprepareHeader(mom->ChannelMap[chn]->hMidi, &mh, sizeof(mh));
+ 	    if (ret != MMSYSERR_NOERROR) break;
+ 	}
+     }
+@@ -439,7 +493,7 @@ static DWORD modData(MIDIMAPDATA* mom, DWORD_PTR dwParam)
+ 		dwParam &= ~0x0000FF00;
+ 		dwParam |= mom->ChannelMap[chn]->lpbPatch[patch];
+ 	    }
+-	    ret = midiOutShortMsg(mom->ChannelMap[chn]->hMidi, dwParam);
++	    ret = MIDIMAP_PortShortMsg(mom->ChannelMap[chn], dwParam);
+ 	}
+ 	mom->runningStatus = status;
+ 	break;
+@@ -447,7 +501,7 @@ static DWORD modData(MIDIMAPDATA* mom, DWORD_PTR dwParam)
+ 	for (chn = 0; chn < 16; chn++)
+ 	{
+ 	    if (mom->ChannelMap[chn]->loaded > 0)
+-		ret = midiOutShortMsg(mom->ChannelMap[chn]->hMidi, dwParam);
++		ret = MIDIMAP_PortShortMsg(mom->ChannelMap[chn], dwParam);
+ 	}
+ 	/* system common message */
+ 	if (status <= 0xF7)
+@@ -529,7 +583,7 @@ static	DWORD	modReset(MIDIMAPDATA* mom)
+     {
+ 	if (mom->ChannelMap[chn] && mom->ChannelMap[chn]->loaded > 0)
+ 	{
+-	    ret = midiOutReset(mom->ChannelMap[chn]->hMidi);
++	    ret = MIDIMAP_PortReset(mom->ChannelMap[chn]);
+ 	    if (ret != MMSYSERR_NOERROR) break;
+ 	}
+     }
+@@ -590,16 +644,18 @@ DWORD WINAPI MIDIMAP_modMessage(UINT wDevID, UINT wMsg, DWORD_PTR dwUser,
+ static LRESULT MIDIMAP_drvOpen(void)
+ {
+     MIDIOUTCAPSW	moc;
+-    unsigned		dev, i;
++    unsigned		dev, i, numRealPorts;
+     BOOL                found_valid_port = FALSE;
+ 
+     if (midiOutPorts)
+ 	return 0;
+ 
+-    numMidiOutPorts = midiOutGetNumDevs();
++    numRealPorts = midiOutGetNumDevs();
++    numMidiOutPorts = numRealPorts;
++    if (synth_setup(numRealPorts)) numMidiOutPorts++;
+     midiOutPorts = HeapAlloc(GetProcessHeap(), 0,
+ 			     numMidiOutPorts * sizeof(MIDIOUTPORT));
+-    for (dev = 0; dev < numMidiOutPorts; dev++)
++    for (dev = 0; dev < numRealPorts; dev++)
+     {
+ 	if (midiOutGetDevCapsW(dev, &moc, sizeof(moc)) == 0L)
+ 	{
+@@ -619,6 +675,19 @@ static LRESULT MIDIMAP_drvOpen(void)
+ 	}
+     }
+ 
++    if (numMidiOutPorts > numRealPorts)
++    {
++	MIDIOUTPORT*	port = &midiOutPorts[numRealPorts];
++
++	lstrcpyW(port->name, synth_port_name());
++	port->loaded = 0;
++	port->hMidi = 0;
++	port->uDevID = numRealPorts;
++	port->lpbPatch = NULL;
++	for (i = 0; i < 16; i++) port->aChn[i] = i;
++	found_valid_port = TRUE;
++    }
++
+     if (!found_valid_port)
+         ERR_(winediag)("No software synthesizer midi port found, Midi sound output probably won't work.\n");
+ 
+@@ -630,6 +699,7 @@ static LRESULT MIDIMAP_drvOpen(void)
+  */
+ static LRESULT MIDIMAP_drvClose(void)
+ {
++    synth_teardown();
+     if (midiOutPorts)
+     {
+ 	HeapFree(GetProcessHeap(), 0, midiOutPorts);
+diff --git a/dlls/midimap/synth.c b/dlls/midimap/synth.c
+new file mode 100644
+index 0000000..a91dc45
+--- /dev/null
++++ b/dlls/midimap/synth.c
+@@ -0,0 +1,197 @@
++/*
++ * Wine MIDI mapper - built-in software synthesizer, Windows side
++ *
++ * The synthesizer itself lives on the Unix side (synth_unix.c) and is reached
++ * through the midimap.so unix library.  This file only translates the calls
++ * the mapper makes on its MIDI out ports into unix calls, and keeps track of
++ * whether a synthesizer port is available at all.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <stdarg.h>
++#include <string.h>
++
++#include "windef.h"
++#include "winbase.h"
++#include "wingdi.h"
++#include "winuser.h"
++#include "mmsystem.h"
++
++#include "wine/debug.h"
++
++#include "synth.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(midi);
++
++/* 0: not probed yet, 1: the synthesizer port is usable, -1: it is not */
++static int synth_state;
++/* device id reserved for the synthesizer port, only meaningful when ready */
++static unsigned int synth_devid = ~0u;
++
++BOOL synth_setup(unsigned int devid)
++{
++    struct synth_setup_params params;
++
++    if (!synth_state)
++    {
++        memset(&params, 0, sizeof(params));
++        params.devid = devid;
++
++        if (__wine_init_unix_call() || WINE_UNIX_CALL(unix_synth_setup, &params) || !params.ret)
++        {
++            WARN("no built-in software synthesizer (library %u, audio driver %u, SoundFont %u)\n",
++                 (unsigned int)params.lib_ok, (unsigned int)params.driver_ok,
++                 (unsigned int)params.soundfont_ok);
++            synth_state = -1;
++        }
++        else
++        {
++            TRACE("built-in software synthesizer ready, audio driver '%s'%s\n", params.driver,
++                  params.driver_requested ? "" : " (selected automatically)");
++            synth_devid = devid;
++            synth_state = 1;
++        }
++    }
++
++    return synth_state > 0;
++}
++
++void synth_teardown(void)
++{
++    if (synth_devid == ~0u) return;
++
++    WINE_UNIX_CALL(unix_synth_teardown, NULL);
++    synth_devid = ~0u;
++    synth_state = 0;
++}
++
++BOOL synth_is_port(unsigned int devid)
++{
++    return synth_devid != ~0u && devid == synth_devid;
++}
++
++const WCHAR *synth_port_name(void)
++{
++    return SYNTH_PORT_NAME;
++}
++
++/* number of bytes of a channel voice message, including its status byte */
++static unsigned int short_msg_size(BYTE status)
++{
++    switch (status & 0xf0)
++    {
++    case 0x80:  /* note off */
++    case 0x90:  /* note on */
++    case 0xa0:  /* polyphonic key pressure */
++    case 0xb0:  /* control change */
++    case 0xe0:  /* pitch bend change */
++        return 3;
++    case 0xc0:  /* program change */
++    case 0xd0:  /* channel pressure */
++        return 2;
++    default:
++        return 1;
++    }
++}
++
++static DWORD send_bytes(unsigned int devid, const BYTE *data, DWORD size)
++{
++    struct synth_bytes_params params;
++
++    if (!size) return MMSYSERR_NOERROR;
++    if (size > SYNTH_CHUNK_SIZE) return MMSYSERR_INVALPARAM;
++
++    memset(&params, 0, sizeof(params));
++    params.devid = devid;
++    params.size = size;
++    memcpy(params.data, data, size);
++
++    if (WINE_UNIX_CALL(unix_synth_bytes, &params)) return MMSYSERR_ERROR;
++    return params.ret ? MMSYSERR_ERROR : MMSYSERR_NOERROR;
++}
++
++DWORD synth_port_short_msg(unsigned int devid, DWORD msg)
++{
++    BYTE data[3];
++
++    if (!synth_is_port(devid)) return MMSYSERR_BADDEVICEID;
++
++    /* a short message is packed as status | data1 << 8 | data2 << 16 */
++    data[0] = LOBYTE(LOWORD(msg));
++    data[1] = HIBYTE(LOWORD(msg));
++    data[2] = LOBYTE(HIWORD(msg));
++
++    return send_bytes(devid, data, short_msg_size(data[0]));
++}
++
++DWORD synth_port_long_msg(unsigned int devid, const BYTE *data, DWORD size)
++{
++    DWORD offset, ret;
++
++    if (!synth_is_port(devid)) return MMSYSERR_BADDEVICEID;
++    if (!data && size) return MMSYSERR_INVALPARAM;
++
++    /* successive chunks are fed to the same byte stream, so that messages
++     * which straddle a chunk boundary are handled correctly */
++    for (offset = 0; offset < size; offset += SYNTH_CHUNK_SIZE)
++    {
++        DWORD chunk = size - offset;
++
++        if (chunk > SYNTH_CHUNK_SIZE) chunk = SYNTH_CHUNK_SIZE;
++        if ((ret = send_bytes(devid, data + offset, chunk))) return ret;
++    }
++
++    return MMSYSERR_NOERROR;
++}
++
++BOOL synth_port_open(unsigned int devid)
++{
++    struct synth_state_params params;
++
++    if (!synth_is_port(devid)) return FALSE;
++
++    memset(&params, 0, sizeof(params));
++    params.devid = devid;
++
++    if (WINE_UNIX_CALL(unix_synth_open, &params)) return FALSE;
++    return !params.ret;
++}
++
++DWORD synth_port_close(unsigned int devid)
++{
++    struct synth_state_params params;
++
++    if (!synth_is_port(devid)) return MMSYSERR_BADDEVICEID;
++
++    memset(&params, 0, sizeof(params));
++    params.devid = devid;
++
++    if (WINE_UNIX_CALL(unix_synth_close, &params)) return MMSYSERR_ERROR;
++    return params.ret ? MMSYSERR_ERROR : MMSYSERR_NOERROR;
++}
++
++DWORD synth_port_reset(unsigned int devid)
++{
++    struct synth_state_params params;
++
++    if (!synth_is_port(devid)) return MMSYSERR_BADDEVICEID;
++
++    memset(&params, 0, sizeof(params));
++    params.devid = devid;
++
++    if (WINE_UNIX_CALL(unix_synth_reset, &params)) return MMSYSERR_ERROR;
++    return params.ret ? MMSYSERR_ERROR : MMSYSERR_NOERROR;
++}
+diff --git a/dlls/midimap/synth.h b/dlls/midimap/synth.h
+new file mode 100644
+index 0000000..93f387b
+--- /dev/null
++++ b/dlls/midimap/synth.h
+@@ -0,0 +1,91 @@
++/*
++ * Wine MIDI mapper - built-in software synthesizer, shared interface
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __WINE_MIDIMAP_SYNTH_H
++#define __WINE_MIDIMAP_SYNTH_H
++
++#include "windef.h"
++
++#include "wine/unixlib.h"
++
++/* Name the built-in synthesizer is announced under.  It has to fit in the
++ * device name of a MIDIOUTCAPS structure, which is MAXPNAMELEN characters
++ * including the terminating null. */
++#define SYNTH_PORT_NAME L"Wine Software Synth"
++
++/* Number of MIDI bytes carried by one unix call.  Long messages are split
++ * into chunks of at most this size. */
++#define SYNTH_CHUNK_SIZE 512
++
++/* Maximum length of an audio driver name reported back to the Windows side,
++ * including the terminating null.  FluidSynth driver names are short. */
++#define SYNTH_DRIVER_NAME_MAX 32
++
++/* All parameter structures below are made of 32-bit members and plain char
++ * arrays only, so that their layout is identical in 32-bit and 64-bit builds
++ * and the same handler can serve both the 32-bit and the 64-bit entry point
++ * tables. */
++
++struct synth_setup_params
++{
++    UINT32 devid;        /* in: device id reserved by the caller */
++    UINT32 ret;          /* out: non-zero when a usable synthesizer is ready */
++    UINT32 lib_ok;       /* out: the synthesizer library was loaded */
++    UINT32 driver_ok;    /* out: an audio driver was opened */
++    UINT32 soundfont_ok; /* out: a SoundFont was loaded */
++    UINT32 driver_requested; /* out: an audio driver name was requested */
++    CHAR   driver[SYNTH_DRIVER_NAME_MAX]; /* out: the audio driver that was opened */
++};
++
++struct synth_state_params
++{
++    UINT32 devid;
++    UINT32 ret;
++};
++
++struct synth_bytes_params
++{
++    UINT32 devid;
++    UINT32 size;
++    UINT32 ret;
++    BYTE   data[SYNTH_CHUNK_SIZE];
++};
++
++enum synth_funcs
++{
++    unix_synth_setup,
++    unix_synth_teardown,
++    unix_synth_open,
++    unix_synth_close,
++    unix_synth_bytes,
++    unix_synth_reset,
++    unix_synth_funcs_count,
++};
++
++/* implemented in synth.c */
++BOOL         synth_setup(unsigned int devid);
++void         synth_teardown(void);
++BOOL         synth_is_port(unsigned int devid);
++const WCHAR *synth_port_name(void);
++BOOL         synth_port_open(unsigned int devid);
++DWORD        synth_port_close(unsigned int devid);
++DWORD        synth_port_short_msg(unsigned int devid, DWORD msg);
++DWORD        synth_port_long_msg(unsigned int devid, const BYTE *data, DWORD size);
++DWORD        synth_port_reset(unsigned int devid);
++
++#endif /* __WINE_MIDIMAP_SYNTH_H */
+diff --git a/dlls/midimap/synth_unix.c b/dlls/midimap/synth_unix.c
+new file mode 100644
+index 0000000..5b2bbc9
+--- /dev/null
++++ b/dlls/midimap/synth_unix.c
+@@ -0,0 +1,942 @@
++/*
++ * Wine MIDI mapper - built-in software synthesizer, Unix side
++ *
++ * The synthesizer library is loaded at run time and everything is contained in
++ * this file: when the library is missing, or when no audio driver can be
++ * opened, the setup call fails and the mapper simply keeps the behaviour it
++ * has without this code.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <dirent.h>
++#include <dlfcn.h>
++#include <pthread.h>
++#include <sys/stat.h>
++
++#include "ntstatus.h"
++#include "windef.h"
++#include "winbase.h"
++#include "winternl.h"
++
++#include "wine/debug.h"
++
++#include "synth.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(midi);
++
++/* maximum length of a path we are willing to assemble ourselves */
++#define SYNTH_PATH_MAX 1024
++/* maximum size of a system exclusive message we reassemble */
++#define SYNTH_SYSEX_MAX 1024
++/* maximum number of SoundFonts loaded at once */
++#define SYNTH_SOUNDFONT_MAX 16
++
++typedef struct _fluid_settings_t fluid_settings_t;
++typedef struct _fluid_synth_t fluid_synth_t;
++typedef struct _fluid_audio_driver_t fluid_audio_driver_t;
++typedef struct _fluid_sfont_t fluid_sfont_t;
++typedef struct _fluid_preset_t fluid_preset_t;
++
++#define FLUID_OK 0
++#define FLUID_FAILED (-1)
++
++static void *synthesizer_lib;
++static fluid_settings_t *synthesizer_settings;
++static fluid_synth_t *synthesizer;
++static fluid_audio_driver_t *synthesizer_audio;
++static pthread_mutex_t synthesizer_mutex = PTHREAD_MUTEX_INITIALIZER;
++static unsigned int synthesizer_users;
++/* name of the audio driver that is open, empty when there is none */
++static char synthesizer_driver[SYNTH_DRIVER_NAME_MAX];
++/* SoundFonts that are loaded, in the order they were loaded, and the ids
++ * FluidSynth gave them.  Reported in the log so that "which SoundFont am I
++ * actually hearing?" can be answered instead of guessed at.  FluidSynth looks
++ * up the SoundFont that was loaded last first, so the last entry here wins
++ * whenever two of them provide the same bank and program. */
++static char synthesizer_soundfonts[SYNTH_SOUNDFONT_MAX][SYNTH_PATH_MAX];
++static int synthesizer_soundfont_ids[SYNTH_SOUNDFONT_MAX];
++static unsigned int synthesizer_soundfont_count;
++
++static fluid_settings_t *(*p_new_fluid_settings)(void);
++static void (*p_delete_fluid_settings)(fluid_settings_t *);
++static int (*p_fluid_settings_setstr)(fluid_settings_t *, const char *, const char *);
++static int (*p_fluid_settings_setnum)(fluid_settings_t *, const char *, double);
++static int (*p_fluid_settings_setint)(fluid_settings_t *, const char *, int);
++static fluid_synth_t *(*p_new_fluid_synth)(fluid_settings_t *);
++static void (*p_delete_fluid_synth)(fluid_synth_t *);
++static int (*p_fluid_synth_sfload)(fluid_synth_t *, const char *, int);
++static int (*p_fluid_synth_noteon)(fluid_synth_t *, int, int, int);
++static int (*p_fluid_synth_noteoff)(fluid_synth_t *, int, int);
++static int (*p_fluid_synth_cc)(fluid_synth_t *, int, int, int);
++static int (*p_fluid_synth_program_change)(fluid_synth_t *, int, int);
++static int (*p_fluid_synth_pitch_bend)(fluid_synth_t *, int, int);
++static fluid_audio_driver_t *(*p_new_fluid_audio_driver)(fluid_settings_t *, fluid_synth_t *);
++static void (*p_delete_fluid_audio_driver)(fluid_audio_driver_t *);
++/* these are only used when the library provides them */
++static int (*p_fluid_synth_key_pressure)(fluid_synth_t *, int, int, int);
++static int (*p_fluid_synth_channel_pressure)(fluid_synth_t *, int, int);
++static int (*p_fluid_synth_system_reset)(fluid_synth_t *);
++static int (*p_fluid_synth_all_notes_off)(fluid_synth_t *, int);
++static int (*p_fluid_synth_all_sounds_off)(fluid_synth_t *, int);
++/* only used to tell a SoundFont that plays General MIDI on its own from the
++ * variation set that goes with one */
++static fluid_sfont_t *(*p_fluid_synth_get_sfont_by_id)(fluid_synth_t *, int);
++static fluid_preset_t *(*p_fluid_sfont_get_preset)(fluid_sfont_t *, int, int);
++
++/* audio drivers tried, in this order, when WINE_MIDI_AUDIO_DRIVER does not
++ * name one.  fluid_settings_setstr() refuses names that the library was not
++ * built with, so probing is cheap.  A driver that is not built in is expected
++ * here, one that cannot be opened is not: it is reported with a WARN.
++ *
++ * alsa is deliberately absent: the rootfs build of libfluidsynth has an
++ * incomplete ALSA backend that cannot open a device, so probing it only adds a
++ * failing attempt and a WARN line.  WINE_MIDI_AUDIO_DRIVER=alsa still reaches
++ * it for anyone who wants to test a build that does work. */
++static const char *audio_driver_names[] =
++{
++    "opensles",
++    "pulseaudio",
++    "pipewire",
++    "sndio",
++    "oss",
++    "jack",
++};
++
++/* directories searched for a SoundFont, under an explicit directory first:
++ * the container's home directory, then the system-wide ones */
++static const char *soundfont_home_dirs[] =
++{
++    "contents/soundfont",
++    ".local/share/soundfonts",
++    "soundfonts",
++};
++
++static const char *soundfont_system_dirs[] =
++{
++    "/usr/share/soundfonts",
++    "/usr/local/share/soundfonts",
++    "/usr/share/sounds/sf2",
++};
++
++/* ------------------------------------------------------------------------- */
++/* MIDI byte stream                                                          */
++/* ------------------------------------------------------------------------- */
++
++/* The mapper hands us either complete short messages or the raw bytes of a
++ * long message, split into chunks.  Messages are therefore reassembled here
++ * from a plain byte stream, which also takes care of running status. */
++struct midi_stream
++{
++    unsigned char status;      /* running status, 0 when there is none */
++    unsigned char data[2];
++    unsigned int  data_size;
++    unsigned int  data_want;
++    unsigned char sysex[SYNTH_SYSEX_MAX + 1];
++    unsigned int  sysex_size;
++    BOOL          sysex_overflow;
++    BOOL          in_sysex;
++};
++
++static struct midi_stream stream;
++
++static void stream_reset(void)
++{
++    memset(&stream, 0, sizeof(stream));
++}
++
++/* number of data bytes of a channel voice message */
++static unsigned int voice_data_size(unsigned char status)
++{
++    switch (status & 0xf0)
++    {
++    case 0xc0:  /* program change */
++    case 0xd0:  /* channel pressure */
++        return 1;
++    default:
++        return 2;
++    }
++}
++
++static void silence_channel(unsigned int chan)
++{
++    if (!synthesizer) return;
++    if (p_fluid_synth_all_sounds_off) p_fluid_synth_all_sounds_off(synthesizer, chan);
++    else if (p_fluid_synth_all_notes_off) p_fluid_synth_all_notes_off(synthesizer, chan);
++    else p_fluid_synth_cc(synthesizer, chan, 123, 0);
++}
++
++static void synthesizer_reset(void)
++{
++    unsigned int chan;
++
++    if (p_fluid_synth_system_reset) p_fluid_synth_system_reset(synthesizer);
++    else for (chan = 0; chan < 16; chan++) silence_channel(chan);
++}
++
++static void dispatch_voice(unsigned char status, const unsigned char *data)
++{
++    unsigned int chan = status & 0x0f;
++
++    if (!synthesizer) return;
++
++    switch (status & 0xf0)
++    {
++    case 0x80:  /* note off */
++        p_fluid_synth_noteoff(synthesizer, chan, data[0]);
++        break;
++    case 0x90:  /* note on, a zero velocity means note off */
++        if (data[1]) p_fluid_synth_noteon(synthesizer, chan, data[0], data[1]);
++        else p_fluid_synth_noteoff(synthesizer, chan, data[0]);
++        break;
++    case 0xa0:  /* polyphonic key pressure */
++        if (p_fluid_synth_key_pressure) p_fluid_synth_key_pressure(synthesizer, chan, data[0], data[1]);
++        break;
++    case 0xb0:  /* control change */
++        p_fluid_synth_cc(synthesizer, chan, data[0], data[1]);
++        break;
++    case 0xc0:  /* program change */
++        p_fluid_synth_program_change(synthesizer, chan, data[0]);
++        break;
++    case 0xd0:  /* channel pressure */
++        if (p_fluid_synth_channel_pressure) p_fluid_synth_channel_pressure(synthesizer, chan, data[0]);
++        break;
++    case 0xe0:  /* pitch bend, centered on 0x2000 */
++        p_fluid_synth_pitch_bend(synthesizer, chan, (data[1] << 7) | data[0]);
++        break;
++    }
++}
++
++/* System exclusive messages that select a MIDI variant are honoured, the
++ * others are ignored.  data[0] is 0xf0 and the last byte is 0xf7. */
++static void dispatch_sysex(const unsigned char *data, unsigned int size)
++{
++    unsigned int chan, volume;
++
++    if (size < 2 || data[0] != 0xf0 || data[size - 1] != 0xf7) return;
++
++    /* GM System On / Off / GM2 System On */
++    if (size == 6 && data[1] == 0x7e && data[3] == 0x09)
++    {
++        switch (data[4])
++        {
++        case 0x01:
++        case 0x02:
++        case 0x03:
++            TRACE("general MIDI reset\n");
++            synthesizer_reset();
++            return;
++        }
++    }
++
++    /* GS Reset */
++    if (size == 11 && data[1] == 0x41 && data[3] == 0x42 && data[4] == 0x12 &&
++        data[5] == 0x40 && data[6] == 0x00 && data[7] == 0x7f && data[8] == 0x00 &&
++        data[9] == 0x41)
++    {
++        TRACE("GS reset\n");
++        synthesizer_reset();
++        return;
++    }
++
++    /* XG System On */
++    if (size == 9 && data[1] == 0x43 && data[3] == 0x4c && data[4] == 0x00 &&
++        data[5] == 0x00 && data[6] == 0x7e && data[7] == 0x00)
++    {
++        TRACE("XG reset\n");
++        synthesizer_reset();
++        return;
++    }
++
++    /* master volume */
++    if (size == 8 && data[1] == 0x7f && data[3] == 0x04 && data[4] == 0x01)
++    {
++        volume = (((unsigned int)data[6] << 7) | data[5]) >> 9;
++        TRACE("master volume %u\n", volume);
++        if (synthesizer) for (chan = 0; chan < 16; chan++) p_fluid_synth_cc(synthesizer, chan, 7, volume);
++        return;
++    }
++}
++
++static void feed_byte(unsigned char byte)
++{
++    if (stream.in_sysex)
++    {
++        if (byte >= 0xf8) return;   /* real time byte, not part of the message */
++
++        if (byte == 0xf7)
++        {
++            if (stream.sysex_size < ARRAY_SIZE(stream.sysex)) stream.sysex[stream.sysex_size++] = byte;
++            else stream.sysex_overflow = TRUE;
++
++            if (stream.sysex_overflow) WARN("dropping oversized system exclusive message\n");
++            else dispatch_sysex(stream.sysex, stream.sysex_size);
++
++            stream.in_sysex = FALSE;
++            stream.sysex_size = 0;
++            stream.sysex_overflow = FALSE;
++            return;
++        }
++
++        if (byte & 0x80)            /* a status byte aborts the message */
++        {
++            WARN("aborted system exclusive message, dropped\n");
++            stream.in_sysex = FALSE;
++            stream.sysex_size = 0;
++            stream.sysex_overflow = FALSE;
++            feed_byte(byte);
++            return;
++        }
++
++        if (stream.sysex_size < ARRAY_SIZE(stream.sysex)) stream.sysex[stream.sysex_size++] = byte;
++        else stream.sysex_overflow = TRUE;
++        return;
++    }
++
++    if (byte & 0x80)
++    {
++        if (byte >= 0xf8) return;   /* real time byte */
++
++        if (byte == 0xf0)
++        {
++            stream.status = 0;
++            stream.data_size = stream.data_want = 0;
++            stream.sysex[0] = byte;
++            stream.sysex_size = 1;
++            stream.sysex_overflow = FALSE;
++            stream.in_sysex = TRUE;
++            return;
++        }
++
++        if (byte < 0xf0)            /* channel voice message */
++        {
++            stream.status = byte;
++            stream.data_want = voice_data_size(byte);
++            stream.data_size = 0;
++            return;
++        }
++
++        /* other system common messages are not handled */
++        stream.status = 0;
++        stream.data_size = stream.data_want = 0;
++        return;
++    }
++
++    if (!stream.status) return;     /* data byte without a status byte */
++
++    stream.data[stream.data_size++] = byte;
++    if (stream.data_size == stream.data_want)
++    {
++        dispatch_voice(stream.status, stream.data);
++        stream.data_size = 0;       /* the status is kept for running status */
++    }
++}
++
++/* ------------------------------------------------------------------------- */
++/* library loading                                                           */
++/* ------------------------------------------------------------------------- */
++
++#define LOAD_REQUIRED(name) do { \
++        *(void **)&p_##name = dlsym(synthesizer_lib, #name); \
++        if (!p_##name) { WARN("libfluidsynth does not provide %s\n", #name); return FALSE; } \
++    } while (0)
++
++#define LOAD_OPTIONAL(name) *(void **)&p_##name = dlsym(synthesizer_lib, #name)
++
++static BOOL load_functions(void)
++{
++    LOAD_REQUIRED(new_fluid_settings);
++    LOAD_REQUIRED(delete_fluid_settings);
++    LOAD_REQUIRED(fluid_settings_setstr);
++    LOAD_REQUIRED(fluid_settings_setnum);
++    LOAD_REQUIRED(fluid_settings_setint);
++    LOAD_REQUIRED(new_fluid_synth);
++    LOAD_REQUIRED(delete_fluid_synth);
++    LOAD_REQUIRED(fluid_synth_sfload);
++    LOAD_REQUIRED(fluid_synth_noteon);
++    LOAD_REQUIRED(fluid_synth_noteoff);
++    LOAD_REQUIRED(fluid_synth_cc);
++    LOAD_REQUIRED(fluid_synth_program_change);
++    LOAD_REQUIRED(fluid_synth_pitch_bend);
++    LOAD_REQUIRED(new_fluid_audio_driver);
++    LOAD_REQUIRED(delete_fluid_audio_driver);
++
++    LOAD_OPTIONAL(fluid_synth_key_pressure);
++    LOAD_OPTIONAL(fluid_synth_channel_pressure);
++    LOAD_OPTIONAL(fluid_synth_system_reset);
++    LOAD_OPTIONAL(fluid_synth_all_notes_off);
++    LOAD_OPTIONAL(fluid_synth_all_sounds_off);
++    LOAD_OPTIONAL(fluid_synth_get_sfont_by_id);
++    LOAD_OPTIONAL(fluid_sfont_get_preset);
++
++    return TRUE;
++}
++
++static void clear_functions(void)
++{
++    p_new_fluid_settings = NULL;
++    p_delete_fluid_settings = NULL;
++    p_fluid_settings_setstr = NULL;
++    p_fluid_settings_setnum = NULL;
++    p_fluid_settings_setint = NULL;
++    p_new_fluid_synth = NULL;
++    p_delete_fluid_synth = NULL;
++    p_fluid_synth_sfload = NULL;
++    p_fluid_synth_noteon = NULL;
++    p_fluid_synth_noteoff = NULL;
++    p_fluid_synth_cc = NULL;
++    p_fluid_synth_program_change = NULL;
++    p_fluid_synth_pitch_bend = NULL;
++    p_new_fluid_audio_driver = NULL;
++    p_delete_fluid_audio_driver = NULL;
++    p_fluid_synth_key_pressure = NULL;
++    p_fluid_synth_channel_pressure = NULL;
++    p_fluid_synth_system_reset = NULL;
++    p_fluid_synth_all_notes_off = NULL;
++    p_fluid_synth_all_sounds_off = NULL;
++    p_fluid_synth_get_sfont_by_id = NULL;
++    p_fluid_sfont_get_preset = NULL;
++}
++
++static void *open_library(void)
++{
++    static const char *names[] = { "libfluidsynth.so", "libfluidsynth.so.3", "libfluidsynth.so.2" };
++    const char *path = getenv("WINE_MIDI_SYNTH_LIB");
++    void *lib;
++    unsigned int i;
++
++    if (path && *path && (lib = dlopen(path, RTLD_NOW))) return lib;
++    for (i = 0; i < ARRAY_SIZE(names); i++)
++        if ((lib = dlopen(names[i], RTLD_NOW))) return lib;
++
++    return NULL;
++}
++
++static void destroy_synthesizer(void)
++{
++    if (synthesizer_audio)
++    {
++        if (p_delete_fluid_audio_driver) p_delete_fluid_audio_driver(synthesizer_audio);
++        synthesizer_audio = NULL;
++    }
++    if (synthesizer)
++    {
++        if (p_delete_fluid_synth) p_delete_fluid_synth(synthesizer);
++        synthesizer = NULL;
++    }
++    if (synthesizer_settings)
++    {
++        if (p_delete_fluid_settings) p_delete_fluid_settings(synthesizer_settings);
++        synthesizer_settings = NULL;
++    }
++    synthesizer_users = 0;
++    synthesizer_driver[0] = 0;
++    synthesizer_soundfont_count = 0;
++    stream_reset();
++
++    if (synthesizer_lib)
++    {
++        dlclose(synthesizer_lib);
++        synthesizer_lib = NULL;
++    }
++    clear_functions();
++}
++
++/* ------------------------------------------------------------------------- */
++/* SoundFont lookup                                                          */
++/* ------------------------------------------------------------------------- */
++
++static BOOL file_exists(const char *path)
++{
++    struct stat st;
++
++    return path && *path && !stat(path, &st) && S_ISREG(st.st_mode);
++}
++
++static BOOL dir_exists(const char *path)
++{
++    struct stat st;
++
++    return path && *path && !stat(path, &st) && S_ISDIR(st.st_mode);
++}
++
++static BOOL has_sf2_suffix(const char *name)
++{
++    size_t len = strlen(name);
++
++    return len > 4 && !strcmp(name + len - 4, ".sf2");
++}
++
++/* Collect the .sf2 files a directory holds, in alphabetical order, so that the
++ * same files are loaded in the same order whatever order the directory happens
++ * to be enumerated in. */
++static unsigned int collect_soundfonts(const char *dir, char (*paths)[SYNTH_PATH_MAX],
++                                       unsigned int max)
++{
++    char candidate[SYNTH_PATH_MAX];
++    struct dirent *entry;
++    unsigned int i, count = 0;
++    DIR *d;
++
++    if (!(d = opendir(dir))) return 0;
++
++    while (count < max && (entry = readdir(d)))
++    {
++        if (!has_sf2_suffix(entry->d_name)) continue;
++        snprintf(candidate, sizeof(candidate), "%s/%s", dir, entry->d_name);
++        if (!file_exists(candidate)) continue;
++        snprintf(paths[count], SYNTH_PATH_MAX, "%s", candidate);
++        count++;
++    }
++    closedir(d);
++
++    for (i = 1; i < count; i++)
++    {
++        char current[SYNTH_PATH_MAX];
++        unsigned int j = i;
++
++        snprintf(current, sizeof(current), "%s", paths[i]);
++        while (j && strcmp(paths[j - 1], current) > 0)
++        {
++            snprintf(paths[j], SYNTH_PATH_MAX, "%s", paths[j - 1]);
++            j--;
++        }
++        snprintf(paths[j], SYNTH_PATH_MAX, "%s", current);
++    }
++
++    return count;
++}
++
++/* WINE_MIDI_SOUNDFONT holds one or more locations separated by ':'.  A location
++ * is either a .sf2 file, or a directory whose .sf2 files are all collected.
++ * Naming several files is how a General MIDI set and the variation set that
++ * goes with it are put together; naming one is how a SoundFont is tried out on
++ * its own, so a single file is loaded exactly as given and nothing else. */
++static unsigned int collect_soundfonts_listed(const char *location, char (*paths)[SYNTH_PATH_MAX],
++                                              unsigned int max)
++{
++    char entry[SYNTH_PATH_MAX];
++    const char *start = location, *sep;
++    unsigned int count = 0;
++
++    while (start && *start && count < max)
++    {
++        size_t len = (sep = strchr(start, ':')) ? (size_t)(sep - start) : strlen(start);
++
++        if (len && len < sizeof(entry))
++        {
++            memcpy(entry, start, len);
++            entry[len] = 0;
++
++            if (file_exists(entry))
++            {
++                snprintf(paths[count], SYNTH_PATH_MAX, "%s", entry);
++                count++;
++            }
++            else if (dir_exists(entry))
++                count += collect_soundfonts(entry, paths + count, max - count);
++            else
++                WARN("%s does not name a readable SoundFont or a directory holding one\n", entry);
++        }
++
++        start = sep ? sep + 1 : NULL;
++    }
++
++    return count;
++}
++
++/* Files found without WINE_MIDI_SOUNDFONT: the first of these directories that
++ * holds .sf2 files provides all of them. */
++static unsigned int collect_soundfonts_default(char (*paths)[SYNTH_PATH_MAX], unsigned int max)
++{
++    const char *home = getenv("HOME");
++    char dir[SYNTH_PATH_MAX];
++    unsigned int i, count;
++
++    /* the container's home directory, where the front-end keeps the SoundFonts
++     * it installs */
++    if (home && *home)
++        for (i = 0; i < ARRAY_SIZE(soundfont_home_dirs); i++)
++        {
++            snprintf(dir, sizeof(dir), "%s/%s", home, soundfont_home_dirs[i]);
++            if ((count = collect_soundfonts(dir, paths, max))) return count;
++        }
++
++    for (i = 0; i < ARRAY_SIZE(soundfont_system_dirs); i++)
++        if ((count = collect_soundfonts(soundfont_system_dirs[i], paths, max))) return count;
++
++    return 0;
++}
++
++/* Number of bank 0 presets a loaded SoundFont provides, or -1 when it cannot be
++ * told because the library does not provide the functions needed to look one
++ * up. */
++static int soundfont_gm_presets(int id)
++{
++    fluid_sfont_t *sfont;
++    unsigned int prog, count = 0;
++
++    if (!p_fluid_synth_get_sfont_by_id || !p_fluid_sfont_get_preset) return -1;
++    if (!(sfont = p_fluid_synth_get_sfont_by_id(synthesizer, id))) return -1;
++
++    for (prog = 0; prog < 128; prog++)
++        if (p_fluid_sfont_get_preset(sfont, 0, prog)) count++;
++
++    return count;
++}
++
++/* Load one .sf2 file, unless it is loaded already, and remember it.  Returns
++ * the SoundFont id, or FLUID_FAILED.  Loading several SoundFonts is meant:
++ * FluidSynth looks the one loaded last up first, so the last one wins whenever
++ * two of them carry the same bank and program. */
++static int load_soundfont(const char *path)
++{
++    unsigned int i;
++    int id;
++
++    if (!file_exists(path)) return FLUID_FAILED;
++
++    for (i = 0; i < synthesizer_soundfont_count; i++)
++        if (!strcmp(synthesizer_soundfonts[i], path)) return synthesizer_soundfont_ids[i];
++
++    if (synthesizer_soundfont_count >= SYNTH_SOUNDFONT_MAX)
++    {
++        WARN("already %u SoundFonts loaded, %s is ignored\n", synthesizer_soundfont_count, path);
++        fprintf(stderr, "wine-midimap: too many SoundFonts loaded, '%s' is ignored\n", path);
++        return FLUID_FAILED;
++    }
++
++    TRACE("loading SoundFont %s\n", path);
++    if ((id = p_fluid_synth_sfload(synthesizer, path, 1)) == FLUID_FAILED)
++    {
++        WARN("could not load SoundFont %s\n", path);
++        fprintf(stderr, "wine-midimap: SoundFont '%s' could not be loaded\n", path);
++        return FLUID_FAILED;
++    }
++
++    snprintf(synthesizer_soundfonts[synthesizer_soundfont_count], SYNTH_PATH_MAX, "%s", path);
++    synthesizer_soundfont_ids[synthesizer_soundfont_count] = id;
++    synthesizer_soundfont_count++;
++
++    /* straight to stderr instead of through WARN(): the front-end reads these
++     * lines out of the container log to tell which SoundFont is in use, and a
++     * WINEDEBUG value that names any channel silences every other one. */
++    fprintf(stderr, "wine-midimap: SoundFont '%s'\n", path);
++    return id;
++}
++
++/* A SoundFont may hold no bank 0 preset at all, and then it cannot play General
++ * MIDI by itself: Debian's FluidR3_GS.sf2 is one of those, it carries only the
++ * GS variation banks and the effect kit and is meant to be played on top of a
++ * General MIDI set such as FluidR3_GM.sf2.  Loaded on its own it leaves every
++ * channel without a preset, which is silence.  Which SoundFonts get loaded is
++ * the front-end's business - it names them in WINE_MIDI_SOUNDFONT - so nothing
++ * is ever loaded behind its back; this only says what the file brings, and what
++ * follows from it, so that "I picked this one and nothing changed" can be read
++ * out of the log. */
++static void report_bank0(const char *path, int presets)
++{
++    if (presets != 0) return;
++
++    fprintf(stderr, "wine-midimap: SoundFont '%s' has no bank 0 program (General MIDI), "
++            "it only adds to whatever is loaded with it\n", path);
++}
++
++/* ------------------------------------------------------------------------- */
++/* entry points                                                              */
++/* ------------------------------------------------------------------------- */
++
++static NTSTATUS synth_unix_setup(void *args)
++{
++    struct synth_setup_params *params = args;
++    const char *requested_driver, *location;
++    char paths[SYNTH_SOUNDFONT_MAX][SYNTH_PATH_MAX];
++    unsigned int i, count = 0;
++    int id, presets, bank0_told = 0, bank0_seen = 0;
++
++    params->ret = params->lib_ok = params->driver_ok = params->soundfont_ok = 0;
++    params->driver_requested = 0;
++    params->driver[0] = 0;
++
++    pthread_mutex_lock(&synthesizer_mutex);
++
++    if (synthesizer)
++    {
++        params->ret = params->lib_ok = params->driver_ok = 1;
++        params->driver_requested = 1;
++        snprintf(params->driver, sizeof(params->driver), "%s", synthesizer_driver);
++        pthread_mutex_unlock(&synthesizer_mutex);
++        return STATUS_SUCCESS;
++    }
++
++    if (!(synthesizer_lib = open_library()))
++    {
++        WARN("libfluidsynth.so is not available\n");
++        goto done;
++    }
++    if (!load_functions()) goto done;
++    params->lib_ok = 1;
++
++    if (!(synthesizer_settings = p_new_fluid_settings()))
++    {
++        WARN("could not create the synthesizer settings\n");
++        goto done;
++    }
++
++    {
++        const char *gain = getenv("WINE_MIDI_GAIN");
++        p_fluid_settings_setnum(synthesizer_settings, "synth.gain", gain && *gain ? atof(gain) : 0.5);
++    }
++    p_fluid_settings_setint(synthesizer_settings, "synth.polyphony", 256);
++    p_fluid_settings_setint(synthesizer_settings, "synth.midi-channels", 16);
++
++    if (!(synthesizer = p_new_fluid_synth(synthesizer_settings)))
++    {
++        WARN("could not create the synthesizer\n");
++        goto done;
++    }
++
++    /* WINE_MIDI_AUDIO_DRIVER selects the audio driver on its own: when it
++     * names one, that one is used and no other is tried, so that a driver
++     * that cannot be opened is reported instead of silently replaced by one
++     * the caller did not ask for. */
++    requested_driver = getenv("WINE_MIDI_AUDIO_DRIVER");
++    if (requested_driver && *requested_driver)
++    {
++        params->driver_requested = 1;
++
++        if (p_fluid_settings_setstr(synthesizer_settings, "audio.driver", requested_driver) != FLUID_OK)
++            WARN("libfluidsynth was built without audio driver '%s'\n", requested_driver);
++        else if (!(synthesizer_audio = p_new_fluid_audio_driver(synthesizer_settings, synthesizer)))
++            WARN("audio driver '%s' could not be opened\n", requested_driver);
++        else
++            snprintf(synthesizer_driver, sizeof(synthesizer_driver), "%s", requested_driver);
++    }
++    else
++    {
++        for (i = 0; i < ARRAY_SIZE(audio_driver_names); i++)
++        {
++            if (p_fluid_settings_setstr(synthesizer_settings, "audio.driver", audio_driver_names[i]) != FLUID_OK)
++                continue;           /* the library was built without that driver */
++            if ((synthesizer_audio = p_new_fluid_audio_driver(synthesizer_settings, synthesizer)))
++            {
++                snprintf(synthesizer_driver, sizeof(synthesizer_driver), "%s", audio_driver_names[i]);
++                break;
++            }
++            WARN("audio driver '%s' could not be opened\n", audio_driver_names[i]);
++        }
++    }
++
++    if (!synthesizer_audio)
++    {
++        if (params->driver_requested) WARN("no usable audio driver, set WINE_MIDI_AUDIO_DRIVER to one the library provides\n");
++        else WARN("no usable audio driver\n");
++        /* straight to stderr instead of through WARN(): the front-end reads this
++         * line out of the container log to tell which driver the synthesizer got,
++         * and a WINEDEBUG value that names any channel silences every other one. */
++        fprintf(stderr, "wine-midimap: no usable audio driver (%s%s)\n",
++                params->driver_requested ? "WINE_MIDI_AUDIO_DRIVER=" : "no driver requested",
++                params->driver_requested ? requested_driver : "");
++        goto done;
++    }
++    params->driver_ok = 1;
++    fprintf(stderr, "wine-midimap: audio driver '%s'%s\n", synthesizer_driver,
++            params->driver_requested ? "" : " (selected automatically)");
++
++    /* WINE_MIDI_SOUNDFONT holds one or more locations separated by ':', each one
++     * a .sf2 file or a directory whose .sf2 files are all loaded, so that a
++     * General MIDI set and the variation set that goes with it can be put
++     * together.  Without it the directories below are looked through. */
++    location = getenv("WINE_MIDI_SOUNDFONT");
++    if (location && *location)
++        count = collect_soundfonts_listed(location, paths, ARRAY_SIZE(paths));
++    else
++        count = collect_soundfonts_default(paths, ARRAY_SIZE(paths));
++
++    if (!count)
++    {
++        WARN("no SoundFont found, set WINE_MIDI_SOUNDFONT to a .sf2 file or to a directory holding one\n");
++        fprintf(stderr, "wine-midimap: no SoundFont found (WINE_MIDI_SOUNDFONT=%s)\n",
++                location && *location ? location : "<not set>");
++    }
++
++    /* Exactly the SoundFonts named above are loaded, in the order they were
++     * named: with several files around, "I picked this one and the instruments
++     * still sound the same" has to be answerable from the log. */
++    for (i = 0; i < count; i++)
++    {
++        if ((id = load_soundfont(paths[i])) == FLUID_FAILED) continue;
++        params->soundfont_ok = 1;
++
++        if ((presets = soundfont_gm_presets(id)) < 0) continue;   /* library cannot tell */
++        bank0_told = 1;
++        if (presets) bank0_seen = 1;
++        else report_bank0(paths[i], presets);
++    }
++
++    /* every channel needs a bank 0 preset to have a sound at all, so a set of
++     * SoundFonts without one is silent however many of them are loaded */
++    if (params->soundfont_ok && bank0_told && !bank0_seen)
++        fprintf(stderr, "wine-midimap: none of the loaded SoundFonts has a bank 0 program, "
++                "every channel stays without a preset and MIDI playback is silent\n");
++
++    /* the port is only announced when it can actually play something */
++    if (!params->soundfont_ok) goto done;
++
++    synthesizer_users = 0;
++    stream_reset();
++    snprintf(params->driver, sizeof(params->driver), "%s", synthesizer_driver);
++    params->ret = 1;
++
++    TRACE("synthesizer ready, audio driver '%s', %u SoundFont(s) loaded\n", synthesizer_driver,
++          synthesizer_soundfont_count);
++
++done:
++    if (!params->ret) destroy_synthesizer();
++    pthread_mutex_unlock(&synthesizer_mutex);
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS synth_unix_teardown(void *args)
++{
++    pthread_mutex_lock(&synthesizer_mutex);
++    destroy_synthesizer();
++    pthread_mutex_unlock(&synthesizer_mutex);
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS synth_unix_open(void *args)
++{
++    struct synth_state_params *params = args;
++
++    params->ret = 1;
++
++    pthread_mutex_lock(&synthesizer_mutex);
++    if (synthesizer)
++    {
++        synthesizer_users++;
++        stream_reset();
++        params->ret = 0;
++    }
++    pthread_mutex_unlock(&synthesizer_mutex);
++
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS synth_unix_close(void *args)
++{
++    struct synth_state_params *params = args;
++    unsigned int chan;
++
++    params->ret = 1;
++
++    pthread_mutex_lock(&synthesizer_mutex);
++    if (synthesizer)
++    {
++        stream_reset();
++        if (synthesizer_users) synthesizer_users--;
++        if (!synthesizer_users)
++        {
++            /* dropping the last user must not leave notes playing */
++            for (chan = 0; chan < 16; chan++) silence_channel(chan);
++        }
++        params->ret = 0;
++    }
++    pthread_mutex_unlock(&synthesizer_mutex);
++
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS synth_unix_bytes(void *args)
++{
++    struct synth_bytes_params *params = args;
++    unsigned int i;
++
++    params->ret = 1;
++    if (params->size > SYNTH_CHUNK_SIZE)
++    {
++        WARN("oversized MIDI chunk (%u bytes)\n", (unsigned int)params->size);
++        return STATUS_SUCCESS;
++    }
++
++    pthread_mutex_lock(&synthesizer_mutex);
++    if (synthesizer)
++    {
++        for (i = 0; i < params->size; i++) feed_byte(params->data[i]);
++        params->ret = 0;
++    }
++    pthread_mutex_unlock(&synthesizer_mutex);
++
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS synth_unix_reset(void *args)
++{
++    struct synth_state_params *params = args;
++
++    params->ret = 1;
++
++    pthread_mutex_lock(&synthesizer_mutex);
++    if (synthesizer)
++    {
++        stream_reset();
++        synthesizer_reset();
++        params->ret = 0;
++    }
++    pthread_mutex_unlock(&synthesizer_mutex);
++
++    return STATUS_SUCCESS;
++}
++
++const unixlib_entry_t __wine_unix_call_funcs[] =
++{
++    synth_unix_setup,
++    synth_unix_teardown,
++    synth_unix_open,
++    synth_unix_close,
++    synth_unix_bytes,
++    synth_unix_reset,
++};
++
++C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_synth_funcs_count );
++
++#ifdef _WIN64
++
++/* No parameter structure contains a pointer, so their layout is the same in
++ * 32-bit and 64-bit builds and the handlers can be shared. */
++
++const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
++{
++    synth_unix_setup,
++    synth_unix_teardown,
++    synth_unix_open,
++    synth_unix_close,
++    synth_unix_bytes,
++    synth_unix_reset,
++};
++
++C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_synth_funcs_count );
++
++#endif  /* _WIN64 */

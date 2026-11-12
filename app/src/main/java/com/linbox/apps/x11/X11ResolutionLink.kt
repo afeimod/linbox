@@ -73,6 +73,37 @@ object X11ResolutionLink {
     private const val RES_DIR = "$PREFIX/tmp"
     private const val RES_FILE = "$RES_DIR/.linbox-x11-res"
 
+    /**
+     * v3.1.7（AnWind 移植）：当前 X 屏幕尺寸落盘（.linbox-x11-screen，"WxH"）。
+     *
+     * LorieView 每次回调（surfaceW/H、screenW/H）时由 X11Screen 写入；
+     * RootfsLauncher 构建"跟随窗口"模式的 wine 虚拟桌面命令时读取 ——
+     * 无 WM 的 X 服务上裸 wine 窗口全堆 (0,0)，虚拟桌面按当前 X 屏幕
+     * 尺寸创建才能既铺满又跟随窗口（RandR 变化时 wine 自适应）。
+     * 文件保留上次会话值：启动链早于 LorieView 首次回调时也能拿到
+     * 最近已知尺寸，拿不到再退 DEFAULT_RES。
+     */
+    private const val SCREEN_FILE = "$RES_DIR/.linbox-x11-screen"
+
+    /** 把当前 X 屏幕尺寸落盘（screenW/H <= 0 时忽略）。 */
+    fun writeScreenSize(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        runCatching {
+            val f = java.io.File(SCREEN_FILE)
+            // 去重写：尺寸未变不重写（回调每帧都可能来）
+            if (!f.isFile || f.readText().trim() != "${w}x${h}") {
+                f.parentFile?.mkdirs()
+                f.writeText("${w}x${h}")
+            }
+        }
+    }
+
+    /** 读取最近一次落盘的 X 屏幕尺寸（"WxH"；无文件/非法返回 null）。 */
+    fun readScreenSize(): String? = runCatching {
+        val v = java.io.File(SCREEN_FILE).readText().trim()
+        if (Regex("^\\d+x\\d+$").matches(v)) v else null
+    }.getOrNull()
+
     /** 当前生效的分辨率来源描述（供控制条显示）："1280x720（游戏）" / "跟随窗口"。 */
     data class ResolutionState(val mode: String, val exact: String, val fromGame: Boolean)
 

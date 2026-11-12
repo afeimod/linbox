@@ -1,0 +1,33 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH] LinBox box64: static-binary exit fix backport (v0.3.0 layout)
+
+Same backport as 0005 for the v0.3.0 emulate() layout: v0.3.0 has no { }
+block around the entry setup and ends with Run(emu, 0) instead of
+DynaRun(emu).
+
+Anchor (3 lines):
+    "Push64(emu, my_context->exit_bridge); ..." / "SetRDX(emu, Pop64(emu)); ..." /
+    "Run(emu, 0);"
+The trailing "Run(emu, 0);" exists ONLY in v0.3.0 (every later tag ends
+emulate() with DynaRun(emu)), so this file is skipped everywhere else.
+Requires 0001 (declares linbox_hasinterp); sort order applies it first.
+---
+diff --git a/src/core.c b/src/core.c
+--- a/src/core.c
++++ b/src/core.c
+@@ -2286,4 +2286,15 @@
+     Push64(emu, my_context->exit_bridge);  // push to pop it just after
+     SetRDX(emu, Pop64(emu));    // RDX is exit function
++    // LinBox backport of upstream v0.4.4 fix: for STATIC binaries (no
++    // PT_INTERP) RDX must be 0, not the exit bridge. The SysV process-entry
++    // ABI passes rtld_fini in RDX; glibc's __libc_start_main registers it
++    // with __cxa_atexit, and __run_exit_handlers calls atexit handlers
++    // BEFORE RUN_HOOK(__libc_atexit) (_IO_cleanup, the stdio flush). With
++    // the exit bridge in RDX the emulation ended inside the rtld_fini call:
++    // buffered stdout was never flushed (empty output) and the exit code
++    // became the truncated bridge address (128). v0.3.0 ends emulate() with
++    // Run(emu, 0); applying the same SetRDX(emu,0) right before it mirrors
++    // the upstream v0.4.4 placement (right after the Push64/SetRDX pair).
++    if(!linbox_hasinterp) SetRDX(emu, 0);
+     Run(emu, 0);
+     // Get EAX

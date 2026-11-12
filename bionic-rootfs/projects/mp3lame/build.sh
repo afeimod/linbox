@@ -1,0 +1,10 @@
+revision="4.0"
+url="https://sourceforge.net/projects/lame/files/lame/4.0/lame-${revision}.tar.gz"
+urlType="tar"
+arch="aarch64 x86_64"
+buildSys="autotools"
+license="GPL-2.0"
+args="
+  --disable-frontend
+"
+deps="mpg123"

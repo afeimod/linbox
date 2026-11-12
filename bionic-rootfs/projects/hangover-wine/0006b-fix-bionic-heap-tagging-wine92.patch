@@ -1,0 +1,71 @@
+# linbox: fix bionic scudo TBI heap-tagging abort cascade — wine ≤9.x 树形态。
+# （0006-fix-bionic-heap-tagging.patch 针对 hangover-11.16 树的
+# __wine_main(int argc, char *argv[]) 两参形态；wine 9.x 及更早官方树为
+# 三参形态 __wine_main(int argc, char *argv[], char *envp[])，上下文不
+# 匹配 → 本变体按 9.x 形态重做同一注入。功能、注入点、幂等标记与 0006
+# 完全一致，两补丁按树形态互斥生效。）
+#
+# Root cause chain (device log wine-888888, Android 15 / SDK 35):
+#  1. bionic enables TBI heap tagging (POINTER_TAG 0xB4 top byte) on
+#     TBI-capable kernels - see libc/bionic/malloc_tagged_pointers.h:
+#     free() runs MaybeUntagAndCheckPointer(), tag mismatch =>
+#     async_safe_fatal('Pointer tag for %p was truncated ...') => abort().
+#  2. Wine stores heap pointers in spots that drop the top byte; the
+#     fatal free() fires while wine runs on its kernel stack - the
+#     4GB-anchored mapping from virtual_alloc_thread_data(limit_4g).
+#  3. SIGABRT dispatch => virtual_setup_exception() sees SP outside the
+#     thread stack => exception context lands on the kernel stack =>
+#     call_seh_handlers walks frames at 0x10010xxxx => is_valid_frame()
+#     (TEB native stack bounds) rejects them => 'invalid frame' =>
+#     NtRaiseException 'not in stack limits' => process dies =>
+#     'could not load kernel32.dll' (c0000135) => wineboot exit 53.
+#
+# Fix: mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE)
+#  at the earliest entry of every wine process (__wine_main) and of
+#  wineserver (main; 0006 的 server/main.c hunk 在 9.x 树同样适用).
+# Same mechanism as AndroidManifest allowNativeHeapPointerTagging=false.
+# The untag mask is preserved, so pointers allocated before the call
+# (linker/env init) still free fine.
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -2118,9 +2118,41 @@
+  *
+  * Main entry point called by the wine loader.
+  */
++/* LINBOX_FIX_HEAP_TAG (bionic): Android >= 12 enables scudo TBI heap
++ * tagging (0xB4 top-byte) in every 64-bit native process on TBI-capable
++ * kernels. Wine saves heap pointers in places that strip/mangle the top
++ * byte; bionic's free() tag check then aborts the whole process with
++ * async_safe_fatal("Pointer tag for %p was truncated ...") -> SIGABRT on
++ * the wine kernel stack -> SEH dispatch walks frames on the 4GB-anchored
++ * kernel/signal stack -> err:seh "invalid frame / not in stack limits"
++ * -> "could not load kernel32.dll" (c0000135) -> wineboot exit 53.
++ * Device-verified on Android 15 (SDK 35). Fix: disable heap tagging at
++ * the earliest wine entry via the public bionic mallopt() API - the same
++ * mechanism AndroidManifest allowNativeHeapPointerTagging=false uses.
++ * Untag mask is preserved, so already-tagged pointers still free safely. */
++#if defined(__BIONIC__) && defined(__aarch64__)
++#include <malloc.h>
++#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
++#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
++#endif
++#ifndef M_HEAP_TAGGING_LEVEL_NONE
++#define M_HEAP_TAGGING_LEVEL_NONE 0
++#endif
++static void linbox_disable_heap_tagging(void)
++{
++    if (mallopt( M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE ))
++        fprintf( stderr, "linbox: bionic heap tagging disabled (TBI 0xB4 free-check off)\n" );
++    else
++        fprintf( stderr, "linbox: WARNING - failed to disable bionic heap tagging\n" );
++}
++#else
++static void linbox_disable_heap_tagging(void) { }
++#endif
++
+ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[], char *envp[] )
+ {
++    linbox_disable_heap_tagging();
+     main_argc = argc;
+     main_argv = argv;
+     main_envp = envp;

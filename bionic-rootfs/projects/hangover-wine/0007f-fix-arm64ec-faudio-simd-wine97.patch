@@ -1,0 +1,71 @@
+# linbox: wine-9.7 arm64ec faudio SIMD 修复 — FAudio_internal_simd.c 走 NEON（v3.2.14）
+#
+# 【根因】CI official-9.7 arm64ec 实测（日志 wine-build-log-arm64ec (10).zip）：
+# 主 make 于 libs/faudio/arm64ec-windows/src/FAudio_internal_simd.o 阵亡 ——
+#     In file included from libs/faudio/src/FAudio_internal_simd.c:72:
+#     In file included from .../llvm-mingw-22/lib/clang/21/include/emmintrin.h:17:
+#     .../mmintrin.h:165:12: error: invalid conversion between vector type
+#     '__v2di' (vector of 2 'long long' values) and integer type 'int' of
+#     different size
+#     fatal error: too many errors emitted, stopping now  (20 errors)
+# FAudio 的 SIMD 分发（与 0007 同族问题，第三处 x86 宏错位）：
+#     #if defined(__x86_64__) || defined(_M_X64)     ← llvm-mingw arm64ec 预定义
+#         #define __SSE2__ 1                          ← 本文件自己定义
+#     ...
+#     #ifdef __SSE2__ → #include <emmintrin.h>        ← ARM 后端没有 x86 向量 builtins → 炸
+# llvm-mingw arm64ec 目标同时预定义 __arm64ec__ 与 __x86_64__（不预定义
+# __aarch64__，clang 21 AArch64EC 宏语义）→ EC 编译趟落入 x86 SSE 分支；
+# 而 clang 的 AArch64 代码生成器不提供 __builtin_ia32_* 系列，clang 21 的
+# mmintrin.h __trunc64 宏在向量类型与标量之间硬性报类型错。
+#
+# 【修复】arm64ec silicon 本体是 AArch64（NEON 必有）：
+#   hunk1: SIMD 分发最前面插入 arm64ec 分支 —— 定义 __ARM_NEON__、
+#          NEED_SCALAR_CONVERTER_FALLBACKS=0，x86 分支降为 #elif（EC 下不进）
+#   hunk2: NEON intrinsics 段的判断加入 __arm64ec__/_M_ARM64EC
+#          （原判断只认 __aarch64__/_M_ARM64，EC 两个都不定义）
+# x86_64 / aarch64 / i386 / 无-SIMD 四种组合的行为与补丁前逐位一致
+# （gcc -E -dM 分支矩阵验证；arm64ec 组合：补丁前 EMM_INC=1 复现炸点，
+#  补丁后 NEON_INC=1、EMM_INC=0）。
+#
+# 【上游对照】FAudio 上游（FNA-XNA/FAudio）至今无 arm64ec 处理；wine 官方
+# arm64ec CI 用 MSVC（_M_ARM64EC 下 FAudio 同样误判，但 MSVC 的 intrin
+# 头容忍度不同未炸）。本补丁对上游无侵入：非 EC 目标零行为变化。
+--- a/libs/faudio/src/FAudio_internal_simd.c
++++ b/libs/faudio/src/FAudio_internal_simd.c
+@@ -32,7 +32,22 @@
+  * https://hg.icculus.org/icculus/mojoAL/file/default/mojoal.c
+  */
+ 
+-#if defined(__x86_64__) || defined(_M_X64)
++#if defined(__arm64ec__) || defined(_M_ARM64EC)
++	/* ARM64EC (LinBox arm64ec wine, llvm-mingw): the silicon is
++	 * AArch64 (NEON guaranteed), but the toolchain also predefines
++	 * __x86_64__/_M_X64 for the x64-ABI personality. Do NOT take the
++	 * x86 SSE branch below: clang's AArch64 backend provides none of
++	 * the x86 vector builtins and emmintrin.h/mmintrin.h hard-error
++	 * there (llvm-mingw-20251202 / clang 21.1.7: "invalid conversion
++	 * between vector type '__v2di' and integer type 'int'" in
++	 * mmintrin.h __trunc64). Route to NEON instead. */
++	#ifndef __ARM_NEON__
++	#define __ARM_NEON__ 1
++	#endif
++
++	/* AArch64 silicon guarantees NEON. */
++	#define NEED_SCALAR_CONVERTER_FALLBACKS 0
++#elif defined(__x86_64__) || defined(_M_X64)
+ 	/* Some platforms fail to define this... */
+ 	#ifndef __SSE2__
+ 	#define __SSE2__ 1
+@@ -61,8 +76,10 @@
+ 	#define NEED_SCALAR_CONVERTER_FALLBACKS 1
+ #endif
+ 
+-/* Our NEON paths require AArch64, don't check __ARM_NEON__ here */
+-#if defined(__aarch64__) || defined(_M_ARM64)
++/* Our NEON paths require AArch64, don't check __ARM_NEON__ here.
++ * ARM64EC silicon is AArch64 as well (see the dispatch above). */
++#if defined(__aarch64__) || defined(_M_ARM64) \
++    || defined(__arm64ec__) || defined(_M_ARM64EC)
+ #include <arm_neon.h>
+ #define HAVE_NEON_INTRINSICS 1
+ #endif

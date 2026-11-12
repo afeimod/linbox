@@ -20,6 +20,11 @@
         tools:ignore="ScopedStorage" />
     <!-- 虚拟键盘 / 虚拟手柄按键触觉反馈 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 浏览器 / 容器 Wine 下载（WineOps.installWine URL 下载）与
+         Ruffle 虚拟域资源供给 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 悬浮窗（手柄悬浮球 / DAC 迷你窗 兜底路径） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- X11 / 终端会话前台常驻服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -98,6 +103,18 @@
                 <action android:name="com.linbox.action.DAC_STATUS" />
             </intent-filter>
         </receiver>
+
+        <!-- 文件共享（浏览器下载文件打开 / 文件管理器 extern 打开 /
+             html 经 content:// 交给浏览器等） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 

@@ -1,0 +1,101 @@
+# linbox: proton 树 amd_ags_x64 的 arm64ec 构建修复（v3.3.9）
+#
+# 【根因】amd_ags_x64（AMD AGS 驱动扩展 DLL）为 proton 分支私有模块
+#   （官方 wine 树无此目录），两处与 arm64ec 形态冲突：
+#   1. amd_ags_x64_main.c 的大段
+#        #ifdef __x86_64__ ... __ASM_GLOBAL_FUNC( DX11_SetDepthBounds_impl,
+#        "mov (%rcx),%eax\n\t" ... )（9 个 x64 汇编跳板）
+#     llvm-mingw 的 arm64ec 目标同时预定义 __arm64ec__ 和 __x86_64__
+#     → EC 编译趟激活 x86 AT&T 汇编 → "unknown token in expression"
+#     连片报错（0007 系列修复的同类问题，但该文件 proton 专有，0007
+#     锚点不含它 —— proton_9.0 arm64ec 修完 crtdll 后的下一个炸点）。
+#   2. amd_ags_x64.spec 的 13 个跳板条目用 -arch=win64 —— win64 =
+#     x86_64|aarch64|arm64ec，EC/aarch64 趟按 spec 引用 _impl 符号却
+#     编不出实现 → 编译/链接双炸。wine-9.0 的 makedep 无 arm64ec_x64
+#     pragma（proton_10.0 靠 "#pragma makedep arm64ec_x64" 用 x86_64
+#     编译器单独编出 ARM64X 混合镜像，本树做不了）。
+#
+# 【修法】EC/aarch64 趟整体放弃这些 x64 跳板（AGS 多重间接绘制等
+#   扩展在 9.0 树的 EC 形态本就不可用；DLL 本体与全部 arch 中性导出
+#   —— agsDriverExtensionsDX11_CreateDevice/Init/DeInit 等均定义在
+#   #ifdef 块之外的纯 C 区（实测 1043~1459 行），不受影响）：
+#   * spec：13 个 "-arch=win64 " → "-arch=x86_64 "（x86_64 形态行为
+#     逐字节不变 —— 该形态 PE 只有 i386/x86_64，win64 在其中本就只
+#     命中 x86_64；i386 趟两种写法都被排除）
+#   * main.c：块守卫加 && !defined(__arm64ec__)（与 proton_10.0 对
+#     msvcrt/file.c 的同款官方修法风格）
+#   arm64ec 形态（--enable-archs=arm64ec,aarch64,i386）下这 13 个条目
+#   不再产出 → 无未解析符号，DLL 正常构建安装。
+#
+# 【互斥】.patch.proton 后缀避开主补丁循环；由 build.sh 条件应用：
+#   仅当 spec 存在且含 "-arch=win64 agsDriverExtensions_BeginUAVOverlap"
+#   （proton_9.0 形态特征；proton_10.0 已是 "-arch=x86_64,arm64ec"，
+#   门控不命中自动跳过）时套用。官方/hangover 树无此目录。
+#
+# 【验证】proton_9.0 树 patch --dry-run 全 hunk 命中；proton_10.0 /
+#   wine-9.0 / wine-9.2 / hangover-11.16 不命中。
+
+--- a/dlls/amd_ags_x64/amd_ags_x64.spec	2026-11-07 08:48:37.443223401 +0000
++++ b/dlls/amd_ags_x64/amd_ags_x64.spec	2026-11-07 08:48:37.444223404 +0000
+@@ -1,8 +1,8 @@
+ @ stdcall agsDeInit(ptr)
+ @ stdcall agsDeInitialize(ptr)
+ @ stdcall agsCheckDriverVersion(ptr long)
+-@ stdcall -norelay -arch=win64 agsDriverExtensions_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensions_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_BeginUAVOverlap() DX11_BeginUAVOverlap_impl
+ @ stub agsDriverExtensions_IASetPrimitiveTopology
+ @ stub agsDriverExtensionsDX11_CreateBuffer
+ @ stub agsDriverExtensions_CreateBuffer
+@@ -17,19 +17,19 @@
+ @ stdcall agsDriverExtensions_DeInit(ptr)
+ @ stdcall agsDriverExtensionsDX11_DeInit(ptr)
+ @ stub agsDriverExtensionsDX11_Destroy
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_DestroyDevice()
+-@ stdcall -norelay -arch=win64 agsDriverExtensions_EndUAVOverlap() DX11_EndUAVOverlap_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_EndUAVOverlap() DX11_EndUAVOverlap_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_DestroyDevice()
++@ stdcall -norelay -arch=x86_64 agsDriverExtensions_EndUAVOverlap() DX11_EndUAVOverlap_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_EndUAVOverlap() DX11_EndUAVOverlap_impl
+ @ stub agsDriverExtensionsDX11_GetMaxClipRects
+ @ stub agsDriverExtensionsDX11_IASetPrimitiveTopology
+ @ stdcall agsDriverExtensions_Init(ptr ptr ptr)
+ @ stdcall agsDriverExtensionsDX11_Init(ptr ptr long ptr)
+-@ stdcall -norelay -arch=win64 agsDriverExtensions_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirectCountIndirect() DX11_MultiDrawIndexedInstancedIndirectCountIndirect_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensions_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_MultiDrawInstancedIndirectCountIndirect() DX11_MultiDrawInstancedIndirectCountIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensions_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirect() DX11_MultiDrawIndexedInstancedIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_MultiDrawIndexedInstancedIndirectCountIndirect() DX11_MultiDrawIndexedInstancedIndirectCountIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensions_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_MultiDrawInstancedIndirect() DX11_MultiDrawInstancedIndirect_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_MultiDrawInstancedIndirectCountIndirect() DX11_MultiDrawInstancedIndirectCountIndirect_impl
+ @ stub agsDriverExtensionsDX11_NotifyResourceBeginAllAccess
+ @ stub agsDriverExtensionsDX11_NotifyResourceEndAllAccess
+ @ stub agsDriverExtensionsDX11_NotifyResourceEndWrites
+@@ -38,8 +38,8 @@
+ @ stub agsDriverExtensions_NotifyResourceEndWrites
+ @ stub agsDriverExtensionsDX11_NumPendingAsyncCompileJobs
+ @ stub agsDriverExtensionsDX11_SetClipRects
+-@ stdcall -norelay -arch=win64 agsDriverExtensions_SetDepthBounds() DX11_SetDepthBounds_impl
+-@ stdcall -norelay -arch=win64 agsDriverExtensionsDX11_SetDepthBounds() DX11_SetDepthBounds_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensions_SetDepthBounds() DX11_SetDepthBounds_impl
++@ stdcall -norelay -arch=x86_64 agsDriverExtensionsDX11_SetDepthBounds() DX11_SetDepthBounds_impl
+ @ stdcall agsDriverExtensionsDX11_SetDiskShaderCacheEnabled(ptr long)
+ @ stub agsDriverExtensionsDX11_SetMaxAsyncCompileThreadCount
+ @ stub agsDriverExtensionsDX11_SetViewBroadcastMasks
+--- a/dlls/amd_ags_x64/amd_ags_x64_main.c	2026-11-07 08:48:37.446223412 +0000
++++ b/dlls/amd_ags_x64/amd_ags_x64_main.c	2026-11-07 08:48:37.458223455 +0000
+@@ -1511,7 +1511,7 @@
+     return TRUE;
+ }
+ 
+-#ifdef __x86_64__
++#if defined(__x86_64__) && !defined(__arm64ec__)
+ 
+ static AGSReturnCode set_depth_bounds(AGSContext* context, ID3D11DeviceContext *dx_context, bool enabled,
+         float min_depth, float max_depth)

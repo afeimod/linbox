@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kahn 拓扑排序 - Bionic Rootfs</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e0e0e0;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+  .header{padding:10px 24px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #1e2028;flex-shrink:0}
+  .header h1{font-size:16px;font-weight:600;color:#fff;white-space:nowrap}
+  .header .info{font-size:12px;color:#666}
+  .target-sel{display:flex;align-items:center;gap:6px}
+  .target-sel label{font-size:12px;color:#888}
+  .target-sel select{background:#1a1c24;color:#ccc;border:1px solid #2a2d36;border-radius:4px;padding:4px 8px;font-size:12px;max-width:200px}
+  .loading{font-size:12px;color:#4f8cff;margin-left:auto}
+  .main{display:flex;flex:1;overflow:hidden}
+  .left{flex:1;display:flex;flex-direction:column;min-width:0}
+  .right{width:360px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid #1e2028;overflow:hidden}
+  .canvas-wrap{flex:1;position:relative;overflow:hidden}
+  canvas{display:block;width:100%;height:100%}
+  .canvas-overlay{position:absolute;top:8px;left:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .canvas-overlay .badge{padding:3px 8px;border-radius:4px;font-size:11px;font-family:monospace;background:#1a1c24ee;border:1px solid #2a2d36}
+  .legend{display:flex;gap:14px;padding:6px 16px;background:#1a1c23;border-top:1px solid #2a2d36;font-size:11px;flex-shrink:0}
+  .legend span{display:flex;align-items:center;gap:4px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .controls{display:flex;gap:6px;padding:8px 16px;border-top:1px solid #1e2028;flex-shrink:0;align-items:center;flex-wrap:wrap}
+  button{padding:5px 12px;border:none;border-radius:5px;font-size:12px;cursor:pointer;font-weight:500;transition:all .15s}
+  .btn-primary{background:#4f8cff;color:#fff}
+  .btn-primary:hover{background:#3a7aff}
+  .btn-secondary{background:#2a2d36;color:#ccc}
+  .btn-secondary:hover{background:#363a44}
+  .btn-danger{background:#e04848;color:#fff}
+  .btn-danger:hover{background:#c03030}
+  .speed{display:flex;align-items:center;gap:4px;margin-left:auto;font-size:11px;color:#666}
+  .speed input{width:70px}
+  .progress{font-size:11px;color:#888;margin-left:8px;font-family:monospace}
+  .panels{flex:1;overflow-y:auto;padding:0}
+  .panels::-webkit-scrollbar{width:5px}
+  .panels::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+  .panel{border-bottom:1px solid #1e2028}
+  .panel-title{font-size:11px;font-weight:600;color:#777;padding:8px 14px 4px;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;user-select:none}
+  .panel-title::after{content:'▾';font-size:10px;color:#444}
+  .panel.collapsed .panel-body{display:none}
+  .panel.collapsed .panel-title::after{content:'▸'}
+  .panel-body{padding:2px 14px 8px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;line-height:1.7}
+  .slot-row{display:flex;flex-wrap:wrap;gap:4px;min-height:24px}
+  .slot{padding:2px 8px;border-radius:4px;font-size:11px;font-family:monospace;font-weight:500}
+  .slot-queue{background:#1b2838;color:#5cb8ff;border:1px solid #2a4a6a}
+  .slot-order{background:#1b2820;color:#5cff8a;border:1px solid #2a6a3a}
+  .slot-empty{color:#333;font-style:italic;font-weight:400;border:1px dashed #2a2d36}
+  .log{max-height:180px;overflow-y:auto;font-size:11px}
+  .log::-webkit-scrollbar{width:4px}
+  .log::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
+  .log-line{padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .log-dequeue{color:#5cb8ff}
+  .log-visit{color:#5cff8a}
+  .log-enqueue{color:#f0c040}
+  .log-info{color:#666}
+  .log-error{color:#e04848}
+  .indeg-item{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;margin:1px;border-radius:3px;font-size:11px}
+  .indeg-item .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .code-block{font-size:11px;line-height:1.7;background:#14151a;border-radius:6px;padding:8px 10px;overflow-x:auto}
+  .code-line{display:block;padding:0 3px;border-radius:2px;transition:background .2s}
+  .code-line.active{background:#2a3a50}
+  .code-kw{color:#c792ea}.code-fn{color:#82aaff}.code-cmt{color:#546e7a}.code-num{color:#f78c6c}
+  .zoom-ctrl{position:absolute;bottom:8px;right:8px;display:flex;flex-direction:column;gap:4px}
+  .zoom-ctrl button{width:28px;height:28px;padding:0;font-size:14px;background:#1a1c24ee;border:1px solid #2a2d36;color:#aaa;border-radius:4px;cursor:pointer}
+  .zoom-ctrl button:hover{background:#2a2d36;color:#fff}
+  .tooltip{position:fixed;pointer-events:none;background:#1e2028ee;border:1px solid #3a3e48;border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.7;z-index:100;max-width:320px;backdrop-filter:blur(8px);box-shadow:0 4px 20px #0008;opacity:0;transition:opacity .12s}
+  .tooltip.show{opacity:1}
+  .tooltip .tt-name{font-size:14px;font-weight:700;color:#fff;margin-bottom:4px}
+  .tooltip .tt-row{display:flex;gap:6px;align-items:baseline}
+  .tooltip .tt-label{color:#666;white-space:nowrap}
+  .tooltip .tt-val{color:#ccc;word-break:break-all}
+  .tooltip .tt-dep{color:#5cb8ff}
+  .tooltip .tt-rdep{color:#f0c040}
+  .tooltip .tt-state{display:inline-block;padding:1px 6px;border-radius:3px;font-size:11px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Kahn 拓扑排序</h1>
+  <div class="target-sel">
+    <label>构建目标:</label>
+    <select id="targetSelect"></select>
+  </div>
+  <span class="loading" id="loadingText">点击选择 projects 目录</span>
+  <div class="info" id="graphInfo"></div>
+</div>
+<div class="main">
+  <div class="left">
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="graphCanvas"></canvas>
+      <div class="canvas-overlay" id="canvasOverlay"></div>
+      <div class="zoom-ctrl">
+        <button id="zoomIn" title="放大">+</button>
+        <button id="zoomOut" title="缩小">−</button>
+        <button id="zoomFit" title="适应">⊡</button>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="background:#3a7aff"></i>等待中</span>
+      <span><i style="background:#f0c040"></i>入队</span>
+      <span><i style="background:#e04848"></i>处理中</span>
+      <span><i style="background:#2a8a4a"></i>完成</span>
+      <span><i style="background:#2a2d36"></i>边→依赖</span>
+      <span><i style="background:#e04848"></i>激活边</span>
+    </div>
+    <div class="controls">
+      <button class="btn-primary" id="btnStep">▶ 下一步</button>
+      <button class="btn-primary" id="btnAuto">⏩ 自动</button>
+      <button class="btn-secondary" id="btnReset">↺ 重置</button>
+      <button class="btn-secondary" id="btnLoadDir">选择 projects 目录</button>
+      <span class="progress" id="progressText">0/0</span>
+      <div class="speed">
+        <span>速度</span>
+        <input type="range" id="speedRange" min="1" max="10" value="5">
+      </div>
+    </div>
+  </div>
+  <div class="right">
+    <div class="panels">
+      <div class="panel">
+        <div class="panel-title" data-toggle="panel">队列 (indeg=0)</div>
+        <div class="panel-body"><div class="slot-row" id="queueSlots"><span class="slot slot-empty">空</span></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title" data-toggle="panel">构建顺序</div>
+        <div class="panel-body"><div class="slot-row" id="orderSlots"><span class="slot slot-empty">空</span></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title" data-toggle="panel">入度表</div>
+        <div class="panel-body"><div id="indegTable"></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title" data-toggle="panel">反向图 (_rgraph_)</div>
+        <div class="panel-body"><div id="rgraphTable" style="max-height:160px;overflow-y:auto"></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title" data-toggle="panel">日志</div>
+        <div class="panel-body"><div class="log" id="logBox"></div></div>
+      </div>
+      <div class="panel collapsed">
+        <div class="panel-title" data-toggle="panel">伪代码</div>
+        <div class="panel-body"><div class="code-block" id="codeBlock"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<input type="file" id="dirInput" webkitdirectory directory multiple style="display:none">
+
+<script>
+// ========== 日志 ==========
+function log(type, msg) {
+  const box = document.getElementById('logBox');
+  const div = document.createElement('div');
+  div.className = 'log-line log-'+type;
+  div.textContent = msg;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ========== 依赖数据 ==========
+let ALL_DEPS = {};
+
+function parseBuildSh(content) {
+  const deps = [];
+  for (const line of content.split('\n')) {
+    const m = line.match(/^deps="(.*)"/);
+    if (m && m[1].trim()) {
+      deps.push(...m[1].trim().split(/\s+/).filter(Boolean));
+    }
+  }
+  return deps;
+}
+
+function loadFromFiles(fileList) {
+  const files = Array.from(fileList).filter(f => {
+    if (f.name !== 'build.sh') return false;
+    const parts = f.webkitRelativePath.split('/');
+    const idx = parts.indexOf('projects');
+    return idx !== -1 && idx + 1 < parts.length - 1;
+  });
+
+  if (!files.length) {
+    log('error', '未找到 build.sh，请选择包含 projects 子目录的根目录');
+    return;
+  }
+
+  log('info', `正在解析 ${files.length} 个 build.sh ...`);
+  const allDeps = {};
+  let done = 0;
+
+  for (const file of files) {
+    const parts = file.webkitRelativePath.split('/');
+    const pkgName = parts[parts.indexOf('projects') + 1];
+    const reader = new FileReader();
+    reader.onload = e => {
+      allDeps[pkgName] = parseBuildSh(e.target.result);
+      if (++done === files.length) applyDeps(allDeps);
+    };
+    reader.readAsText(file);
+  }
+}
+
+function applyDeps(deps) {
+  ALL_DEPS = deps;
+  document.getElementById('loadingText').style.display = 'none';
+  log('info', `已加载 ${Object.keys(deps).length} 个包`);
+  initTargetSelector();
+  loadTarget('__all__');
+}
+
+function initTargetSelector() {
+  const sel = document.getElementById('targetSelect');
+  sel.innerHTML = '';
+  const optAll = document.createElement('option');
+  optAll.value = '__all__'; optAll.textContent = '全部包 (all)';
+  sel.appendChild(optAll);
+  Object.keys(ALL_DEPS).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = '__all__';
+  sel.onchange = () => { stopAuto(); loadTarget(sel.value); };
+}
+
+// ========== 收集依赖 ==========
+function collectDep(target, visited, allPkgs, edges) {
+  if (visited.has(target)) return;
+  visited.add(target);
+  allPkgs.push(target);
+  for (const dep of (ALL_DEPS[target] || [])) {
+    edges.push([target, dep]);
+    collectDep(dep, visited, allPkgs, edges);
+  }
+}
+
+function buildGraphData(target) {
+  const visited = new Set(), nodes = [], edges = [];
+  collectDep(target, visited, nodes, edges);
+  const edgeSet = new Set();
+  return { nodes, edges: edges.filter(([f,t]) => {
+    const k = f+'→'+t; return edgeSet.has(k) ? false : (edgeSet.add(k), true);
+  })};
+}
+
+// ========== 状态 ==========
+let packages = [], edges = [], queue = [], buildOrder = [];
+let autoTimer = null, phase = 'init', currentProject = null, activeEdges = [];
+let stepping = false;
+let zoom = 1, panX = 0, panY = 0, isDragging = false, dragStartX, dragStartY, panStartX, panStartY;
+const STATE = { NORMAL:0, QUEUED:1, PROCESSING:2, DONE:3 };
+const COLORS = { 0:'#3a7aff', 1:'#f0c040', 2:'#e04848', 3:'#2a8a4a' };
+
+const canvas = document.getElementById('graphCanvas');
+const ctx = canvas.getContext('2d');
+let W, H, dpr;
+
+function resizeCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  W = rect.width; H = rect.height;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', () => { resizeCanvas(); draw(); });
+
+// ========== 初始化图 ==========
+function initGraph(data) {
+  const n = data.nodes.length;
+  NODE_R = n > 40 ? 18 : n > 25 ? 22 : NODE_R_BASE;
+  const indegMap = {};
+  data.nodes.forEach(p => indegMap[p] = 0);
+  data.edges.forEach(([f,t]) => { if (indegMap[t] !== undefined) indegMap[t]++; });
+
+  const layers = [], placed = new Set();
+  let remaining = [...data.nodes];
+  while (remaining.length > 0) {
+    const layer = remaining.filter(p => {
+      const deps = (ALL_DEPS[p] || []).filter(d => !placed.has(d));
+      return deps.length === 0 || deps.every(d => !data.nodes.includes(d));
+    });
+    if (layer.length === 0) { layer.push(...remaining); break; }
+    layers.push(layer);
+    layer.forEach(p => placed.add(p));
+    remaining = remaining.filter(p => !placed.has(p));
+  }
+
+  packages = data.nodes.map((name, i) => {
+    const li = layers.findIndex(l => l.includes(name));
+    const pos = layers[li] ? layers[li].indexOf(name) : 0;
+    const sz = layers[li] ? layers[li].length : 1;
+    const xS = NODE_R * 3.5;
+    const yS = Math.min(NODE_R * 2.5, Math.max(NODE_R * 2.2, (H * 0.9) / (sz || 1)));
+    return {
+      id: i, name,
+      x: 80 + (li >= 0 ? li : 0) * xS + (Math.random()-0.5)*15,
+      y: H/2 + (pos - sz/2) * yS + (Math.random()-0.5)*8,
+      vx:0, vy:0, indeg: indegMap[name]||0, state: STATE.NORMAL, rgraph:[]
+    };
+  });
+
+  edges = data.edges.map(([from, to]) => ({
+    from: packages.findIndex(p => p.name === from),
+    to: packages.findIndex(p => p.name === to),
+    active: false
+  })).filter(e => e.from >= 0 && e.to >= 0);
+
+  queue = []; buildOrder = []; phase = 'init'; currentProject = null; activeEdges = [];
+  document.getElementById('logBox').innerHTML = '';
+  buildReverseGraph();
+  layoutForce(packages.length > 30 ? 300 : 80);
+  fitView();
+  renderAll();
+  log('info', `已加载 ${packages.length} 个包, ${edges.length} 条依赖边`);
+  log('info', '点击「下一步」或「自动」开始拓扑排序');
+  updateCodeHighlight(-1);
+  updateInfo();
+}
+
+function buildReverseGraph() {
+  packages.forEach(p => { p.indeg = 0; p.rgraph = []; });
+  edges.forEach(e => { packages[e.from].indeg++; packages[e.to].rgraph.push(e.from); });
+}
+
+function updateInfo() {
+  document.getElementById('graphInfo').textContent =
+    `${packages.length} 包 | ${edges.length} 边 | 队列:${queue.length} | 已构建:${buildOrder.length}/${packages.length}`;
+}
+
+// ========== 力导向 ==========
+function layoutForce(iters) {
+  const n = packages.length;
+  const minDist = NODE_R * 1.6;
+  const repulsion = n > 30 ? 10000 : 12000;
+  const springLen = NODE_R * 2.8;
+  const springK = 0.006;
+  const centerK = n > 30 ? 0.001 : 0.0008;
+
+  for (let iter = 0; iter < (iters||150); iter++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = i+1; j < n; j++) {
+        let dx = packages[j].x - packages[i].x, dy = packages[j].y - packages[i].y;
+        let d2 = dx*dx+dy*dy; if (d2 < 1) d2 = 1;
+        let d = Math.sqrt(d2), f = repulsion / d2;
+        let fx = (dx/d)*f, fy = (dy/d)*f;
+        packages[i].vx -= fx; packages[i].vy -= fy;
+        packages[j].vx += fx; packages[j].vy += fy;
+      }
+    }
+    edges.forEach(e => {
+      let a=packages[e.from], b=packages[e.to];
+      let dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+      let f=(d-springLen)*springK;
+      a.vx+=(dx/d)*f; a.vy+=(dy/d)*f;
+      b.vx-=(dx/d)*f; b.vy-=(dy/d)*f;
+    });
+    for (let i = 0; i < n; i++) {
+      for (let j = i+1; j < n; j++) {
+        let dx = packages[j].x - packages[i].x, dy = packages[j].y - packages[i].y;
+        let d = Math.sqrt(dx*dx+dy*dy) || 0.1;
+        if (d < minDist) {
+          let o = (minDist - d) / 2, px = (dx/d)*o, py = (dy/d)*o;
+          packages[i].x -= px; packages[i].y -= py;
+          packages[j].x += px; packages[j].y += py;
+        }
+      }
+    }
+    packages.forEach(p => {
+      p.vx+=(W/2-p.x)*centerK; p.vy+=(H/2-p.y)*centerK;
+      p.vx*=0.7; p.vy*=0.7; p.x+=p.vx; p.y+=p.vy;
+    });
+  }
+}
+
+function fitView() {
+  if (!packages.length) return;
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  packages.forEach(p => { minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); maxY=Math.max(maxY,p.y); });
+  const pad = NODE_R * 2, gw = maxX-minX+pad*2, gh = maxY-minY+pad*2;
+  zoom = Math.min(W/gw, H/gh, 2.0);
+  panX = (W-gw*zoom)/2 - minX*zoom + pad*zoom;
+  panY = (H-gh*zoom)/2 - minY*zoom + pad*zoom;
+}
+
+// ========== 绘制 ==========
+const NODE_R_BASE = 24;
+let NODE_R = NODE_R_BASE;
+function draw() {
+  ctx.clearRect(0,0,W,H);
+  ctx.save(); ctx.translate(panX, panY); ctx.scale(zoom, zoom);
+
+  edges.forEach(e => {
+    const a=packages[e.from], b=packages[e.to];
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1;
+    const ux=dx/d, uy=dy/d;
+    ctx.beginPath();
+    ctx.moveTo(a.x+ux*NODE_R, a.y+uy*NODE_R);
+    ctx.lineTo(b.x-ux*NODE_R, b.y-uy*NODE_R);
+    ctx.strokeStyle = e.active?'#e04848':'#2a2d36';
+    ctx.lineWidth = e.active?2.5:1.2;
+    ctx.stroke();
+    const ax=b.x-ux*(NODE_R+2), ay=b.y-uy*(NODE_R+2), s=7;
+    ctx.beginPath();
+    ctx.moveTo(ax,ay);
+    ctx.lineTo(ax-ux*s-uy*s*.5, ay-uy*s+ux*s*.5);
+    ctx.lineTo(ax-ux*s+uy*s*.5, ay-uy*s-ux*s*.5);
+    ctx.fillStyle=e.active?'#e04848':'#2a2d36'; ctx.fill();
+  });
+
+  packages.forEach(p => {
+    const c = COLORS[p.state];
+    if (p.state===1||p.state===2) {
+      ctx.beginPath(); ctx.arc(p.x,p.y,NODE_R*1.5,0,Math.PI*2);
+      ctx.fillStyle=c+'15'; ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(p.x,p.y,NODE_R,0,Math.PI*2);
+    ctx.fillStyle=c; ctx.fill();
+    ctx.strokeStyle=p.id===dragNodeIdx?'#fff8':'#fff2';
+    ctx.lineWidth=p.id===dragNodeIdx?2:0.8; ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.font='bold 11px monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const label = p.name.length>16 ? p.name.slice(0,15)+'..' : p.name;
+    ctx.fillText(label, p.x, p.y - (p.state!==3 ? 4 : 0));
+    if (p.state !== 3) { ctx.font='9px monospace'; ctx.fillStyle='#fffc'; ctx.fillText('in:'+p.indeg, p.x, p.y + 8); }
+  });
+  ctx.restore();
+}
+
+// ========== 缩放平移 + 节点拖拽 ==========
+let dragNodeIdx = -1;
+const wrap = document.getElementById('canvasWrap');
+
+function screenToWorld(sx, sy) {
+  const rect = canvas.getBoundingClientRect();
+  return [(sx - rect.left - panX) / zoom, (sy - rect.top - panY) / zoom];
+}
+
+function hitTestNode(wx, wy) {
+  for (let i = packages.length - 1; i >= 0; i--) {
+    const p = packages[i], dx = p.x - wx, dy = p.y - wy;
+    if (dx*dx + dy*dy <= NODE_R*NODE_R) return i;
+  }
+  return -1;
+}
+
+wrap.addEventListener('mousedown', e => {
+  const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+  const hit = hitTestNode(wx, wy);
+  if (hit >= 0) { dragNodeIdx = hit; wrap.style.cursor = 'grabbing'; }
+  else { isDragging = true; dragStartX = e.clientX; dragStartY = e.clientY; panStartX = panX; panStartY = panY; wrap.style.cursor = 'grabbing'; }
+});
+
+window.addEventListener('mousemove', e => {
+  if (dragNodeIdx >= 0) {
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    Object.assign(packages[dragNodeIdx], {x:wx, y:wy, vx:0, vy:0});
+    draw();
+  } else if (isDragging) {
+    panX = panStartX + (e.clientX - dragStartX); panY = panStartY + (e.clientY - dragStartY); draw();
+  } else {
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    const hit = hitTestNode(wx, wy);
+    wrap.style.cursor = hit >= 0 ? 'grab' : 'default';
+    showTooltip(hit, e.clientX, e.clientY);
+  }
+});
+
+window.addEventListener('mouseup', () => { dragNodeIdx = -1; isDragging = false; wrap.style.cursor = 'default'; });
+
+// ========== Tooltip ==========
+const tooltipEl = document.getElementById('tooltip');
+const STATE_NAMES = { 0:'等待中', 1:'已入队', 2:'处理中', 3:'已完成' };
+const STATE_COLORS = { 0:'#3a7aff', 1:'#f0c040', 2:'#e04848', 3:'#2a8a4a' };
+
+function showTooltip(idx, mx, my) {
+  if (idx < 0) { tooltipEl.classList.remove('show'); return; }
+  const p = packages[idx];
+  const deps = (ALL_DEPS[p.name] || []);
+  const rdeps = p.rgraph.map(i => packages[i].name);
+  const sc = STATE_COLORS[p.state], sn = STATE_NAMES[p.state];
+  let html = `<div class="tt-name">${p.name}</div>`;
+  html += `<div class="tt-row"><span class="tt-label">状态:</span><span class="tt-state" style="background:${sc}30;color:${sc};border:1px solid ${sc}50">${sn}</span></div>`;
+  html += `<div class="tt-row"><span class="tt-label">入度:</span><span class="tt-val">${p.indeg}</span></div>`;
+  if (deps.length) html += `<div class="tt-row"><span class="tt-label">依赖:</span><span class="tt-val tt-dep">${deps.join(', ')}</span></div>`;
+  if (rdeps.length) html += `<div class="tt-row"><span class="tt-label">被依赖:</span><span class="tt-val tt-rdep">${rdeps.join(', ')}</span></div>`;
+  if (!deps.length && !rdeps.length) html += `<div class="tt-row"><span class="tt-val" style="color:#555">无依赖关系</span></div>`;
+  tooltipEl.innerHTML = html; tooltipEl.classList.add('show');
+  const tw = tooltipEl.offsetWidth, th = tooltipEl.offsetHeight;
+  let tx = mx + 16, ty = my - 10;
+  if (tx + tw > window.innerWidth - 8) tx = mx - tw - 16;
+  if (ty + th > window.innerHeight - 8) ty = window.innerHeight - th - 8;
+  if (ty < 8) ty = 8;
+  tooltipEl.style.left = tx + 'px'; tooltipEl.style.top = ty + 'px';
+}
+
+wrap.addEventListener('mouseleave', () => tooltipEl.classList.remove('show'));
+wrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const old = zoom;
+  zoom = Math.max(0.15, Math.min(5, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+  panX = mx - (mx - panX) * zoom / old; panY = my - (my - panY) * zoom / old;
+  draw();
+}, {passive:false});
+
+document.getElementById('zoomIn').onclick = () => { zoom=Math.min(5,zoom*1.3); draw(); };
+document.getElementById('zoomOut').onclick = () => { zoom=Math.max(.15,zoom/1.3); draw(); };
+document.getElementById('zoomFit').onclick = () => { fitView(); draw(); };
+
+// ========== UI ==========
+function renderAll() { draw(); renderQueue(); renderOrder(); renderIndeg(); renderRgraph(); updateInfo(); }
+function renderQueue() {
+  document.getElementById('queueSlots').innerHTML = queue.length ? queue.map(i=>`<span class="slot slot-queue">${packages[i].name}</span>`).join('') : '<span class="slot slot-empty">空</span>';
+}
+function renderOrder() {
+  document.getElementById('orderSlots').innerHTML = buildOrder.length ? buildOrder.map(i=>`<span class="slot slot-order">${packages[i].name}</span>`).join(' → ') : '<span class="slot slot-empty">空</span>';
+}
+function renderIndeg() {
+  document.getElementById('indegTable').innerHTML = packages.map(p => {
+    const c = COLORS[p.state];
+    return `<span class="indeg-item"><span class="dot" style="background:${c}"></span>${p.name}:${p.indeg}</span>`;
+  }).join('');
+}
+function renderRgraph() {
+  document.getElementById('rgraphTable').innerHTML = packages.map(p => {
+    const deps = p.rgraph.map(i=>packages[i].name).join(', ')||'—';
+    return `<div style="color:#666"><b style="color:#aaa">${p.name}</b> ← ${deps}</div>`;
+  }).join('');
+}
+document.querySelectorAll('[data-toggle="panel"]').forEach(el => {
+  el.addEventListener('click', () => el.parentElement.classList.toggle('collapsed'));
+});
+
+// ========== 伪代码 ==========
+const CODE = [
+  'function toposort():',
+  '  for project in allPkgs:',
+  '    indeg[project] = 0',
+  '    for dep in get_dep(project):',
+  '      indeg[project]++',
+  '      rgraph[dep].append(project)',
+  '',
+  '  queue = [p | indeg[p]==0]',
+  '',
+  '  while queue 非空:',
+  '    project = queue.dequeue()',
+  '    buildOrder.append(project)',
+  '    for dep in rgraph[project]:',
+  '      indeg[dep]--',
+  '      if indeg[dep]==0:',
+  '        queue.enqueue(dep)',
+];
+function renderCode() {
+  document.getElementById('codeBlock').innerHTML = CODE.map((t,i) => {
+    let h = t.replace(/\b(function|for|if|while|in|return)\b/g,'<span class="code-kw">$1</span>')
+             .replace(/(\/\/.*)/,'<span class="code-cmt">$1</span>')
+             .replace(/\b(\d+)\b/g,'<span class="code-num">$1</span>');
+    return `<span class="code-line" data-line="${i}">${h||'&nbsp;'}</span>`;
+  }).join('');
+}
+function updateCodeHighlight(idx) {
+  document.querySelectorAll('.code-line').forEach((el,i) => el.classList.toggle('active', i===idx));
+}
+
+// ========== 算法步骤 ==========
+function stepBuild() {
+  if (phase==='done') { log('error','已完成，请重置或选择新目标'); return; }
+  if (stepping) return;
+
+  if (phase==='init') {
+    log('info','── 阶段1: 构建反向图 + 入度 ──');
+    updateCodeHighlight(2);
+    packages.forEach(p => log('info', `  indeg[${p.name}]=${p.indeg}  rgraph[${p.name}]=[${p.rgraph.map(i=>packages[i].name).join(', ')}]`));
+    queue = [];
+    packages.forEach((p,i) => { if (p.indeg===0) { queue.push(i); p.state=STATE.QUEUED; log('enqueue',`  入队 ${p.name}`); } });
+    updateCodeHighlight(8); phase='dequeued'; renderAll(); return;
+  }
+
+  if (queue.length===0) {
+    if (buildOrder.length<packages.length) log('error',`循环依赖! ${buildOrder.length}/${packages.length}`);
+    else { log('info','── 拓扑排序完成 ──'); updateCodeHighlight(-1); }
+    phase='done'; stopAuto(); renderAll(); return;
+  }
+
+  stepping = true;
+  currentProject = queue.shift();
+  const p = packages[currentProject];
+  p.state = STATE.PROCESSING;
+  log('dequeue', `出队 ${p.name}`); updateCodeHighlight(11);
+  edges.forEach(e => e.active=false);
+  p.rgraph.forEach(depIdx => { const e = edges.find(e=>e.from===depIdx&&e.to===currentProject); if(e){e.active=true;activeEdges.push(e);} });
+  buildOrder.push(currentProject);
+  log('visit',`  buildOrder += ${p.name}`); updateCodeHighlight(12);
+  document.getElementById('progressText').textContent=`${buildOrder.length}/${packages.length}`;
+  renderAll();
+
+  setTimeout(()=>{
+    log('info',`  遍历 rgraph[${p.name}]: [${p.rgraph.map(i=>packages[i].name).join(', ')}]`);
+    updateCodeHighlight(13);
+    p.rgraph.forEach(depIdx=>{
+      packages[depIdx].indeg--;
+      log('info',`    indeg[${packages[depIdx].name}]-- → ${packages[depIdx].indeg}`);
+      if(packages[depIdx].indeg===0){ queue.push(depIdx); packages[depIdx].state=STATE.QUEUED; log('enqueue',`    入队 ${packages[depIdx].name}`); updateCodeHighlight(16); }
+    });
+    p.state=STATE.DONE; activeEdges.forEach(e=>e.active=false); activeEdges=[];
+    phase='dequeued'; stepping = false; log('info',`  ✓ ${p.name} 完成`); renderAll();
+  }, 250);
+}
+
+// ========== 自动播放 ==========
+let autoSpeed = 430;
+function toggleAuto() {
+  if(autoTimer){stopAuto();return;}
+  autoSpeed = (11 - document.getElementById('speedRange').value) * 180;
+  autoTick(); document.getElementById('btnAuto').textContent='⏸ 暂停'; document.getElementById('btnAuto').className='btn-danger';
+}
+function autoTick() { if (phase==='done') { stopAuto(); return; } stepBuild(); autoTimer = setTimeout(autoTick, autoSpeed); }
+function stopAuto(){clearTimeout(autoTimer);autoTimer=null;document.getElementById('btnAuto').textContent='⏩ 自动';document.getElementById('btnAuto').className='btn-primary';}
+
+// ========== 事件 ==========
+document.getElementById('btnStep').onclick = stepBuild;
+document.getElementById('btnAuto').onclick = toggleAuto;
+document.getElementById('btnReset').onclick = () => { stopAuto(); loadTarget(document.getElementById('targetSelect').value); };
+document.getElementById('speedRange').oninput = () => { if(autoTimer){stopAuto();toggleAuto();} };
+
+// ========== 目录选择 ==========
+const dirInput = document.getElementById('dirInput');
+document.getElementById('btnLoadDir').onclick = () => dirInput.click();
+document.getElementById('loadingText').onclick = () => dirInput.click();
+dirInput.addEventListener('change', e => {
+  if (e.target.files.length) loadFromFiles(e.target.files);
+  e.target.value = '';
+});
+
+function loadTarget(target) {
+  if (target === '__all__') {
+    const nodes = Object.keys(ALL_DEPS).sort();
+    const edgeSet = new Set(), edges = [];
+    nodes.forEach(name => {
+      (ALL_DEPS[name] || []).forEach(dep => {
+        const key = name + '→' + dep;
+        if (!edgeSet.has(key) && nodes.includes(dep)) { edgeSet.add(key); edges.push([name, dep]); }
+      });
+    });
+    initGraph({ nodes, edges });
+  } else {
+    initGraph(buildGraphData(target));
+  }
+}
+
+// ========== 启动 ==========
+renderCode();
+resizeCanvas();
+</script>
+</body>
+</html>

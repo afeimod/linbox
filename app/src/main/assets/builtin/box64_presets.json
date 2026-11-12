@@ -1,0 +1,66 @@
+[
+  {
+    "name": "stability",
+    "items": [
+      {"key": "BOX64_DYNAREC_SAFEFLAGS", "value": "2"},
+      {"key": "BOX64_DYNAREC_FASTNAN", "value": "0"},
+      {"key": "BOX64_DYNAREC_FASTROUND", "value": "0"},
+      {"key": "BOX64_DYNAREC_X87DOUBLE", "value": "1"},
+      {"key": "BOX64_DYNAREC_BIGBLOCK", "value": "0"},
+      {"key": "BOX64_DYNAREC_STRONGMEM", "value": "2"},
+      {"key": "BOX64_DYNAREC_FORWARD", "value": "128"},
+      {"key": "BOX64_DYNAREC_CALLRET", "value": "0"},
+      {"key": "BOX64_DYNAREC_WAIT", "value": "0"},
+      {"key": "BOX64_AVX", "value": "0"},
+      {"key": "BOX64_UNITYPLAYER", "value": "1"}
+    ]
+  },
+  {
+    "name": "compatibility",
+    "items": [
+      {"key": "BOX64_DYNAREC_SAFEFLAGS", "value": "2"},
+      {"key": "BOX64_DYNAREC_FASTNAN", "value": "0"},
+      {"key": "BOX64_DYNAREC_FASTROUND", "value": "0"},
+      {"key": "BOX64_DYNAREC_X87DOUBLE", "value": "1"},
+      {"key": "BOX64_DYNAREC_BIGBLOCK", "value": "0"},
+      {"key": "BOX64_DYNAREC_STRONGMEM", "value": "1"},
+      {"key": "BOX64_DYNAREC_FORWARD", "value": "128"},
+      {"key": "BOX64_DYNAREC_CALLRET", "value": "0"},
+      {"key": "BOX64_DYNAREC_WAIT", "value": "1"},
+      {"key": "BOX64_AVX", "value": "0"},
+      {"key": "BOX64_UNITYPLAYER", "value": "1"}
+    ]
+  },
+  {
+    "name": "intermediate",
+    "items": [
+      {"key": "BOX64_DYNAREC_SAFEFLAGS", "value": "2"},
+      {"key": "BOX64_DYNAREC_FASTNAN", "value": "1"},
+      {"key": "BOX64_DYNAREC_FASTROUND", "value": "0"},
+      {"key": "BOX64_DYNAREC_X87DOUBLE", "value": "1"},
+      {"key": "BOX64_DYNAREC_BIGBLOCK", "value": "1"},
+      {"key": "BOX64_DYNAREC_STRONGMEM", "value": "0"},
+      {"key": "BOX64_DYNAREC_FORWARD", "value": "128"},
+      {"key": "BOX64_DYNAREC_CALLRET", "value": "0"},
+      {"key": "BOX64_DYNAREC_WAIT", "value": "1"},
+      {"key": "BOX64_AVX", "value": "0"},
+      {"key": "BOX64_UNITYPLAYER", "value": "0"}
+    ]
+  },
+  {
+    "name": "performance",
+    "items": [
+      {"key": "BOX64_DYNAREC_SAFEFLAGS", "value": "1"},
+      {"key": "BOX64_DYNAREC_FASTNAN", "value": "1"},
+      {"key": "BOX64_DYNAREC_FASTROUND", "value": "1"},
+      {"key": "BOX64_DYNAREC_X87DOUBLE", "value": "0"},
+      {"key": "BOX64_DYNAREC_BIGBLOCK", "value": "3"},
+      {"key": "BOX64_DYNAREC_STRONGMEM", "value": "0"},
+      {"key": "BOX64_DYNAREC_FORWARD", "value": "512"},
+      {"key": "BOX64_DYNAREC_CALLRET", "value": "1"},
+      {"key": "BOX64_DYNAREC_WAIT", "value": "1"},
+      {"key": "BOX64_AVX", "value": "0"},
+      {"key": "BOX64_UNITYPLAYER", "value": "0"}
+    ]
+  }
+]

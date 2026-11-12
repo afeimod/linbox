@@ -1,0 +1,4 @@
+#!/data/data/com.linbox/files/usr/bin/bash
+# LinBox regedit 包装器（APK assets 自动部署，勿手改）
+# 等价: linbox-wine regedit（注册表编辑器，容器自持环境 + X 服务自启）
+exec /data/data/com.linbox/files/rootfs/usr/bin/linbox-wine regedit "$@"

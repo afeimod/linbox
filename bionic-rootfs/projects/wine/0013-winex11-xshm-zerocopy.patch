@@ -1,0 +1,125 @@
+--- a/dlls/winex11.drv/xrender.c	2026-11-10 22:56:09.832564023 +0000
++++ b/dlls/winex11.drv/xrender.c	2026-11-10 22:56:09.832564023 +0000
+@@ -49,6 +49,112 @@
+ 
+ #include <X11/Xlib.h>
+ #include <X11/extensions/Xrender.h>
++#include <X11/extensions/XShm.h>
++#include <sys/ipc.h>
++#include <sys/shm.h>
++
++/* v3.4.0【LinBox 性能大修】x11drv XSHM 零拷贝上传通道 ----------------------
++ *
++ * 上游 wine 3.x 起 x11drv 已无任何 XShm 使用 —— GDI/DIB 每帧经
++ * XPutImage 走 socket 全载荷拷贝（“2D 每帧双拷贝”的另一半：
++ * 客户端 DIB → socket → X 服务端 pixmap）。LinBox 的 X 服务端
++ * （libXlorie）原生支持 MIT-SHM/DRI3/Present，rootfs 侧 libandroid-shmem
++ * 提供 SysV shm（ASharedMemory/memfd 后端，与 libXlorie 内嵌实现同
++ * 协议：抽象 unix socket + shmid 编码 + SCM_RIGHTS 传 fd）。本通道把
++ * ≥32KB 的图像上传改走 XShmPutImage —— 服务端直接从共享页读取，
++ * socket 上零像素载荷；shim 缺席/服务端拒绝时自动永久回退 XPutImage。
++ */
++static int xshm_state; /* 0 = 未探测, 1 = 可用, -1 = 永不可用 */
++static int xshm_trap_error;
++
++static int xshm_error_handler( Display *display, XErrorEvent *event )
++{
++    xshm_trap_error = 1;
++    return 0;
++}
++
++/* 经 MIT-SHM 上传 image；成功 TRUE。任何失败返回 FALSE（调用方回退
++ * XPutImage 旧路径，行为与上游一致）。 */
++static BOOL xshm_upload_image( Drawable drawable, GC gc, XImage *image,
++                                int src_x, int width, int height )
++{
++    XShmSegmentInfo shminfo;
++    XImage *shm_image;
++    size_t size;
++    int (*prev_handler)( Display *, XErrorEvent * );
++
++    if (xshm_state == -1) return FALSE;
++    if (!xshm_state)
++    {
++        int major, minor;
++        Bool shared;
++        if (!XShmQueryExtension( gdi_display ) ||
++            !XShmQueryVersion( gdi_display, &major, &minor, &shared ))
++        {
++            xshm_state = -1;
++            return FALSE;
++        }
++        xshm_state = 1;
++    }
++
++    size = (size_t)image->bytes_per_line * image->height;
++    if (size < 32768) return FALSE; /* 小图不值得 shm 往返 */
++
++    shminfo.shmid = shmget( IPC_PRIVATE, size, IPC_CREAT | 0777 );
++    if (shminfo.shmid == -1) return FALSE;
++    shminfo.shmaddr = shmat( shminfo.shmid, NULL, 0 );
++    if (shminfo.shmaddr == (void *)-1)
++    {
++        shmctl( shminfo.shmid, IPC_RMID, NULL );
++        return FALSE;
++    }
++    shminfo.readOnly = False;
++
++    memcpy( shminfo.shmaddr, image->data, size );
++
++    /* 与 image 同构的 SHM 影像（服务端按同一行布局直读共享页） */
++    shm_image = XShmCreateImage( gdi_display, default_visual.visual, image->depth,
++                                 image->format, (char *)shminfo.shmaddr, &shminfo,
++                                 image->width, image->height );
++    if (!shm_image)
++    {
++        shmdt( shminfo.shmaddr );
++        shmctl( shminfo.shmid, IPC_RMID, NULL );
++        return FALSE;
++    }
++    shm_image->bytes_per_line = image->bytes_per_line;
++    shm_image->byte_order = image->byte_order;
++    shm_image->bitmap_bit_order = image->bitmap_bit_order;
++    shm_image->bitmap_unit = image->bitmap_unit;
++    shm_image->bitmap_pad = image->bitmap_pad;
++    shm_image->bits_per_pixel = image->bits_per_pixel;
++    shm_image->red_mask = image->red_mask;
++    shm_image->green_mask = image->green_mask;
++    shm_image->blue_mask = image->blue_mask;
++
++    xshm_trap_error = 0;
++    prev_handler = XSetErrorHandler( xshm_error_handler );
++    XShmAttach( gdi_display, &shminfo );
++    XShmPutImage( gdi_display, drawable, gc, shm_image, src_x, 0, 0, 0,
++                  width, height, False );
++    XSync( gdi_display, False );
++    XSetErrorHandler( prev_handler );
++    if (xshm_trap_error)
++    {
++        shm_image->data = NULL;
++        XDestroyImage( shm_image );
++        shmdt( shminfo.shmaddr );
++        shmctl( shminfo.shmid, IPC_RMID, NULL );
++        xshm_state = -1; /* 服务端拒绝 attach —— 永久回退 */
++        return FALSE;
++    }
++    XShmDetach( gdi_display, &shminfo );
++    shm_image->data = NULL;
++    XDestroyImage( shm_image );
++    shmdt( shminfo.shmaddr );
++    shmctl( shminfo.shmid, IPC_RMID, NULL );
++    return TRUE;
++}
+ 
+ #ifndef RepeatNone  /* added in 0.10 */
+ #define RepeatNone    0
+@@ -1613,7 +1719,8 @@
+ 
+     *pixmap = XCreatePixmap( gdi_display, root_window, width, height, depth );
+     gc = XCreateGC( gdi_display, *pixmap, 0, NULL );
+-    XPutImage( gdi_display, *pixmap, gc, image, src->visrect.left, 0, 0, 0, width, height );
++    if (!xshm_upload_image( *pixmap, gc, image, src->visrect.left, width, height ))
++        XPutImage( gdi_display, *pixmap, gc, image, src->visrect.left, 0, 0, 0, width, height );
+     *pict = pXRenderCreatePicture( gdi_display, *pixmap, pict_formats[format], CPRepeat, &pa );
+     XFreeGC( gdi_display, gc );
+ 

@@ -1,0 +1,24 @@
+From: LinBox <linbox@example.invalid>
+Subject: [PATCH 7/7] LinBox box64: gate -Wno-pointer-type-mismatch to Clang (CI noise fix)
+
+-Wno-pointer-type-mismatch is a CLANG flag; gcc prints
+"cc1: note: unrecognized command-line option" noise in every CI host-smoke
+build. Zero effect on the shipped binary (the rootfs framework never
+passes -DCI=ON). The if(CI) block only exists since v0.3.2; on v0.3.0 the
+dry-run fails and this file is skipped - harmless.
+The hunk headers carry v0.4.4 line numbers; patch locates the
+(unique) anchors by scanning, so line drift across tags is fine. A hunk that
+cannot find its anchors fails the dry-run and is skipped whole
+(patchOptional=1 in build.sh) - it is NEVER force-placed at a wrong offset.
+
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -321,3 +321,5 @@
+ if(CI)
+-    add_definitions(-Wno-pointer-type-mismatch)
++    # LinBox: -Wno-pointer-type-mismatch is a CLANG flag; gcc does not know it
++    # (cc1 "unrecognized" note, seen live in CI host smoke) - clang-only gate.
++    add_definitions(-Wno-pointer-type-mismatch)
+ endif()

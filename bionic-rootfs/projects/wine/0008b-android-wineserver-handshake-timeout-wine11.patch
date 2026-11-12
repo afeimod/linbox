@@ -1,0 +1,43 @@
+# linbox: 0008 hunk3 的 wine-11 形态变体（proton_11.0 实测）
+#
+# wine 11 把 server_init_process() 的握手行重构为局部 data 变量 +
+# wine_server_receive_fd()（原 receive_fd 更名导出），0008 本体的
+# hunk3 锚点（ntdll_get_thread_data()->request_fd = receive_fd(...)）
+# 不再存在。本变体语义与 0008 hunk3 完全一致：握手前设 60s
+# SO_RCVTIMEO 预算、握手后清零 —— 治 Android 上残留/冻结 wineserver
+# 导致的"无输出挂死"（客户端阻塞在 recvmsg 上，system.reg 永不落盘）。
+#
+# 应用链：主补丁循环字典序 0008 → 0008b。0008 的 hunk1（sys/time.h
+# include）/hunk2（EAGAIN 指引）锚点在 wine 11 上逐字一致（实测命中），
+# hunk3 在 wine 11 上失败 → 仅该 hunk 落 .rej（--forward 容错警告），
+# 0008b 随后补齐 hunk3。wine ≤10 树上 0008 全中，0008b 的锚点
+# （data->request_fd = wine_server_receive_fd）不存在 → 干净跳过。
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -1646,7 +1646,26 @@
+     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
+ 
+     /* receive the first thread request fd on the main socket */
++#ifdef __ANDROID__
++    /* LINBOX_FIX_HANDSHAKE_TIMEOUT (wine-11 form, see 0008): a stale or
++     * frozen wineserver still holds a listening socket; the client would
++     * then block in wine_server_receive_fd() forever with zero output
++     * (the silent prefix-creation hang). Give the handshake a 60s budget
++     * via SO_RCVTIMEO and clear it right after, so normal server
++     * communication is unaffected. */
++    {
++        struct timeval _linbox_tv;
++        _linbox_tv.tv_sec = 60;
++        _linbox_tv.tv_usec = 0;
++        setsockopt( fd_socket, SOL_SOCKET, SO_RCVTIMEO, &_linbox_tv, sizeof(_linbox_tv) );
++        data->request_fd = wine_server_receive_fd( &version );
++        _linbox_tv.tv_sec = 0;
++        _linbox_tv.tv_usec = 0;
++        setsockopt( fd_socket, SOL_SOCKET, SO_RCVTIMEO, &_linbox_tv, sizeof(_linbox_tv) );
++    }
++#else
+     data->request_fd = wine_server_receive_fd( &version );
++#endif
+ 
+ #ifdef SO_PASSCRED
+     /* now that we hopefully received the server_pid, disable SO_PASSCRED */
