@@ -1,8 +1,15 @@
 package com.linbox.core.input.gamepad
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -16,10 +23,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -243,23 +253,52 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
             )
         }
 
-        // ===== 展开的控制菜单（在捕获层之上，点击直达菜单项） =====
-        if (expanded) {
-            Column(
-                modifier = Modifier
-                    .offset { IntOffset(menuLeft.roundToInt(), menuTop.roundToInt()) }
-                    .width(menuWidth)
-                    .shadow(10.dp, RoundedCornerShape(20.dp))
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xF2162434))
-                    .padding(vertical = 6.dp)
-                    // 菜单登记：X11 触摸剥离 + 触控板直通（见类 KDoc）
-                    .onGloballyPositioned {
-                        val b = it.boundsInWindowCompat()
-                        GamepadController.registerMenuHit(b.left, b.top, b.right, b.bottom)
-                        TrackpadRouter.registerPassthrough("gpBall", b)
-                    }
+        // ===== 展开的控制菜单（捕获层之上，点击直达菜单项） =====
+        // v6.0：展开/收起加缩放+淡入淡出弹性动画（用户："调出菜单没有任何
+        // 动态感"）；菜单高度钳制在屏内（可滚动）—— 横屏再矮也完整可见
+        // 可交互（用户："横屏直接看不全也无法交互"）。
+        val menuMaxH = with(density) { (maxHeight - 16.dp).toPx() }
+        val menuTopClamped = menuTop.coerceIn(
+            4f,
+            (screenHpxTotal - menuHpx.coerceAtMost(menuMaxH) - 4f).coerceAtLeast(4f)
+        )
+        // v6.0：菜单收起即清命中矩形（防收起后原地 X11 触摸被陈旧矩形剥离）
+        LaunchedEffect(expanded) {
+            if (!expanded) GamepadController.clearMenuHit()
+        }
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(menuLeft.roundToInt(), menuTopClamped.roundToInt()) }
+                .width(menuWidth)
+        ) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn(tween(140)) + scaleIn(
+                    initialScale = 0.82f,
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.75f, 0.1f),
+                    animationSpec = spring(dampingRatio = 0.78f, stiffness = 620f)
+                ),
+                exit = fadeOut(tween(110)) + scaleOut(
+                    targetScale = 0.9f,
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.75f, 0.1f),
+                    animationSpec = tween(110, easing = FastOutSlowInEasing)
+                )
             ) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = maxHeight - 16.dp)
+                        .shadow(10.dp, RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xF2162434))
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 6.dp)
+                        // 菜单登记：X11 触摸剥离 + 触控板直通（见类 KDoc）
+                        .onGloballyPositioned {
+                            val b = it.boundsInWindowCompat()
+                            GamepadController.registerMenuHit(b.left, b.top, b.right, b.bottom)
+                            TrackpadRouter.registerPassthrough("gpBall", b)
+                        }
+                ) {
                 // ---- 标题头（v3.4.6）：名称 + 组件数，一眼可辨 ----
                 Row(
                     modifier = Modifier
@@ -294,7 +333,10 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                     }
                 ) {
                     if (!gamepadEnabled) {
+                        // v6.0：visible 与总开关同步落盘 —— 全局加载只发生一次，
+                        // 此处不持久化的话下次启动仍是旧 padVisible
                         GamepadController.visible = true
+                        persistConfig()
                         scope.launch { app.settingsStore.setGamepadEnabled(true) }
                     } else {
                         GamepadController.releaseAllKeys()
@@ -343,52 +385,101 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                 // =====================================================
                 if (inX11) {
                     BallMenuSectionDivider()
-                    BallMenuItem(BallIconKind.KEYBOARD, "键盘") {
-                        val imm = context.getSystemService(
-                            android.content.Context.INPUT_METHOD_SERVICE
-                        ) as android.view.inputmethod.InputMethodManager
-                        @Suppress("DEPRECATION")
-                        imm.toggleSoftInput(android.view.inputmethod.InputMethodManager.SHOW_FORCED, 0)
-                        expanded = false
-                    }
-                    BallMenuItem(
-                        BallIconKind.TOUCH,
-                        "触摸方式·" + when (touchModeState) { 1 -> "触控板"; 3 -> "直接"; else -> "模拟" }
+                    Text(
+                        "X11 快捷",
+                        color = Color(0x80B8C7D9),
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                    )
+                    // v6.0：X11 组改紧凑双列芯片网格（旧版 7 行大菜单在横屏
+                    // 直接超出屏幕，"看不全也无法交互"的主因之一）
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val lp = com.termux.x11.LoriePreferences.prefs
-                        if (lp != null) {
-                            val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
-                            touchModeState = next
-                            lp.touchMode.put(next.toString())
-                            com.linbox.apps.x11.SmartTouchBridge.applyTouchPrefs()
+                        X11QuickChip(
+                            icon = BallIconKind.KEYBOARD, label = "键盘",
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            val imm = context.getSystemService(
+                                android.content.Context.INPUT_METHOD_SERVICE
+                            ) as android.view.inputmethod.InputMethodManager
+                            @Suppress("DEPRECATION")
+                            imm.toggleSoftInput(
+                                android.view.inputmethod.InputMethodManager.SHOW_FORCED, 0
+                            )
+                            expanded = false
                         }
-                        expanded = false
+                        X11QuickChip(
+                            icon = BallIconKind.TOUCH,
+                            label = when (touchModeState) { 1 -> "触控板"; 3 -> "直触"; else -> "模拟" },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            val lp = com.termux.x11.LoriePreferences.prefs
+                            if (lp != null) {
+                                val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
+                                touchModeState = next
+                                lp.touchMode.put(next.toString())
+                                com.linbox.apps.x11.SmartTouchBridge.applyTouchPrefs()
+                            }
+                            expanded = false
+                        }
                     }
-                    BallMenuItem(BallIconKind.FSGAME, "游戏全屏") {
-                        com.termux.x11.X11InputHub.sendAltEnter()
-                        expanded = false
-                    }
-                    BallMenuItem(BallIconKind.CYCLE, "切换窗口") {
-                        com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
-                        expanded = false
-                    }
-                    BallMenuItem(
-                        BallIconKind.FULLSCREEN,
-                        if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏"
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
-                        com.linbox.apps.x11.X11UiPrefs.fullscreen = v
-                        com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
-                        expanded = false
+                        X11QuickChip(
+                            icon = BallIconKind.CYCLE, label = "切窗",
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
+                            expanded = false
+                        }
+                        X11QuickChip(
+                            icon = BallIconKind.FULLSCREEN,
+                            label = if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏",
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
+                            com.linbox.apps.x11.X11UiPrefs.fullscreen = v
+                            com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
+                            expanded = false
+                        }
                     }
-                    BallMenuItem(BallIconKind.GEAR, "X11 设置") {
-                        com.linbox.apps.x11.X11SettingsBridge.requestShow()
-                        expanded = false
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        X11QuickChip(
+                            icon = BallIconKind.FSGAME, label = "游戏全屏",
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            com.termux.x11.X11InputHub.sendAltEnter()
+                            expanded = false
+                        }
+                        X11QuickChip(
+                            icon = BallIconKind.GEAR, label = "X11 设置",
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            com.linbox.apps.x11.X11SettingsBridge.requestShow()
+                            expanded = false
+                        }
                     }
-                    BallMenuItem(BallIconKind.HOME, "回主页", danger = false) {
+                    Spacer(Modifier.height(4.dp))
+                    BallMenuItem(BallIconKind.HOME, "回主页", compact = true) {
                         ShellController.showHome()
                         expanded = false
                     }
+                }
                 }
             }
         }
@@ -514,6 +605,60 @@ private fun BallMenuSectionDivider() {
 }
 
 /**
+ * v6.0：X11 快捷芯片（菜单 X11 组的紧凑双列网格单元）。
+ * 图标圆底 + 短标签纵向排布，按压缩放反馈，≥44dp 触摸目标。
+ */
+@Composable
+private fun X11QuickChip(
+    icon: BallIconKind,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    var pressed by remember { mutableStateOf(false) }
+    val tint = icon.tint(false)
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.9f else 1f,
+        animationSpec = tween(110), label = "x11Chip"
+    )
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = modifier
+            .scale(scale)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (pressed) Color(0x1FFFFFFF) else Color(0x14FFFFFF))
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        try { awaitRelease() } finally { pressed = false }
+                    },
+                    onTap = { onClick() }
+                )
+            }
+            .padding(vertical = 8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center
+        ) {
+            BallMenuIcon(icon, tint)
+        }
+        Spacer(Modifier.height(3.dp))
+        Text(
+            label,
+            color = Color(0xFFDCE8F5),
+            fontSize = 10.5.sp,
+            maxLines = 1
+        )
+    }
+}
+
+/**
  * 菜单项行（v3.4.6 重制）：≥50dp 触摸目标 + 彩色圆底矢量图标 + 标题 +
  * 可选 .vgp 后缀提示 + 按压反馈。图标全部 Canvas 自绘（[BallMenuIcon]）
  * —— 不用 emoji / 文本字符，任何字体下渲染一致。
@@ -524,6 +669,7 @@ private fun BallMenuItem(
     label: String,
     hint: String? = null,
     danger: Boolean = false,
+    compact: Boolean = false,
     onClick: () -> Unit
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -535,7 +681,7 @@ private fun BallMenuItem(
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
-            .padding(horizontal = 10.dp, vertical = 3.dp)
+            .padding(horizontal = 10.dp, vertical = if (compact) 1.dp else 3.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(
@@ -554,8 +700,11 @@ private fun BallMenuItem(
                     onTap = { onClick() }
                 )
             }
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        // 触摸目标保障：图标圆底 36dp + 行内边距 → 行高 ≥52dp
+            .padding(
+                horizontal = 10.dp,
+                vertical = if (compact) 4.dp else 8.dp
+            ),
+        // 触摸目标保障：图标圆底 36dp + 行内边距 → 行高 ≥52dp（compact ≈44dp）
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Box(
@@ -784,13 +933,15 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color) {
 }
 
 /**
- * 菜单高度估算（v3.4.6：标题头 + 6 项 + 3 分隔线 + 边距 ≈ 360dp；
- * v5.0 X11 屏再加 X11 组 7 项 + 1 分隔线 ≈ 380dp），
- * 用于下半屏时菜单翻到球上方 / 与手柄元素的碰撞检测。
+ * 菜单高度估算（v6.0 紧凑化后）：
+ * 基础组 = 标题头 34 + 6 项×52 + 3 分隔线 + 边距 ≈ 360dp；
+ * X11 组 = 网格 3 行×58 + 回主页行 44 + 标签 + 分隔 ≈ +250dp。
+ * 仅用于"菜单向上/向下弹"的启发式选择与碰撞检测 —— 菜单本体
+ * heightIn(max=屏高-16) 可滚动，横屏矮屏下也完整可见（v6.0 修复）。
  */
 private fun menuHeightEstimate(
     density: androidx.compose.ui.unit.Density,
     withX11Group: Boolean = false
 ): Float = with(density) {
-    (if (withX11Group) 740.dp else 360.dp).toPx()
+    (if (withX11Group) 620.dp else 370.dp).toPx()
 }

@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -59,8 +60,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.linbox.apps.containers.ContainerData
 import com.linbox.apps.containers.ContainerManager
 import com.linbox.apps.containers.Box64Preset
-import com.linbox.apps.containers.RunContainerDialog
-import com.linbox.apps.containers.NewContainerDialog
 import com.linbox.apps.containers.WineSessionLauncher
 import com.linbox.apps.containers.WindowsVersions
 import com.linbox.apps.containers.launcher.RootfsLauncher
@@ -79,15 +78,17 @@ import java.io.File
 /**
  * LinBox 主页（v4.0 按用户图片重制）：**Wine 游戏容器** 玻璃拟态主页。
  *
- * 结构（对齐图 1）：
+ * 结构（v6.0 按用户最新指令重排）：
  * 1. 顶部标题栏：应用名 + 容器概览 + 搜索钮（跳游戏库并聚焦搜索）+ 设置钮
- * 2. 游戏模式主卡（Hero）：「游戏模式已开启」+「容器运行中」标签 +
- *    白色 Xbox 手柄图形 + 蓝紫渐变「启动游戏」按钮；
- *    主卡同时识别显示选中容器名 / wine 版本（用户需求 3），
- *    背景支持容器自定义卡片图片（card_image）
+ * 2. 当前容器预览卡（最上面，用户："容器在首页最上面有个当前容器预览"）：
+ *    图标 + 容器名 + wine/后端/分辨率 + ●运行态 + [启动/停止][编辑]；
+ *    无容器时 = 空白大加号卡（用户："空白处有个加号"）直进新建表单
+ * 2.5 前缀构建进度卡：动态进度条 + 显示/隐藏日志开关（默认隐藏）
  * 3. 四大功能入口：按键映射 / 性能增强 / 截图录屏 / 手柄连接
- * 4. 游戏库预览行：容器（游戏）封面横滑卡片，点「全部」进游戏库页
- * 5. 底部导航：[主页] [游戏库] [(+)容器] [设置] [高级]
+ * 4. 游戏库预览行：**游戏快捷方式**横滑卡片（v6.0：游戏库是快捷方式库，
+ *    不是容器列表），点「全部」进游戏库页
+ * 5. 底部导航：[主页] [游戏库] [(+)容器] [设置] [高级]（中央＋：有容器
+ *    进容器列表，无容器直进新建）
  */
 @Composable
 fun ContainerHomeScreen() {
@@ -95,10 +96,13 @@ fun ContainerHomeScreen() {
     val palette = GlassPalette.Light
 
     // ---- 数据状态 ----
+    val app = com.linbox.LinBoxApp.get()
     var tick by remember { mutableIntStateOf(0) }
     var containers by remember { mutableStateOf<List<ContainerData>>(emptyList()) }
     var rootfsReady by remember { mutableStateOf(true) }
     var wineCount by remember { mutableIntStateOf(0) }
+    // v6.0：游戏库预览行 = 游戏快捷方式（不是容器）
+    var shortcuts by remember { mutableStateOf<List<GameShortcut>>(emptyList()) }
 
     // 首页选中容器（跨页面保留；空 = 跟随默认容器）
     var selected by remember { mutableStateOf(HomeUiState.selectedContainer) }
@@ -110,6 +114,7 @@ fun ContainerHomeScreen() {
             containers = ContainerManager.list()
             rootfsReady = ContainerManager.rootfsReady()
             wineCount = ContainerManager.listWines().size
+            shortcuts = GameShortcuts.list(app)
         }
     }
     fun refresh() { tick++ }
@@ -158,12 +163,13 @@ fun ContainerHomeScreen() {
     }
 
     // ---- 弹窗 ----
-    var showCreate by remember { mutableStateOf(false) }
-    var showRunFor by remember { mutableStateOf<ContainerData?>(null) }
     var showCapture by remember { mutableStateOf(false) }
     var cardImageFor by remember { mutableStateOf<ContainerData?>(null) }
     // 卡片图片选择目标（文件管理器回投后写入该容器的 card_image）
     var cardImageTarget by remember { mutableStateOf<String?>(null) }
+    // 前缀构建日志开关（默认隐藏，用户："默认不显示日志"）
+    var prefixLogOpen by remember { mutableStateOf(false) }
+    val prefixBuilding by RootfsLauncher.prefixBuildFlow.collectAsState()
 
     // 文件管理器 pickMode=image 的回投监听（首页在组合期间有效）
     CardImagePickListener { path ->
@@ -182,7 +188,9 @@ fun ContainerHomeScreen() {
         if (c.exe.isNotBlank()) {
             launchContainer(context, effective) { refresh() }
         } else {
-            showRunFor = c
+            // v6.0：无默认程序 → 进容器编辑页设置 exe（winlator 式引导）
+            toast(context, "先为容器设置默认程序（exe）")
+            openManagerWindow(context, focus = c.name)
         }
     }
 
@@ -215,9 +223,9 @@ fun ContainerHomeScreen() {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
             ) {
 
-                // ===== 2. 游戏模式主卡（Hero） =====
+                // ===== 2. 当前容器预览卡（用户："容器在首页最上面有个当前容器预览"） =====
                 item(key = "hero") {
-                    HeroGameCard(
+                    CurrentContainerPreviewCard(
                         container = sel,
                         gameMode = gameMode,
                         onToggleGameMode = { gameMode = !gameMode },
@@ -229,8 +237,21 @@ fun ContainerHomeScreen() {
                                 refresh()
                             }
                         },
-                        onConfig = { sel?.let { openManagerWindow(context, focus = it.name) } }
+                        onConfig = { sel?.let { openManagerWindow(context, focus = it.name) } },
+                        onCardImage = { sel?.let { cardImageFor = it } },
+                        onCreate = { openManagerWindow(context) }
                     )
+                }
+
+                // ===== 2.5 前缀构建进度卡（动态进度条 + 显示/隐藏日志，默认隐藏） =====
+                prefixBuilding?.let { name ->
+                    item(key = "prefix-$name") {
+                        PrefixBuildCard(
+                            containerName = name,
+                            expandedLog = prefixLogOpen,
+                            onToggleLog = { prefixLogOpen = !prefixLogOpen }
+                        )
+                    }
                 }
 
                 // ===== 3. rootfs 未就位横幅 =====
@@ -292,7 +313,7 @@ fun ContainerHomeScreen() {
                     }
                 }
 
-                // ===== 5. 游戏库预览（图 1：封面横滑行） =====
+                // ===== 5. 游戏库预览（v6.0：游戏快捷方式横滑行，不是容器） =====
                 item(key = "library-header") {
                     Row(
                         modifier = Modifier
@@ -308,7 +329,7 @@ fun ContainerHomeScreen() {
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "共 ${containers.size} 款",
+                            "共 ${shortcuts.size} 款游戏",
                             color = palette.textSecondary,
                             fontSize = 12.sp,
                             modifier = Modifier.weight(1f)
@@ -326,24 +347,20 @@ fun ContainerHomeScreen() {
                     }
                 }
 
-                if (containers.isEmpty()) {
-                    item(key = "empty") {
+                if (shortcuts.isEmpty()) {
+                    item(key = "empty-library") {
+                        // 空白处引导：还没有游戏快捷方式
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .height(150.dp),
+                                .height(110.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("🎮", fontSize = 40.sp)
-                                Spacer(Modifier.height(6.dp))
+                                Text("🎮", fontSize = 34.sp)
+                                Spacer(Modifier.height(5.dp))
                                 Text(
-                                    "还没有游戏容器",
-                                    color = palette.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "点底部 ＋ 或「添加游戏」创建第一个 Wine 容器",
+                                    "还没有游戏 —— 到游戏库「添加游戏」",
                                     color = palette.textSecondary, fontSize = 12.sp
                                 )
                             }
@@ -355,12 +372,18 @@ fun ContainerHomeScreen() {
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(vertical = 4.dp)
                         ) {
-                            items(containers, key = { it.name }) { c ->
-                                GameCoverCard(
-                                    container = c,
-                                    selected = c.name == sel?.name,
-                                    onClick = { selected = c.name },
-                                    onOpen = { runGame(c) }
+                            items(shortcuts, key = { it.id }) { g ->
+                                ShortcutCoverCard(
+                                    shortcut = g,
+                                    running = RootfsLauncher.activeSessions.containsKey(g.containerName),
+                                    onOpen = {
+                                        val container = containers.firstOrNull { it.name == g.containerName }
+                                        if (container == null) {
+                                            toast(context, "容器「${g.containerName}」不存在")
+                                        } else {
+                                            launchContainer(context, container, g.exe) { refresh() }
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -371,36 +394,18 @@ fun ContainerHomeScreen() {
                 item(key = "spacer") { Spacer(Modifier.height(4.dp)) }
             }
 
-            // ===== 6. 底部导航 =====
-            ShellBottomBar(current = Screen.HOME, palette = GlassPalette.Light)
+            // ===== 6. 底部导航（中央＋：有容器进列表 / 无容器直进新建） =====
+            ShellBottomBar(
+                current = Screen.HOME,
+                palette = GlassPalette.Light,
+                hasContainers = containers.isNotEmpty()
+            )
         }
     }
 
     // ---- 弹窗层 ----
-    if (showCreate) {
-        val wines = remember(showCreate) { ContainerManager.listWines() }
-        NewContainerDialog(
-            wines = wines,
-            onDismiss = { showCreate = false },
-            onCreated = { name ->
-                showCreate = false
-                selected = name
-                refresh()
-                // 新建后打开管理器窗口（自动触发 wineboot 前缀构建）
-                openManagerWindow(context, focus = name)
-            }
-        )
-    }
-    showRunFor?.let { c ->
-        RunContainerDialog(
-            container = c,
-            onRunExe = { exe, args ->
-                launchContainer(context, c, exe, args) { refresh() }
-            },
-            onDismiss = { showRunFor = null },
-            onLaunched = { showRunFor = null }
-        )
-    }
+    // v6.0：新建容器走「容器」页编辑表单（winlator 式）；运行程序走容器页
+    // 长按面板 —— 首页不再持有这两类弹窗。
     cardImageFor?.let { c ->
         CardImagePickerDialog(
             container = c,
@@ -422,110 +427,151 @@ fun ContainerHomeScreen() {
 // ============================================================
 
 /**
- * 游戏模式主卡（图 1 主卡片）：
- * - 左侧：状态标签（容器运行中/空闲）+「游戏模式已开启」标题 +
- *   选中容器名 / wine 版本 / Windows 版本 + 蓝紫渐变「启动游戏」按钮；
- * - 右侧：白色 Xbox 手柄图形；
- * - 背景：容器自定义卡片图片（card_image）或蓝紫渐变；
- * - 游戏模式标签可点击开关（开启 = 性能档预设 + 屏幕常亮）。
+ * 当前容器预览卡（v6.0，用户："容器在首页最上面有个当前容器预览"）：
+ * - 有容器：图标 + 容器名 + wine/后端/分辨率 摘要 + ●运行态 +
+ *   [启动/停止] [编辑]；长按可设置卡片背景图；游戏模式胶囊开关；
+ * - 无容器：空白加号卡（用户："空白处有个加号"）→ 直接进新建容器表单。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun HeroGameCard(
+private fun CurrentContainerPreviewCard(
     container: ContainerData?,
     gameMode: Boolean,
     onToggleGameMode: () -> Unit,
     onLaunch: () -> Unit,
     onStop: () -> Unit,
-    onConfig: () -> Unit
+    onConfig: () -> Unit,
+    onCardImage: () -> Unit,
+    onCreate: () -> Unit
 ) {
     val palette = GlassPalette.Light
-    val isRunning = container != null && container.name in RootfsLauncher.activeSessions
-    val wineLabel = container?.let { wineDisplayLabel(it) } ?: "未安装"
-    val winLabel = container
-        ?.let { WindowsVersions.ALL.firstOrNull { w -> w.id == it.winver }?.label ?: it.winver }
-        ?: "—"
 
-    // 自定义卡片背景（cardImage）
-    val cardBitmap by produceState<Bitmap?>(null, container?.cardImage) {
-        value = withContext(Dispatchers.IO) { loadBitmapSafely(container?.cardImage) }
+    // ---- 无容器：空白加号 ----
+    if (container == null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(palette.card)
+                .border(1.dp, palette.cardBorder, RoundedCornerShape(20.dp))
+                .clickable(onClick = onCreate)
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF4E7CFF), Color(0xFF8A5CFF)))),
+                contentAlignment = Alignment.Center
+            ) { Text("＋", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    "创建第一个容器",
+                    color = palette.textPrimary,
+                    fontSize = 16.sp, fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "Wine 容器 · 创建后自动构建 Windows 前缀",
+                    color = palette.textSecondary, fontSize = 12.sp
+                )
+            }
+        }
+        return
+    }
+
+    // ---- 有容器：预览卡 ----
+    val isRunning = container.name in RootfsLauncher.activeSessions
+    val wineLabel = wineDisplayLabel(container)
+
+    val cardBitmap by produceState<Bitmap?>(null, container.cardImage) {
+        value = withContext(Dispatchers.IO) { loadBitmapSafely(container.cardImage) }
     }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(168.dp)
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .combinedClickable(onClick = onConfig, onLongClick = onCardImage)
     ) {
         // 背景：自定义图片或蓝紫渐变
-        if (cardBitmap != null) {
-            Image(
-                bitmap = cardBitmap!!.asImageBitmap(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(Modifier.fillMaxSize().background(Color(0xFF1B2A5E).copy(alpha = 0.55f)))
-        } else {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF3D5BFF), Color(0xFF7A4DFF))
-                        )
-                    )
-            )
-            // 装饰光斑（offset 出血，被卡片圆角裁切）
-            Box(
-                Modifier
-                    .size(130.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.10f))
-                    .align(Alignment.TopEnd)
-                    .offset(x = 34.dp, y = (-26).dp)
-            )
-            Box(
-                Modifier
-                    .size(90.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .align(Alignment.BottomStart)
-                    .offset(x = (-28).dp, y = 18.dp)
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(150.dp)
         ) {
-            // ---- 左：文案 + 按钮 ----
-            Column(Modifier.weight(1.2f)) {
-                // 状态标签行：容器运行中 / 游戏模式开关
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 运行状态标签
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(Color.White.copy(alpha = 0.22f))
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+            if (cardBitmap != null) {
+                Image(
+                    bitmap = cardBitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(Modifier.fillMaxSize().background(Color(0xFF1B2A5E).copy(alpha = 0.55f)))
+            } else {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.linearGradient(listOf(Color(0xFF3D5BFF), Color(0xFF7A4DFF)))
+                        )
+                )
+                Box(
+                    Modifier
+                        .size(120.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.10f))
+                        .align(Alignment.TopEnd)
+                        .offset(x = 30.dp, y = (-24).dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 左：exe 图标（或容器图标）
+                Box(
+                    modifier = Modifier
+                        .size(62.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White.copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ExeIcon(container = container, size = 44.dp)
+                }
+                Spacer(Modifier.width(13.dp))
+
+                // 中：容器信息
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            container.name,
+                            color = Color.White,
+                            fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(Modifier.width(7.dp))
                         Box(
                             Modifier
-                                .size(7.dp)
+                                .size(8.dp)
                                 .clip(CircleShape)
                                 .background(if (isRunning) Color(0xFF7CFFA1) else Color(0xFFE0E4F2))
                         )
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            if (isRunning) "容器运行中" else "容器待机",
-                            color = Color.White, fontSize = 11.sp
-                        )
                     }
-                    Spacer(Modifier.width(8.dp))
-                    // 游戏模式开关标签（点击切换）
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "🍷 $wineLabel · ${container.backend.label} · ${screenLabel(container)}",
+                        color = Color.White.copy(alpha = 0.88f),
+                        fontSize = 11.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(7.dp))
+                    // 游戏模式胶囊（性能档 + 常亮）
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
@@ -534,84 +580,138 @@ private fun HeroGameCard(
                                 else Color.White.copy(alpha = 0.16f)
                             )
                             .clickable(onClick = onToggleGameMode)
-                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                            .padding(horizontal = 9.dp, vertical = 3.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(if (gameMode) "🚀" else "💤", fontSize = 11.sp)
+                        Text(if (gameMode) "🚀" else "💤", fontSize = 10.sp)
                         Spacer(Modifier.width(4.dp))
                         Text(
                             if (gameMode) "游戏模式" else "省电模式",
-                            color = Color.White, fontSize = 11.sp
+                            color = Color.White, fontSize = 10.5.sp
                         )
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (gameMode) "游戏模式已开启" else "游戏模式已关闭",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.height(4.dp))
-                // 选中容器识别信息（用户需求 3：容器名 + wine 版本等）
-                Text(
-                    container?.let {
-                        "🍷 ${it.name} · $wineLabel · $winLabel"
-                    } ?: "🍷 尚未创建容器",
-                    color = Color.White.copy(alpha = 0.9f),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 启动游戏（蓝紫渐变按钮，图 1）
+                // 右：启动/停止 + 编辑
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(
-                                if (isRunning) Brush.horizontalGradient(
-                                    listOf(Color(0xFFFF5E62), Color(0xFFFF9966))
-                                )
-                                else Brush.horizontalGradient(
-                                    listOf(Color(0xFF4E7CFF), Color(0xFF8A5CFF))
-                                )
-                            )
-                            .clickable { if (isRunning) onStop() else onLaunch() }
-                            .padding(horizontal = 26.dp, vertical = 10.dp)
-                    ) {
-                        Text(
-                            if (isRunning) "停止运行" else "启动游戏",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    // 容器配置小钮
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
+                            .size(52.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.20f))
-                            .clickable(enabled = container != null, onClick = onConfig),
+                            .background(
+                                if (isRunning) Color(0xFFE5484D)
+                                else Color.White.copy(alpha = 0.22f)
+                            )
+                            .clickable { if (isRunning) onStop() else onLaunch() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("⚙", color = Color.White, fontSize = 16.sp)
+                        Text(
+                            if (isRunning) "⏹" else "▶",
+                            color = Color.White, fontSize = 19.sp
+                        )
+                    }
+                    Spacer(Modifier.height(7.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.18f))
+                            .clickable(onClick = onConfig),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⚙", color = Color.White, fontSize = 14.sp)
                     }
                 }
             }
-
-            // ---- 右：白色 Xbox 手柄图形（图 1） ----
-            XboxControllerArt(
-                modifier = Modifier
-                    .weight(0.9f)
-                    .height(110.dp)
-                    .padding(end = 6.dp)
-            )
         }
+    }
+}
+
+/**
+ * 游戏快捷方式封面卡（主页横滑行，v6.0：游戏库 = 快捷方式不是容器）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ShortcutCoverCard(
+    shortcut: GameShortcut,
+    running: Boolean,
+    onOpen: () -> Unit
+) {
+    val palette = GlassPalette.Light
+    val cardBitmap by produceState<Bitmap?>(null, shortcut.cardImage) {
+        value = withContext(Dispatchers.IO) { loadBitmapSafely(shortcut.cardImage) }
+    }
+    val exeIcon by produceState<Bitmap?>(null, shortcut.exe) {
+        value = withContext(Dispatchers.IO) { loadExeIcon(shortcut.exe) }
+    }
+
+    Column(
+        modifier = Modifier
+            .width(118.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .combinedClickable(onClick = onOpen, onLongClick = onOpen)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 118.dp, height = 80.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .then(
+                    if (cardBitmap != null) Modifier
+                    else Modifier.background(palette.card)
+                )
+                .then(
+                    if (cardBitmap == null) Modifier.border(1.dp, palette.cardBorder, RoundedCornerShape(14.dp))
+                    else Modifier
+                )
+        ) {
+            if (cardBitmap != null) {
+                Image(
+                    bitmap = cardBitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (exeIcon != null) {
+                        Image(
+                            bitmap = exeIcon!!.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier.size(38.dp)
+                        )
+                    } else {
+                        Text("🎮", fontSize = 26.sp)
+                    }
+                }
+            }
+            // 运行角标
+            if (running) {
+                Box(
+                    modifier = Modifier
+                        .padding(5.dp)
+                        .size(8.dp)
+                        .align(Alignment.TopEnd)
+                        .clip(CircleShape)
+                        .background(Color(0xFF66BB6A))
+                )
+            }
+        }
+        Spacer(Modifier.height(5.dp))
+        Text(
+            shortcut.label,
+            color = palette.textPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            shortcut.containerName,
+            color = palette.textSecondary,
+            fontSize = 10.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -835,15 +935,10 @@ private fun CardImagePickerDialog(
                 Spacer(Modifier.width(12.dp))
                 Button(onClick = {
                     onSetTarget(container.name)
-                    WindowManager.get().open(
-                        appId = "file_explorer",
-                        title = "选择卡片图片",
-                        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                        launchArgs = mapOf(
-                            "pickMode" to "image",
-                            "targetApp" to "home_card_image",
-                            "targetWindow" to ""
-                        )
+                    com.linbox.core.shell.ShellController.showFiles(
+                        pickMode = "image",
+                        targetApp = "home_card_image",
+                        targetWindow = ""
                     )
                     onDismiss()
                 }) { Text("选择图片") }

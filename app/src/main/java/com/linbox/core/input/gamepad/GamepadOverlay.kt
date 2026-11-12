@@ -55,7 +55,7 @@ import kotlin.math.sin
  * - 十字键：圆角十字 + 方向箭头，按触点位置判定 8 向（含斜向）
  * - 按钮：径向渐变圆钮（A绿/B红/X蓝/Y黄/其他青），按压缩放 + 辉光环
  * - 编辑模式：元素可拖动重新布局（松手持久化），显示删除角标
- * - 迷你工具条：⚙ 设置 / ✎ 编辑 / ✕ 隐藏
+ * - 控制：全部收拢进悬浮球菜单（v6.0 移除旧迷你工具条三按钮）
  * - 多点触控：每个元素独立 pointerInput，摇杆+按钮可同时操作
  *
  * v2.32：X11 界面的手柄改由 X11TouchSplitLayout 容器内的独立 Compose
@@ -103,11 +103,9 @@ fun GamepadOverlayContent() {
         return
     }
 
-    // 首次组合：加载持久化布局
-    LaunchedEffect(Unit) {
-        val json = app.settingsStore.gamepadConfig.first()
-        GamepadController.loadFromJson(json.ifBlank { null })
-    }
+    // v6.0：持久化布局改为 LinBoxShell 全局一次加载（GamepadController
+    // .ensureLoaded）—— 每组合各自加载会把 visible 写回旧配置值，
+    // 悬浮球"开启手柄"闪现即消失（多次点击才出现）的根因。
 
     // v2.15.3：手柄隐藏/离开组合时释放全部按下的键（防联键：不留任何"按着"的键）
     // v2.16.4：同时清空元素命中矩形（防陈旧矩形令浏览器侧误剥离正常触摸）
@@ -177,34 +175,10 @@ fun GamepadOverlayContent() {
             }
         }
 
-        // ===== 迷你工具条（右上角） =====
-        GamepadMiniToolbar(
-            onSettings = {
-                GamepadController.releaseAllKeys()
-                GamepadController.settingsOpen = true
-            },
-            onToggleEdit = {
-                GamepadController.releaseAllKeys()
-                GamepadController.editMode = !GamepadController.editMode
-                if (!GamepadController.editMode) GamepadController.selectElement(null)
-            },
-            onHide = {
-                GamepadController.releaseAllKeys()
-                GamepadController.editMode = false
-                scope.launch { app.settingsStore.setGamepadEnabled(false) }
-            },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 12.dp, end = 12.dp)
-                // v2.20：工具条登记为触控板直通区（真实手指可直接点 ⚙ ✎ ✕）
-                // v2.32：同时登记为 X11 触摸分流的手柄侧命中区（⚙✎✕ 落点
-                // 归手柄流，否则工具条指针被路由去 LorieView 点不到）
-                .onGloballyPositioned {
-                    val b = it.boundsInWindowCompat()
-                    TrackpadRouter.registerPassthrough("gpToolbar", b)
-                    GamepadController.registerToolbarHit(b.left, b.top, b.right, b.bottom)
-                }
-        )
+        // v6.0：旧版迷你工具条（⚙ 设置 / ✎ 编辑 / ✕ 隐藏 三按钮）已移除 ——
+        // 全部控制收拢进悬浮球菜单（用户："虚拟按键的左上角旧版三个按钮
+        // 没有取消"）。gpToolbar 直通区保持注销态（无工具条可命中）。
+        TrackpadRouter.registerPassthrough("gpToolbar", null)
     }
 }
 
@@ -297,66 +271,6 @@ private fun GamepadElementHost(
                 Text("×", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
-    }
-}
-
-// ============================================================
-// 迷你工具条
-// ============================================================
-
-@Composable
-private fun GamepadMiniToolbar(
-    onSettings: () -> Unit,
-    onToggleEdit: () -> Unit,
-    onHide: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val editMode = GamepadController.editMode
-    Row(
-        modifier = modifier
-            .shadow(6.dp, RoundedCornerShape(20.dp))
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xD91E2836))
-            .padding(horizontal = 5.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        MiniToolButton("⚙") { onSettings() }
-        MiniToolButton(
-            label = if (editMode) "✓" else "✎",
-            active = editMode
-        ) { onToggleEdit() }
-        MiniToolButton("✕") { onHide() }
-    }
-}
-
-@Composable
-private fun MiniToolButton(label: String, active: Boolean = false, onClick: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    Box(
-        modifier = Modifier
-            .size(30.dp)
-            .scale(if (pressed) 0.88f else 1f)
-            .clip(CircleShape)
-            .background(
-                when {
-                    active -> Color(0x662DD4BF)
-                    pressed -> Color(0x332DD4BF)
-                    else -> Color(0x1AFFFFFF)
-                }
-            )
-            .pointerInput(label) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        try { awaitRelease() } finally { pressed = false }
-                    },
-                    onTap = { onClick() }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, color = Color(0xFFE2F5FF), fontSize = 13.sp)
     }
 }
 

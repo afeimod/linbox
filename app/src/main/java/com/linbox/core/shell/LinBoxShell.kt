@@ -24,6 +24,7 @@ import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
 import com.linbox.core.window.WinDialogHost
 import com.linbox.core.window.WindowHost
+import kotlinx.coroutines.flow.first
 import com.linbox.shellui.AdvancedScreen
 import com.linbox.shellui.ContainerHomeScreen
 import com.linbox.shellui.ContainersScreen
@@ -82,6 +83,16 @@ fun LinBoxShell() {
         com.linbox.core.PerfGovernor.update(ShellController.screen == ShellController.Screen.X11)
     }
 
+    // ===== v6.0：虚拟手柄配置全局一次加载 =====
+    // 旧版在每处 GamepadOverlayContent 组合里各自 LaunchedEffect 加载 ——
+    // 悬浮球"开启手柄"先置 visible=true，覆盖层的迟到加载再把 visible 写回
+    // 旧配置值（padVisible=false），手柄闪现即消失 / 多次点击才出现；
+    // X11 ComposeView 宿主与主树双组合并发加载还会互相踩状态。
+    // 全局唯一加载点 + loaded 守卫，彻底消除竞态。
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val json = app.settingsStore.gamepadConfig.first()
+        GamepadController.ensureLoaded(json)
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -97,6 +108,11 @@ fun LinBoxShell() {
             ShellController.Screen.X11 -> X11Screen()
             ShellController.Screen.DAC -> DacScreen()
             ShellController.Screen.SETTINGS -> SettingsScreen()
+            // v6.0：浏览器 / 文件管理器 / exe 选择器 —— 安卓全屏页
+            //（去 Windows 窗口化，内容复用 ShellPages.kt 伪窗口壳）
+            ShellController.Screen.BROWSER -> com.linbox.shellui.BrowserScreen()
+            ShellController.Screen.FILES -> com.linbox.shellui.FilesScreen()
+            ShellController.Screen.EXECHOOSER -> com.linbox.shellui.ExeChooserScreen()
         }
 
         // ===== 2. 浮动窗口层（浏览器 / 文件管理器 / exe 选择器…；

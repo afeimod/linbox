@@ -21,19 +21,31 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,41 +62,86 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.linbox.LinBoxApp
 import com.linbox.apps.containers.ContainerData
 import com.linbox.apps.containers.ContainerManager
-import com.linbox.apps.containers.GuanliSupport
-import com.linbox.apps.containers.NewContainerDialog
-import com.linbox.apps.containers.RunContainerDialog
 import com.linbox.apps.containers.WineSessionLauncher
 import com.linbox.apps.containers.launcher.RootfsLauncher
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
+import com.linbox.data.db.entity.ShortcutEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 游戏库页（v4.0 按用户图 2 重制）：暗色玻璃主题的容器网格。
+ * v6.0 游戏库（完全重制）：**游戏快捷方式库**，不是容器列表。
  *
- * 结构（对齐图 2）：
- * 1. 顶部标题栏：「游戏库」+ 搜索钮 + 设置钮
- * 2. 「我的游戏 共 N 款」+ 蓝色「添加游戏」按钮（新建容器）
- * 3. 搜索框（点顶栏搜索钮展开 / 主页搜索请求自动展开）
- * 4. 游戏网格（两列封面卡）：自定义卡片图片 / exe 内嵌图标 +
- *    容器名 + wine 版本 + 「打开」按钮；长按菜单（运行 / 安装前缀 /
- *    设置卡片图片 / 设为默认 / 固定到启动器 / 容器管理器）
- * 5. 底部导航：[主页] [游戏库] [(+)容器] [设置] [高级]
+ * 用户诉求："游戏库不是容器库，游戏库是添加游戏快捷方式的不是容器" ——
+ * 一条游戏快捷方式 = （显示名 + exe 路径 + 所属容器 + 可选卡片图），
+ * 点击即用所属容器运行该 exe；容器本体管理全部在「容器」页。
+ *
+ * 存储：Room shortcuts 表 type=4（label=游戏名 / target=容器名 /
+ * launchArgs=exe 路径 / iconAsset=卡片图片路径）。
+ *
+ * 交互（winlator 风格）：
+ * - 网格卡片：exe 图标 / 自定义卡片图 + 游戏名 + 容器名 + ▶ 运行；
+ * - 「添加游戏」：表单弹窗（名称 + 浏览选 exe + 容器下拉 + 卡片图）；
+ * - 长按：编辑 / 设置卡片图片 / 删除；
+ * - 搜索（顶栏 + 展开式搜索框，主页搜索请求联动）。
  */
+
+/** 游戏快捷方式（Room shortcuts 表 type=4 的映射）。 */
+data class GameShortcut(
+    val id: Long,
+    val label: String,
+    val containerName: String,
+    val exe: String,
+    val cardImage: String
+)
+
+object GameShortcuts {
+    const val TYPE = 4
+
+    suspend fun list(app: LinBoxApp): List<GameShortcut> =
+        app.database.shortcutDao().getAll()
+            .filter { it.type == TYPE }
+            .map { GameShortcut(it.id, it.label, it.target, it.launchArgs, it.iconAsset) }
+
+    suspend fun upsert(app: LinBoxApp, s: GameShortcut) {
+        val dao = app.database.shortcutDao()
+        val entity = ShortcutEntity(
+            id = if (s.id > 0) s.id else 0,
+            label = s.label,
+            iconAsset = s.cardImage,
+            type = TYPE,
+            target = s.containerName,
+            launchArgs = s.exe,
+            sortOrder = 0
+        )
+        if (s.id > 0) dao.update(entity) else dao.insert(entity)
+    }
+
+    suspend fun delete(app: LinBoxApp, s: GameShortcut) {
+        app.database.shortcutDao().deleteById(s.id)
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GameLibraryScreen() {
     val context = LocalContext.current
+    val app = LinBoxApp.get()
+    val cs = rememberCoroutineScope()
     val palette = GlassPalette.Dark
 
     // ---- 数据状态 ----
     var tick by remember { mutableIntStateOf(0) }
+    var shortcuts by remember { mutableStateOf<List<GameShortcut>>(emptyList()) }
     var containers by remember { mutableStateOf<List<ContainerData>>(emptyList()) }
     LaunchedEffect(tick) {
         withContext(Dispatchers.IO) {
+            shortcuts = GameShortcuts.list(app)
             containers = ContainerManager.list()
         }
     }
@@ -93,74 +150,55 @@ fun GameLibraryScreen() {
     // 返回本页自动刷新
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val obs = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refresh()
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) refresh()
         }
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
 
-    // 运行中会话轻量轮询（3s；X11 全屏时让位）
-    val anyRunning = RootfsLauncher.activeSessions.isNotEmpty()
-    LaunchedEffect(anyRunning) {
-        while (anyRunning) {
-            kotlinx.coroutines.delay(3000)
-            if (com.linbox.core.PerfGovernor.shouldTick()) refresh()
-        }
-    }
-
     // ---- 搜索 ----
     var searchOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-
-    // 主页「搜索」请求：进入本页自动展开搜索框（一次性）
     LaunchedEffect(Unit) {
         if (HomeUiState.librarySearchRequest) {
             searchOpen = true
             HomeUiState.librarySearchRequest = false
         }
     }
-
-    val shown = remember(containers, query) {
-        if (query.isBlank()) containers
-        else containers.filter {
-            val exeName = it.exe.substringAfterLast('/').substringAfterLast('\\')
-            it.name.contains(query, true) || exeName.contains(query, true)
+    val shown = remember(shortcuts, query) {
+        if (query.isBlank()) shortcuts
+        else shortcuts.filter {
+            it.label.contains(query, true) ||
+                it.exe.substringAfterLast('/').contains(query, true)
         }
     }
 
     // ---- 弹窗 ----
-    var showCreate by remember { mutableStateOf(false) }
-    var showRunFor by remember { mutableStateOf<ContainerData?>(null) }
-    var cardImageFor by remember { mutableStateOf<ContainerData?>(null) }
-    var cardImageTarget by remember { mutableStateOf<String?>(null) }
+    var addOpen by remember { mutableStateOf(false) }
+    var editFor by remember { mutableStateOf<GameShortcut?>(null) }
+    var deleteFor by remember { mutableStateOf<GameShortcut?>(null) }
 
-    // 文件管理器 pickMode=image 的回投监听（游戏库在组合期间有效）
-    CardImagePickListener { path ->
-        val target = cardImageTarget ?: return@CardImagePickListener
-        containers.firstOrNull { it.name == target }?.let { c ->
-            val err = ContainerManager.update(c.copy(cardImage = path))
-            toast(context, err ?: "卡片图片已更新：$path")
+    fun runShortcut(s: GameShortcut) {
+        val container = containers.firstOrNull { it.name == s.containerName }
+        if (container == null) {
+            toast(context, "容器「${s.containerName}」不存在，请先编辑该游戏")
+            return
         }
-        cardImageTarget = null
-        refresh()
-    }
-
-    fun openGame(c: ContainerData) {
-        if (c.exe.isNotBlank()) launchContainer(context, c) { refresh() }
-        else showRunFor = c
+        cs.launch(Dispatchers.IO) {
+            val err = WineSessionLauncher.runExe(context, container, s.exe)
+            withContext(Dispatchers.Main) { err?.let { toast(context, it) } }
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(listOf(palette.bgTop, palette.bgBottom))
-            )
+            .background(Brush.verticalGradient(listOf(palette.bgTop, palette.bgBottom)))
     ) {
         Column(Modifier.fillMaxSize()) {
 
-            // ===== 1. 顶部标题栏（图 2：游戏库 + 搜索 + 设置） =====
+            // ===== 1. 顶部标题栏 =====
             GlassTopBar(
                 palette = palette,
                 title = "游戏库",
@@ -168,7 +206,7 @@ fun GameLibraryScreen() {
                 onSettings = { ShellController.showSettings() }
             )
 
-            // ===== 2. 我的游戏 共 N 款 + 添加游戏（图 2） =====
+            // ===== 2. 标题行 + 添加游戏 =====
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -176,336 +214,433 @@ fun GameLibraryScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "我的游戏 共 ${containers.size} 款",
+                    "我的游戏 共 ${shortcuts.size} 款",
                     color = palette.textSecondary,
                     fontSize = 13.sp,
                     modifier = Modifier.weight(1f)
                 )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(Brush.horizontalGradient(listOf(palette.blue, Color(0xFF6BA8FF))))
-                        .combinedClickable(onClick = { showCreate = true })
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                Button(
+                    onClick = { addOpen = true },
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.blue),
+                    shape = RoundedCornerShape(20.dp)
                 ) {
-                    Text("添加游戏", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Filled.Add, null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("添加游戏", fontSize = 13.sp)
                 }
             }
 
             // ===== 3. 搜索框 =====
             if (searchOpen) {
-                GlassSearchField(
-                    palette = palette,
+                OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = "搜索游戏 / 容器…",
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp)
+                    singleLine = true,
+                    placeholder = { Text("搜索游戏名 / exe", fontSize = 12.sp, color = Color(0x66FFFFFF)) },
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp)
                 )
             }
 
-            // ===== 4. 游戏网格（图 2：封面卡片 + 打开按钮） =====
-            if (containers.isEmpty()) {
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("🎮", fontSize = 46.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "游戏库还是空的",
-                            color = palette.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "点「添加游戏」创建第一个 Wine 容器，\n安装 Windows 游戏后自动识别 exe 图标",
-                            color = palette.textSecondary, fontSize = 12.sp,
-                            lineHeight = 17.sp
+            // ===== 4. 游戏网格 =====
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 150.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(top = 6.dp, bottom = 16.dp)
+            ) {
+                if (shortcuts.isEmpty() && containers.isEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        EmptyLibraryHint(hasContainers = false)
+                    }
+                } else if (shown.isEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                        EmptyLibraryHint(
+                            hasContainers = true,
+                            hint = if (query.isBlank())
+                                "还没有游戏快捷方式 —— 点「添加游戏」把 exe 加进游戏库"
+                            else "没有匹配「$query」的游戏"
                         )
                     }
-                }
-            } else if (shown.isEmpty()) {
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "没有匹配「$query」的游戏",
-                        color = palette.textSecondary, fontSize = 13.sp
-                    )
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(vertical = 10.dp)
-                ) {
-                    items(shown, key = { it.name }) { c ->
-                        LibraryGameCard(
-                            container = c,
-                            onOpen = { openGame(c) },
-                            onCardImage = { cardImageFor = c },
-                            onRefresh = { refresh() }
+                } else {
+                    items(shown, key = { it.id }) { s ->
+                        GameShortcutCard(
+                            shortcut = s,
+                            containerLabel = containers
+                                .firstOrNull { it.name == s.containerName }?.let { c ->
+                                    c.name
+                                } ?: s.containerName,
+                            running = RootfsLauncher.activeSessions.containsKey(s.containerName),
+                            onRun = { runShortcut(s) },
+                            onLongPress = { editFor = s }
                         )
                     }
                 }
             }
 
             // ===== 5. 底部导航 =====
-            ShellBottomBar(current = Screen.LIBRARY, palette = GlassPalette.Dark)
+            ShellBottomBar(current = Screen.LIBRARY, palette = palette)
         }
     }
 
-    // ---- 弹窗层 ----
-    if (showCreate) {
-        val wines = remember(showCreate) { ContainerManager.listWines() }
-        NewContainerDialog(
-            wines = wines,
-            onDismiss = { showCreate = false },
-            onCreated = { name ->
-                showCreate = false
-                refresh()
-                // 新建后打开管理器窗口（自动触发 wineboot 前缀构建）
-                openManagerWindow(context, focus = name)
+    // ---- 添加游戏 ----
+    if (addOpen) {
+        GameShortcutEditorDialog(
+            initial = null,
+            containers = containers,
+            onDismiss = { addOpen = false },
+            onSave = { s ->
+                addOpen = false
+                cs.launch(Dispatchers.IO) {
+                    GameShortcuts.upsert(app, s)
+                    withContext(Dispatchers.Main) { refresh() }
+                }
             }
         )
     }
-    showRunFor?.let { c ->
-        RunContainerDialog(
-            container = c,
-            onRunExe = { exe, args ->
-                launchContainer(context, c, exe, args) { refresh() }
+
+    // ---- 编辑 / 删除 ----
+    editFor?.let { s ->
+        GameShortcutEditorDialog(
+            initial = s,
+            containers = containers,
+            onDismiss = { editFor = null },
+            onSave = { updated ->
+                editFor = null
+                cs.launch(Dispatchers.IO) {
+                    GameShortcuts.upsert(app, updated)
+                    withContext(Dispatchers.Main) { refresh() }
+                }
             },
-            onDismiss = { showRunFor = null },
-            onLaunched = { showRunFor = null }
+            onDelete = {
+                editFor = null
+                deleteFor = s
+            }
         )
     }
-    cardImageFor?.let { c ->
-        LibraryCardImagePickerDialog(
-            container = c,
-            onSetTarget = { cardImageTarget = it },
-            onDismiss = { cardImageFor = null },
-            onPicked = {
-                cardImageFor = null
-                refresh()
-            }
+    deleteFor?.let { s ->
+        AlertDialog(
+            onDismissRequest = { deleteFor = null },
+            title = { Text("移出游戏库", fontWeight = FontWeight.Bold) },
+            text = { Text("把「${s.label}」从游戏库移除？（不影响容器与游戏文件）") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteFor = null
+                    cs.launch(Dispatchers.IO) {
+                        GameShortcuts.delete(app, s)
+                        withContext(Dispatchers.Main) { refresh() }
+                    }
+                }) { Text("移除", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("取消") } },
+            containerColor = Color(0xFF1A2233)
         )
     }
 }
 
-// ============================================================
-// 游戏卡（图 2 网格项）
-// ============================================================
+// ===========================================================================
+// 游戏卡片
+// ===========================================================================
 
-/**
- * 游戏库网格卡：封面（自定义卡片图片 card_image，无则 exe 内嵌图标 +
- * 深色玻璃底）+ 容器名 + wine 版本 + 「打开」按钮 + 长按菜单。
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun LibraryGameCard(
-    container: ContainerData,
-    onOpen: () -> Unit,
-    onCardImage: () -> Unit,
-    onRefresh: () -> Unit
+private fun GameShortcutCard(
+    shortcut: GameShortcut,
+    containerLabel: String,
+    running: Boolean,
+    onRun: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     val palette = GlassPalette.Dark
-    val context = LocalContext.current
-    var menu by remember { mutableStateOf(false) }
-    val isRunning = container.name in RootfsLauncher.activeSessions
-    val wineLabel = wineDisplayLabel(container)
-
-    val cardBitmap by produceState<android.graphics.Bitmap?>(null, container.cardImage) {
-        value = withContext(Dispatchers.IO) { loadBitmapSafely(container.cardImage) }
+    val cardBitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, shortcut.cardImage) {
+        value = withContext(Dispatchers.IO) { loadBitmapSafely(shortcut.cardImage) }
+    }
+    val exeIcon by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, shortcut.exe) {
+        value = withContext(Dispatchers.IO) { loadExeIcon(shortcut.exe) }
     }
 
-    Box {
-        Column(
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(onClick = onRun, onLongClick = onLongPress)
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .aspectRatio(1.45f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(palette.card)
-                .border(1.dp, palette.cardBorder, RoundedCornerShape(16.dp))
-                .combinedClickable(onClick = onOpen, onLongClick = { menu = true })
-                .padding(10.dp)
+                .then(
+                    if (cardBitmap != null) Modifier
+                    else Modifier.background(palette.card)
+                )
+                .then(
+                    if (cardBitmap == null) Modifier.border(1.dp, palette.cardBorder, RoundedCornerShape(16.dp))
+                    else Modifier
+                )
         ) {
-            // ---- 封面 ----
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.45f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .then(
-                        if (cardBitmap != null) Modifier
-                        else Modifier.background(
-                            Brush.linearGradient(
-                                listOf(Color(0xFF232D4D), Color(0xFF1A2140))
-                            )
+            if (cardBitmap != null) {
+                Image(
+                    bitmap = cardBitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (exeIcon != null) {
+                        Image(
+                            bitmap = exeIcon!!.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier.size(46.dp)
                         )
-                    )
-            ) {
-                if (cardBitmap != null) {
-                    Image(
-                        bitmap = cardBitmap!!.asImageBitmap(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        ExeIcon(container = container, size = 52.dp)
-                    }
-                }
-                // 运行角标
-                if (isRunning) {
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(6.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(Color(0xCC2E7D32))
-                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            Modifier
-                                .size(6.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF7CFFA1))
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text("运行中", color = Color.White, fontSize = 9.sp)
+                    } else {
+                        Text("🎮", fontSize = 30.sp)
                     }
                 }
             }
-
-            Spacer(Modifier.height(8.dp))
-
-            // ---- 名称 + 版本 ----
-            Text(
-                container.name,
-                color = palette.textPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                "🍷 $wineLabel",
-                color = palette.textSecondary,
-                fontSize = 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            // ---- 打开按钮（图 2） ----
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        if (isRunning) Brush.horizontalGradient(
-                            listOf(Color(0xFFFF5E62), Color(0xFFFF9966))
-                        )
-                        else Brush.horizontalGradient(listOf(palette.blue, palette.purple))
-                    )
-                    .combinedClickable(onClick = onOpen)
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    if (isRunning) "运行中 · 查看" else "打开",
-                    color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold
+            // 运行角标
+            if (running) {
+                Box(
+                    modifier = Modifier
+                        .padding(6.dp)
+                        .size(9.dp)
+                        .align(Alignment.TopEnd)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(Color(0xFF66BB6A))
                 )
             }
+            // ▶ 运行钮
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(34.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.blue)
+                    .combinedClickable(onClick = onRun, onLongClick = onLongPress),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.PlayArrow, "运行", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
         }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            shortcut.label,
+            color = palette.textPrimary,
+            fontSize = 13.sp, fontWeight = FontWeight.Bold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            "$containerLabel · ${shortcut.exe.substringAfterLast('/')}",
+            color = palette.textSecondary,
+            fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+    }
+}
 
-        // ---- 长按菜单 ----
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("▶ 运行") }, onClick = { menu = false; onOpen() })
-            DropdownMenuItem(text = { Text("🔧 安装前缀（wineboot）") }, onClick = {
-                menu = false
-                val err = WineSessionLauncher.initializePrefix(context, container)
-                err?.let { toast(context, it) }
-                onRefresh()
-            })
-            DropdownMenuItem(text = { Text("🖼 设置卡片图片") }, onClick = { menu = false; onCardImage() })
-            DropdownMenuItem(text = { Text("⭐ 设为默认容器") }, onClick = {
-                menu = false
-                val err = ContainerManager.setDefault(container.name)
-                err?.let { toast(context, it) }
-                onRefresh()
-            })
-            DropdownMenuItem(text = { Text("📌 固定到启动器") }, onClick = {
-                menu = false
-                val ok = GuanliSupport.Shortcuts.pinRunContainer(context, container, container.exe)
-                toast(context, if (ok) "已固定到启动器" else "创建快捷方式失败")
-            })
-            DropdownMenuItem(text = { Text("🪟 在容器管理器中打开") }, onClick = {
-                menu = false
-                openManagerWindow(context, focus = container.name)
-            })
+@Composable
+private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("🎮", fontSize = 44.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            hint ?: "还没有容器 —— 先到「容器」页创建一个，再回来添加游戏",
+            color = GlassPalette.Dark.textSecondary,
+            fontSize = 12.sp, lineHeight = 17.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        if (hasContainers) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "长按游戏卡片可编辑 / 删除",
+                color = Color(0x59FFFFFF), fontSize = 10.sp
+            )
         }
     }
 }
 
-// ============================================================
-// 卡片图片选择弹窗（游戏库版）
-// ============================================================
+// ===========================================================================
+// 添加 / 编辑游戏弹窗（安卓表单）
+// ===========================================================================
 
-/** 卡片图片选择：文件管理器（pickMode=image）选图写入 card_image。 */
 @Composable
-private fun LibraryCardImagePickerDialog(
-    container: ContainerData,
-    onSetTarget: (String) -> Unit,
+private fun GameShortcutEditorDialog(
+    initial: GameShortcut?,
+    containers: List<ContainerData>,
     onDismiss: () -> Unit,
-    onPicked: () -> Unit
+    onSave: (GameShortcut) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF263238))
-                .padding(16.dp)
+    val app = LinBoxApp.get()
+    var name by remember { mutableStateOf(initial?.label ?: "") }
+    var exe by remember { mutableStateOf(initial?.exe ?: "") }
+    var containerName by remember {
+        mutableStateOf(initial?.containerName ?: containers.firstOrNull()?.name ?: "")
+    }
+    var cardImage by remember { mutableStateOf(initial?.cardImage ?: "") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    // exe 选择回投（文件管理器）
+    FilePickListenerEffect(targetApp = "game_library_exe") { path ->
+        if (path.endsWith(".exe", true) || path.endsWith(".bat", true) ||
+            path.endsWith(".msi", true) || path.endsWith(".cmd", true)
         ) {
-            Text("🖼 设置「${container.name}」卡片图片", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "在文件管理器中选择一张图片作为该游戏卡片的封面；\n选择后可在长按菜单中再次更换。",
-                color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp
-            )
-            Spacer(Modifier.height(12.dp))
-            Row {
-                androidx.compose.material3.Button(onClick = onDismiss) { Text("取消") }
-                Spacer(Modifier.width(12.dp))
-                androidx.compose.material3.Button(onClick = {
-                    onSetTarget(container.name)
-                    com.linbox.core.window.WindowManager.get().open(
-                        appId = "file_explorer",
-                        title = "选择卡片图片",
-                        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                        launchArgs = mapOf(
-                            "pickMode" to "image",
-                            "targetApp" to "home_card_image",
-                            "targetWindow" to ""
-                        )
-                    )
-                    onDismiss()
-                }) { Text("选择图片") }
+            exe = path
+            if (name.isBlank()) {
+                name = path.substringAfterLast('/').substringBeforeLast('.')
             }
         }
     }
+    // 卡片图片选择回投
+    FilePickListenerEffect(targetApp = "game_library_img") { path ->
+        cardImage = path
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (initial == null) "添加游戏" else "编辑游戏",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 名称
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it; error = null },
+                    label = { Text("游戏名称") },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                )
+                // exe
+                OutlinedTextField(
+                    value = exe,
+                    onValueChange = { exe = it; error = null },
+                    label = { Text("程序（exe / bat / msi）") },
+                    placeholder = { Text("/storage/emulated/0/Download/game/game.exe", fontSize = 10.sp) },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+                )
+                OutlinedButton(onClick = {
+                    ShellController.showFiles(pickMode = "exe", targetApp = "game_library_exe")
+                }) { Text("浏览选择程序", fontSize = 12.sp) }
+
+                // 容器下拉
+                if (containers.isEmpty()) {
+                    Text(
+                        "还没有容器 —— 先到「容器」页创建",
+                        color = Color(0xFFF6C454), fontSize = 12.sp
+                    )
+                } else {
+                    Text("用哪个容器运行", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                    var expanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = containerName,
+                            onValueChange = {},
+                            readOnly = true,
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        androidx.compose.material3.ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            containers.forEach { c ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(c.name, fontSize = 13.sp)
+                                            Text(
+                                                c.wine.ifBlank { "默认 Wine" } + " · " + c.backend.label,
+                                                fontSize = 10.sp, color = Color(0x66FFFFFF)
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        containerName = c.name
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 卡片图片
+                if (cardImage.isNotBlank()) {
+                    Text(
+                        "卡片图：$cardImage",
+                        color = Color(0x66FFFFFF), fontSize = 10.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                OutlinedButton(onClick = {
+                    ShellController.showFiles(pickMode = "image", targetApp = "game_library_img")
+                }) { Text("选择卡片图片（可选）", fontSize = 12.sp) }
+
+                if (error != null) {
+                    Text(error ?: "", color = Color(0xFFFF8A80), fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val n = name.trim()
+                when {
+                    n.isEmpty() -> error = "请输入游戏名称"
+                    exe.isBlank() -> error = "请选择程序（exe）"
+                    containerName.isBlank() -> error = "请选择容器"
+                    else -> onSave(
+                        GameShortcut(
+                            id = initial?.id ?: 0,
+                            label = n,
+                            containerName = containerName,
+                            exe = exe.trim(),
+                            cardImage = cardImage
+                        )
+                    )
+                }
+            }) { Text(if (initial == null) "添加" else "保存", fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            Row {
+                if (onDelete != null) {
+                    TextButton(onClick = onDelete) {
+                        Icon(Icons.Filled.Delete, null, modifier = Modifier.size(15.dp),
+                            tint = Color(0xFFFF6B6B))
+                        Spacer(Modifier.width(3.dp))
+                        Text("删除", color = Color(0xFFFF6B6B))
+                    }
+                    Spacer(Modifier.width(6.dp))
+                }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
+        containerColor = Color(0xFF1A2233)
+    )
 }

@@ -35,10 +35,72 @@ import androidx.compose.runtime.setValue
  */
 object ShellController {
 
-    enum class Screen { HOME, LIBRARY, ADVANCED, CONTAINERS, TERMINAL, X11, DAC, SETTINGS }
+    enum class Screen {
+        HOME, LIBRARY, ADVANCED, CONTAINERS, TERMINAL, X11, DAC, SETTINGS,
+        BROWSER, FILES, EXECHOOSER
+    }
 
     var screen by mutableStateOf(Screen.HOME)
         private set
+
+    /**
+     * v6.0：安卓全屏页深链参数（浏览器 / 文件管理器 / exe 选择器）。
+     *
+     * 一次性消费（同 ContainerNav 模式）：
+     * - BROWSER：url（打开指定网址）
+     * - FILES：pickMode（text/media/image/dir/exe/driver…）、targetApp、
+     *   targetWindow（FilePickBus 回投路由）、path（初始目录）
+     * - EXECHOOSER：path（待运行的 exe 完整路径）
+     */
+    object PageNav {
+        var url by mutableStateOf<String?>(null)
+        var pickMode by mutableStateOf<String?>(null)
+        var targetApp by mutableStateOf<String?>(null)
+        var targetWindow by mutableStateOf<String?>(null)
+        var path by mutableStateOf<String?>(null)
+
+        fun consume(): Map<String, String> {
+            val args = buildMap {
+                url?.let { put("url", it) }
+                pickMode?.let { put("pickMode", it) }
+                targetApp?.let { put("targetApp", it) }
+                targetWindow?.let { put("targetWindow", it) }
+                path?.let { put("path", it) }
+            }
+            url = null
+            pickMode = null
+            targetApp = null
+            targetWindow = null
+            path = null
+            return args
+        }
+    }
+
+    /** 浏览器安卓全屏页（url 可空 = 新标签页）。v6.0 去窗口化。 */
+    fun showBrowser(url: String? = null) {
+        PageNav.url = url
+        screen = Screen.BROWSER
+    }
+
+    /** 文件管理器安卓全屏页（pickMode/targetApp 为选择模式参数）。v6.0 去窗口化。 */
+    fun showFiles(
+        pickMode: String? = null,
+        targetApp: String? = null,
+        targetWindow: String? = null,
+        path: String? = null
+    ) {
+        PageNav.pickMode = pickMode
+        PageNav.targetApp = targetApp
+        PageNav.targetWindow = targetWindow
+        PageNav.path = path
+        screen = Screen.FILES
+    }
+
+    /** exe 选择器安卓页（path = 待运行 exe 完整路径；文件管理器双击 exe 调起）。 */
+    fun showExeChooser(path: String) {
+        PageNav.path = path
+        screen = Screen.EXECHOOSER
+    }
 
     /**
      * v5.0：容器管理器深链参数（进入 CONTAINERS 页一次性消费）。

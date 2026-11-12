@@ -76,7 +76,7 @@ val BrowserApp = AppDef(
 }
 
 @Composable
-private fun BrowserContent(scope: WindowContentScope) {
+internal fun BrowserContent(scope: WindowContentScope) {
     val theme = LocalWinTheme.current
     val context = LocalContext.current
     val app = LinBoxApp.get()
@@ -86,6 +86,18 @@ private fun BrowserContent(scope: WindowContentScope) {
     var wmRevision by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { wm.observe { wmRevision++ } }
     val isFullscreen = remember(wmRevision) { scope.windowState.isTrueFullscreen }
+    // v6.0：全屏切换统一入口 —— 窗口模式走 WindowManager（notify 驱动
+    // wmRevision），安卓全屏页模式（窗口不在列表）直接翻转状态 +
+    // 手动触发重组。
+    fun toggleFullscreen() {
+        val inWm = wm.windows.any { it.id == scope.windowState.id }
+        if (inWm) {
+            wm.toggleTrueFullscreen(scope.windowState.id)
+        } else {
+            scope.windowState.isTrueFullscreen = !scope.windowState.isTrueFullscreen
+            wmRevision++
+        }
+    }
 
     val launchUrl = scope.windowState.launchArgs["url"]
     val launchType = scope.windowState.launchArgs["type"]
@@ -182,7 +194,7 @@ private fun BrowserContent(scope: WindowContentScope) {
     // 真全屏时的返回键 → 退出全屏恢复窗口
     //（v2.16：双击页面退出已移除，改用左上角悬浮按钮，见下方 FullscreenExitButton）
     BackHandler(enabled = isFullscreen) {
-        wm.toggleTrueFullscreen(scope.windowState.id)
+        toggleFullscreen()
     }
 
     Box(
@@ -258,7 +270,7 @@ private fun BrowserContent(scope: WindowContentScope) {
                     uaMode = uaMode,
                     onToggleUaMode = { toggleUaMode() },
                     isFullscreen = isFullscreen,
-                    onToggleFullscreen = { wm.toggleTrueFullscreen(scope.windowState.id) },
+                    onToggleFullscreen = { toggleFullscreen() },
                     onOpenView3d = { showView3dSettings = true }
                 )
             }
@@ -354,7 +366,7 @@ private fun BrowserContent(scope: WindowContentScope) {
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(start = 10.dp, top = 10.dp),
-                onExit = { wm.toggleTrueFullscreen(scope.windowState.id) }
+                onExit = { toggleFullscreen() }
             )
         }
     } // end Box (browser root)

@@ -30,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,8 +37,6 @@ import androidx.compose.ui.unit.sp
 import com.linbox.apps.containers.ContainerManager
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
-import com.linbox.core.window.LaunchMode
-import com.linbox.core.window.WindowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -59,8 +56,6 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun AdvancedScreen() {
-    val context = LocalContext.current
-
     // 概览状态
     var tick by remember { mutableIntStateOf(0) }
     var rootfsReady by remember { mutableStateOf(true) }
@@ -76,28 +71,21 @@ fun AdvancedScreen() {
 
     val entries = listOf(
         AdvEntry("🖥", "终端", "Termux 真实终端（pkg/apt）") { ShellController.showTerminal() },
+        // v6.0：浏览器 / 文件管理器改安卓全屏页（去 Windows 窗口化）
         AdvEntry("🌐", "浏览器", "多标签 · 书签 · Flash") {
-            WindowManager.get().openOrRestore(
-                appId = "browser",
-                title = "浏览器",
-                launchMode = LaunchMode.FLOATING
-            )
+            ShellController.showBrowser()
         },
-        AdvEntry("📦", "容器管理器", "容器列表 · 五选项卡配置") {
-            openManagerWindow(context)
+        AdvEntry("📦", "容器管理", "winlator 式列表 · 编辑表单") {
+            ShellController.openContainers()
         },
         AdvEntry("⚙️", "容器高级设置", "DY/FEX/Box/Wine安装/MangoHud/生态") {
-            openManagerWindow(context, page = "advanced")
+            ShellController.openContainers(page = "advanced")
         },
         AdvEntry("🩺", "容器体检", "rootfs/X11/wine/box64 探活") {
-            openManagerWindow(context, page = "doctor")
+            ShellController.openContainers(page = "doctor")
         },
         AdvEntry("📁", "文件管理器", "exe 图标 · 盘符 · 压缩包") {
-            WindowManager.get().openOrRestore(
-                appId = "file_explorer",
-                title = "此电脑",
-                launchMode = LaunchMode.FLOATING
-            )
+            ShellController.showFiles()
         },
         AdvEntry("🖼", "X11 显示器", "全屏 X11 图形页") { ShellController.showX11() },
         AdvEntry("🎮", "DAC 显示器", "winedac 直合显示（实验）") { ShellController.showDac() }

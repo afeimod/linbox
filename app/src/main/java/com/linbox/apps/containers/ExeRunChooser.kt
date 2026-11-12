@@ -81,7 +81,7 @@ val ExeRunChooserApp = AppDef(
 }
 
 @Composable
-private fun ExeRunChooserContent(scope: WindowContentScope) {
+internal fun ExeRunChooserContent(scope: WindowContentScope) {
     val context = LocalContext.current
     val theme = LocalWinTheme.current
     val exePath = scope.windowState.launchArgs["path"] ?: ""

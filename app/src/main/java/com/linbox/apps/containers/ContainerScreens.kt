@@ -1283,16 +1283,11 @@ private fun BasicSettingsTab(
             Spacer(Modifier.width(gdp(8.dp)))
             GSmallButton("📂 浏览", GuanliColors.blueFab, Modifier) {
                 picking = true
-                com.linbox.core.window.WindowManager.get().open(
-                    appId = "file_explorer",
-                    title = "选择EXE",
-                    launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                    launchArgs = mapOf(
-                        "pickMode" to "exe",
-                        "targetApp" to "containers_basic_${edit.name}",
-                        "targetWindow" to ""
+                com.linbox.core.shell.ShellController.showFiles(
+                        pickMode = "exe",
+                        targetApp = "containers_basic_${edit.name}",
+                        targetWindow = ""
                     )
-                )
             }
         }
         if (picking) {
@@ -1738,18 +1733,13 @@ private fun GraphicsDriverTab(
                 if (installing) "⏳ 安装中…" else "➕ 安装驱动（zip / tar）",
                 GuanliColors.blueFab, Modifier.weight(1f)
             ) {
-                com.linbox.core.window.WindowManager.get().open(
-                    appId = "file_explorer",
-                    title = "选择驱动包",
-                    launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                    launchArgs = mapOf(
-                        // v3.3.17：driver = 驱动包专用选择模式（zip/tar 过滤 +
-                        // 直达 Download）。旧版误传 "text"（记事本文本选择）→
-                        // 提示选 txt/log。
-                        "pickMode" to "driver",
-                        "targetApp" to "containers_driverinstall",
-                        "targetWindow" to ""
-                    )
+                com.linbox.core.shell.ShellController.showFiles(
+                    // v3.3.17：driver = 驱动包专用选择模式（zip/tar 过滤 +
+                    // 直达 Download）。旧版误传 "text"（记事本文本选择）→
+                    // 提示选 txt/log。
+                    pickMode = "driver",
+                    targetApp = "containers_driverinstall",
+                    targetWindow = ""
                 )
             }
             // v3.3.20：卸载按钮对 wrapper 与 turnip 槽位都开放（旧版仅 wrapper）
@@ -2160,7 +2150,7 @@ private fun GuanliAdvancedPage(
 // ===========================================================================
 
 @Composable
-private fun OptEcoConfigTab() {
+internal fun OptEcoConfigTab() {
     val context = LocalContext.current
     val cs = rememberCoroutineScope()
 
@@ -2310,7 +2300,7 @@ private fun OptEcoConfigTab() {
 // ===========================================================================
 
 @Composable
-private fun DyConfigTab(
+internal fun DyConfigTab(
     // v3.3.7：DY 配置是 /opt/conf 全局项（wineguanli DynarecEditor 无容器概念），
     // sel 仅用于提示文案 —— 可空（无容器时本页照常可用）
     sel: ContainerData?,
@@ -2599,7 +2589,7 @@ private fun DyConfigTab(
 // ===========================================================================
 
 @Composable
-private fun FexConfigTab(onSaved: () -> Unit) {
+internal fun FexConfigTab(onSaved: () -> Unit) {
     val context = LocalContext.current
     val cs = rememberCoroutineScope()
 
@@ -2777,7 +2767,7 @@ private fun FexConfigTab(onSaved: () -> Unit) {
 // ===========================================================================
 
 @Composable
-private fun BoxConfigTab() {
+internal fun BoxConfigTab() {
     val context = LocalContext.current
     val cs = rememberCoroutineScope()
 
@@ -2849,7 +2839,7 @@ private fun BoxConfigTab() {
 // ===========================================================================
 
 @Composable
-private fun WineInstallTab(onRefresh: () -> Unit) {
+internal fun WineInstallTab(onRefresh: () -> Unit) {
     val context = LocalContext.current
     val cs = rememberCoroutineScope()
 
@@ -2921,15 +2911,10 @@ private fun WineInstallTab(onRefresh: () -> Unit) {
                 Spacer(Modifier.width(gdp(8.dp)))
                 GSmallButton("📂 浏览…", GuanliColors.blueFab, Modifier) {
                     picking = true
-                    com.linbox.core.window.WindowManager.get().open(
-                        appId = "file_explorer",
-                        title = "选择Wine包",
-                        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                        launchArgs = mapOf(
-                            "pickMode" to "text",
-                            "targetApp" to "containers_wineinstall",
-                            "targetWindow" to ""
-                        )
+                    com.linbox.core.shell.ShellController.showFiles(
+                        pickMode = "text",
+                        targetApp = "containers_wineinstall",
+                        targetWindow = ""
                     )
                 }
             }
@@ -3050,7 +3035,7 @@ private fun WineInstallTab(onRefresh: () -> Unit) {
 // ===========================================================================
 
 @Composable
-private fun MangoHudTab(
+internal fun MangoHudTab(
     // v3.3.7：容器选择器收进本选项卡（wineguanli create_mangohud_tab 本就
     // 只依赖全局 MANGOHUD_CONFIG 语义；LinBox 的配置按容器存储，故在此
     // 用紧凑定宽下拉选择 —— 不再占据整页页头）
@@ -4244,16 +4229,11 @@ internal fun RunContainerDialog(
                     Spacer(Modifier.width(gdp(8.dp)))
                     GSmallButton(if (picking) "选择中…" else "浏览…", GuanliColors.blueFab, Modifier) {
                         picking = true
-                        com.linbox.core.window.WindowManager.get().open(
-                            appId = "file_explorer",
-                            title = "选择程序",
-                            launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                            launchArgs = mapOf(
-                                "pickMode" to "exe",
-                                "targetApp" to "containers_run_${container.name}",
-                                "targetWindow" to ""
-                            )
-                        )
+                        com.linbox.core.shell.ShellController.showFiles(
+                        pickMode = "exe",
+                        targetApp = "containers_run_${container.name}",
+                        targetWindow = ""
+                    )
                     }
                 }
             }
@@ -4580,7 +4560,7 @@ private fun RootfsMissingHint() {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun DoctorDialog(onDismiss: () -> Unit) {
+internal fun DoctorDialog(onDismiss: () -> Unit) {
     var checks by remember { mutableStateOf<List<DoctorCheck>?>(null) }
     LaunchedEffect(Unit) {
         checks = withContext(Dispatchers.IO) { ContainerManager.doctor() }

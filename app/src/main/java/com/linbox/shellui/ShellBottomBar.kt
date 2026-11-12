@@ -44,7 +44,10 @@ import com.linbox.core.shell.ShellController.Screen
 @Composable
 fun ShellBottomBar(
     current: Screen,
-    palette: GlassPalette = GlassPalette.Dark
+    palette: GlassPalette = GlassPalette.Dark,
+    // v6.0（用户："中间加号有容器了就进容器列表，空白处有个加号"）：
+    // 中央＋按钮 —— 有容器进容器列表；无容器直进新建容器表单。
+    hasContainers: Boolean = true
 ) {
     val context = LocalContext.current
     Box(
@@ -93,7 +96,14 @@ fun ShellBottomBar(
                             .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(palette.blue, palette.purple)))
                             .clickable {
-                                openManagerWindow(context)
+                                if (hasContainers) {
+                                    // 有容器 → 容器列表
+                                    openManagerWindow(context)
+                                } else {
+                                    // 无容器 → 直接新建容器表单（winlator 式引导）
+                                    ShellController.openContainers()
+                                    ContainerUiState.openEditor(null)
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {

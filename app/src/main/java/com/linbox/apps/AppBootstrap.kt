@@ -1,10 +1,5 @@
 package com.linbox.apps
 
-import com.linbox.apps.browser.BrowserApp
-import com.linbox.apps.containers.ContainersApp
-import com.linbox.apps.containers.ExeRunChooserApp
-import com.linbox.apps.filemanager.FileExplorerApp
-import com.linbox.core.window.AppRegistry
 
 /**
  * 应用启动注册：窗口化应用在此注册到全局 AppRegistry。
@@ -23,11 +18,11 @@ import com.linbox.core.window.AppRegistry
  */
 object AppBootstrap {
     fun registerAll() {
-        // v3.2.13：文件管理器双击 exe/bat 调出的「选择容器运行」窗口
-        AppRegistry.register(ExeRunChooserApp)
-        // 浏览器（高级页「浏览器」入口）
-        AppRegistry.register(BrowserApp)
-        // 文件管理器（容器 exe 选择 / 卡片图片选择 / 驱动包安装）
-        AppRegistry.register(FileExplorerApp)
+        // v6.0（去 Windows 窗口化）：浏览器 / 文件管理器 / exe 选择器全部
+        // 改为安卓全屏页（ShellController.BROWSER / FILES / EXECHOOSER），
+        // 不再注册窗口应用。AppRegistry 保留给遗留 openWindowOrSystem
+        // 探测（notepad / media_player 等未注册应用自动回退系统打开）。
+        // v3.2.13 的 ExeRunChooserApp / BrowserApp / FileExplorerApp 定义
+        // 保留（内容组件被 ShellPages.kt 复用），仅不再进窗口注册表。
     }
 }

@@ -91,7 +91,7 @@ val FileExplorerApp = AppDef(
  *   横幅提供「选定此目录」按钮，点击将当前所在目录绝对路径回传发起窗口
  */
 @Composable
-private fun FileExplorerContent(scope: WindowContentScope) {
+internal fun FileExplorerContent(scope: WindowContentScope) {
     val theme = LocalWinTheme.current
     val context = LocalContext.current
 
@@ -285,24 +285,10 @@ private fun FileExplorerContent(scope: WindowContentScope) {
     fun pickAndClose(file: File) {
         val delivered = FilePickBus.deliver(targetApp, targetWindow, file.absolutePath)
         if (!delivered) {
-            // 发起窗口已关闭/最小化：直接开新窗口承载该文件（与文件双击打开同路径）
-            when (targetApp) {
-                "notepad" -> WindowManager.get().open(
-                    appId = "notepad",
-                    title = file.name,
-                    launchMode = LaunchMode.FLOATING,
-                    launchArgs = mapOf("path" to file.absolutePath)
-                )
-                "media_player" -> WindowManager.get().open(
-                    appId = "media_player",
-                    title = file.name,
-                    launchMode = LaunchMode.FLOATING,
-                    launchArgs = mapOf("path" to file.absolutePath),
-                    initialWidth = 760,
-                    initialHeight = 540
-                )
-                else -> Toast.makeText(context, "发起窗口已关闭，已取消选择", Toast.LENGTH_SHORT).show()
-            }
+            // v6.0：发起页已离开 —— 统一 Toast 提示（旧版开 notepad/
+            // media_player 空窗口，但这两个应用从未注册，只会开出不可见
+            // 的死窗口）。
+            Toast.makeText(context, "发起页面已离开，已取消选择", Toast.LENGTH_SHORT).show()
         }
         scope.onClose()
     }
@@ -1923,15 +1909,8 @@ private fun openWindowOrSystem(
     file: File,
     mime: String?
 ) {
-    if (com.linbox.core.window.AppRegistry.get(appId) != null) {
-        WindowManager.get().open(
-            appId = appId,
-            title = title,
-            launchMode = LaunchMode.FLOATING,
-            launchArgs = args
-        )
-        return
-    }
+    // v6.0：窗口应用注册已全部撤销（安卓全屏页化）—— 本函数只剩
+    // "系统打开"兜底路径（notepad / media_player 等未注册应用）。
     val uri = FileProvider.getUriForFile(
         context, "${context.packageName}.fileprovider", file
     )
@@ -1954,14 +1933,7 @@ private fun openRealFile(context: Context, file: File) {
             // “未找到可打开 .exe 文件的应用”；现调出容器选择框（容器/
             // 分辨率/显示模式/启动参数一次选完，Unix 绝对路径直达）
             isExecutableExtension(ext) -> {
-                WindowManager.get().open(
-                    appId = "exe_run_chooser",
-                    title = "运行 ${file.name}",
-                    launchMode = LaunchMode.FLOATING,
-                    launchArgs = mapOf("path" to file.absolutePath),
-                    initialWidth = 560,
-                    initialHeight = 620
-                )
+                com.linbox.core.shell.ShellController.showExeChooser(file.absolutePath)
             }
             ext in listOf("jpg", "jpeg", "png", "gif", "bmp", "webp") -> {
                 openWindowOrSystem(
@@ -1974,11 +1946,7 @@ private fun openRealFile(context: Context, file: File) {
                 val uri = FileProvider.getUriForFile(
                     context, "${context.packageName}.fileprovider", file
                 )
-                WindowManager.get().open(
-                    appId = "browser", title = "Browser",
-                    launchMode = LaunchMode.FLOATING,
-                    launchArgs = mapOf("url" to uri.toString())
-                )
+                com.linbox.core.shell.ShellController.showBrowser(uri.toString())
             }
             // 文本 → 内置记事本（v2.14.10；LinBox 未注册时回退系统查看器）
             isTextExtension(ext) -> {

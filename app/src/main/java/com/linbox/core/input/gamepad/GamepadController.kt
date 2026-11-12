@@ -284,6 +284,20 @@ object GamepadController {
         selectedElementId = id
     }
 
+    /**
+     * v6.0：全局一次加载（LinBoxShell 组合点调用）。
+     *
+     * 旧版每处 GamepadOverlayContent 组合各自 LaunchedEffect 加载：
+     * - 悬浮球"开启手柄"先置 visible=true，覆盖层迟到加载把 visible 写回
+     *   旧配置 padVisible=false → 手柄闪现即消失 / 多次点击才出现；
+     * - 主树 + X11 ComposeView 双组合并发加载互相踩状态。
+     * 守卫 [loaded] 保证整个会话只加载一次。
+     */
+    fun ensureLoaded(json: String?) {
+        if (loaded) return
+        loadFromJson(json)
+    }
+
     /** 从持久化 JSON 恢复（带版本：v1/裸数组自动升级为 v2 新默认布局；
      *  v2 起兼容读取，v3 新字段缺省取默认） */
     fun loadFromJson(json: String?) {
@@ -681,6 +695,12 @@ object GamepadController {
     /** 悬浮球展开菜单布局后登记命中矩形（GamepadFloatingBall 调用） */
     fun registerMenuHit(l: Float, t: Float, r: Float, b: Float) {
         menuHitRect = floatArrayOf(l, t, r, b)
+    }
+
+    /** v6.0：菜单收起时清除其命中矩形（防陈旧矩形把该区域的 X11 触摸
+     *  误剥离成手柄指针 —— 收起后原地触摸失灵的死区来源）。 */
+    fun clearMenuHit() {
+        menuHitRect = null
     }
 
     /** 手柄隐藏/离开组合时清空工具条命中（对齐 clearElementHits 生命周期） */
