@@ -26,6 +26,7 @@ import com.linbox.core.window.WinDialogHost
 import com.linbox.core.window.WindowHost
 import com.linbox.shellui.AdvancedScreen
 import com.linbox.shellui.ContainerHomeScreen
+import com.linbox.shellui.ContainersScreen
 import com.linbox.shellui.GameLibraryScreen
 
 /**
@@ -91,13 +92,15 @@ fun LinBoxShell() {
             ShellController.Screen.HOME -> ContainerHomeScreen()
             ShellController.Screen.LIBRARY -> GameLibraryScreen()
             ShellController.Screen.ADVANCED -> AdvancedScreen()
+            ShellController.Screen.CONTAINERS -> ContainersScreen()
             ShellController.Screen.TERMINAL -> TerminalScreen()
             ShellController.Screen.X11 -> X11Screen()
             ShellController.Screen.DAC -> DacScreen()
             ShellController.Screen.SETTINGS -> SettingsScreen()
         }
 
-        // ===== 2. 浮动窗口层（容器管理器 / exe 选择器 / 浏览器 / 文件管理器…） =====
+        // ===== 2. 浮动窗口层（浏览器 / 文件管理器 / exe 选择器…；
+        //      v5.0 容器管理器已改全屏页，不再走窗口系统） =====
         WindowHost()
 
         // ===== 3. Qt 风格弹窗栈（容器管理器全部弹窗基于此） =====

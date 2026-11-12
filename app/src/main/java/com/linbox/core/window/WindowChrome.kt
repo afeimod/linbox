@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.linbox.core.theme.LocalWinTheme
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
@@ -140,7 +141,12 @@ fun WindowChrome(
     }
 
     // 最大化状态下不显示阴影，因为窗口已经贴边
-    val shadowElevation = if (isMaximized || isTrueFs) 0.dp else theme.windowShadowElevation
+    val shadowElevation = if (isMaximized || isTrueFs) 0.dp else 16.dp
+
+    // v5.0（安卓化）：统一暗色玻璃窗口皮 —— 圆角 20dp、深夜蓝表面、
+    // 白色细描边；与 WinDialog / 设置页同源 LinShellTheme。
+    val chromeShape = if (isMaximized || isTrueFs) RectangleShape
+    else RoundedCornerShape(20.dp)
 
     // pointerInput(state.id) 协程只按窗口 id 重启：这里用 rememberUpdatedState
     // 保证拖拽结束提交时读到最新组合的工作区尺寸（旋转/多窗口/分屏后仍正确）
@@ -184,10 +190,10 @@ fun WindowChrome(
                 val placeable = measurable.measure(Constraints.fixed(w, h))
                 layout(w, h) { placeable.place(0, 0) }
             }
-            .shadow(shadowElevation, theme.windowShape, clip = false)
-            .clip(theme.windowShape)
-            .background(theme.windowBackgroundColor)
-            .border(if (isTrueFs) 0.dp else theme.windowBorderWidth, theme.windowBorderColor, theme.windowShape)
+            .shadow(shadowElevation, chromeShape, clip = false)
+            .clip(chromeShape)
+            .background(com.linbox.core.theme.LinShellTheme.surface)
+            .border(if (isTrueFs) 0.dp else 1.dp, com.linbox.core.theme.LinShellTheme.surfaceBorder, chromeShape)
             // v3.2.2：链尾上报最终布局位置（含 offset/layout 修饰符效果）——
             // 窗口坐标 Rect，与 MainActivity.dispatchTouchEvent 的 MotionEvent
             // 同一坐标系。
@@ -202,20 +208,14 @@ fun WindowChrome(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(theme.windowTitleBarHeight)
-                    // v3.3.40（用户需求 5）：Win7 Aero 玻璃渐变标题栏
-                    //（截图同款：顶部高光 → 浅蓝玻璃 → 底部过渡；其余主题
-                    // 保持原纯色标题栏）
+                    // v5.0（安卓化）：统一暗色玻璃标题栏（深夜蓝渐变），
+                    // 去 Win7 Aero / 主题化标题栏。
                     .background(
-                        if (theme.windowChrome == com.linbox.core.theme.WindowChrome.AERO && !theme.isDark)
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                listOf(
-                                    Color(0xFFFCFDFF),
-                                    theme.windowTitleBarColor,
-                                    Color(0xFFD6E6F6).copy(alpha = 0.95f)
-                                )
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(
+                                com.linbox.core.theme.LinShellTheme.surface,
+                                com.linbox.core.theme.LinShellTheme.bgDeep
                             )
-                        else androidx.compose.ui.graphics.Brush.verticalGradient(
-                            listOf(theme.windowTitleBarColor, theme.windowTitleBarColor)
                         )
                     )
                     .pointerInput(state.id) {
@@ -312,17 +312,17 @@ fun WindowChrome(
                         Box(
                             modifier = Modifier
                                 .size(16.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(theme.windowTitleBarIconColor)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(com.linbox.core.theme.LinShellTheme.blue)
                         )
                     }
                 }
 
                 Text(
                     text = state.title,
-                    color = theme.windowTitleBarTextColor,
-                    fontSize = theme.fontSizeBody,
-                    fontWeight = theme.fontWeightTitle,
+                    color = com.linbox.core.theme.LinShellTheme.textPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -664,7 +664,9 @@ private fun ControlButton(
     // Aero 符号不再靠 icon.name 字符串猜测 —— 旧逻辑非 "Minimize" 一律
     // 画空心方块 → 菜单按钮 ☰ 也被画成口。调用方显式传 [aeroSym]；
     // 未传时仅对历史调用点保留 name 推断兑底（Menu → ☰）。
-    val aero = theme.windowChrome == com.linbox.core.theme.WindowChrome.AERO && !theme.isDark
+    // v5.0（安卓化）：aero 分支整体退役 —— 所有主题统一走下方安卓圆形
+    // 控制钮（Material 风）；aeroSym 仅保留给历史调用点兼容，不再消费。
+    val aero = false
     val sym = aeroSym ?: when {
         isClose -> CaptionSym.CLOSE
         icon.name == "Minimize" -> CaptionSym.MIN
@@ -672,17 +674,30 @@ private fun ControlButton(
         else -> CaptionSym.MAX
     }
     if (!aero) {
+        // v5.0：安卓圆形控制钮（36dp 圆底 + 按压反馈），关闭钮红色系。
+        val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        val pressedState by interaction.collectIsPressedAsState()
         Box(
             modifier = Modifier
-                .size(width = 46.dp, height = theme.windowTitleBarHeight)
-                .pointerInput(Unit) { detectTapGestures(onTap = { onClick() }) },
+                .size(width = 40.dp, height = theme.windowTitleBarHeight)
+                .padding(vertical = ((theme.windowTitleBarHeight - 32.dp) / 2f).coerceAtLeast(0.dp))
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(
+                    when {
+                        pressedState && isClose -> com.linbox.core.theme.LinShellTheme.red.copy(alpha = 0.30f)
+                        pressedState -> Color(0x24FFFFFF)
+                        else -> Color(0x0FFFFFFF)
+                    }
+                )
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (isClose) Color(0xFF9E2A21) else Color(0xFF16324E),
-                modifier = Modifier.size(12.dp)
+                tint = if (isClose) com.linbox.core.theme.LinShellTheme.red
+                else com.linbox.core.theme.LinShellTheme.textSecondary,
+                modifier = Modifier.size(15.dp)
             )
         }
         return

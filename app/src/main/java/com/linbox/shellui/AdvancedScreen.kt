@@ -1,6 +1,7 @@
 package com.linbox.shellui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +38,6 @@ import androidx.compose.ui.unit.sp
 import com.linbox.apps.containers.ContainerManager
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
-import com.linbox.core.theme.LocalWinTheme
 import com.linbox.core.window.LaunchMode
 import com.linbox.core.window.WindowManager
 import kotlinx.coroutines.Dispatchers
@@ -60,7 +60,6 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AdvancedScreen() {
     val context = LocalContext.current
-    val theme = LocalWinTheme.current
 
     // 概览状态
     var tick by remember { mutableIntStateOf(0) }
@@ -101,14 +100,15 @@ fun AdvancedScreen() {
             )
         },
         AdvEntry("🖼", "X11 显示器", "全屏 X11 图形页") { ShellController.showX11() },
-        AdvEntry("🎮", "DAC 显示器", "winedac 直合显示（实验）") { ShellController.showDac() },
-        AdvEntry("🎨", "应用设置", "显示/输入/手柄/关于") { ShellController.showSettings() }
+        AdvEntry("🎮", "DAC 显示器", "winedac 直合显示（实验）") { ShellController.showDac() }
+        // v5.0：「应用设置」入口移除 —— 全部设置已收编进底部导航
+        //      「设置」页（用户：“把所有还有的设置都放在下方设置栏”）。
     )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(theme.windowBackgroundColor)
+            .background(com.linbox.core.theme.LinShellTheme.bg)
     ) {
         // 标题 + 状态概览
         Row(
@@ -119,7 +119,7 @@ fun AdvancedScreen() {
         ) {
             Text(
                 "高级",
-                color = theme.windowTitleBarTextColor,
+                color = com.linbox.core.theme.LinShellTheme.textPrimary,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -129,7 +129,7 @@ fun AdvancedScreen() {
                     append(if (rootfsReady) "rootfs ✔" else "rootfs ✘")
                     append(" · $containerCount 容器 · $wineCount Wine")
                 },
-                color = theme.windowTitleBarTextColor.copy(alpha = 0.6f),
+                color = com.linbox.core.theme.LinShellTheme.textSecondary,
                 fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -166,20 +166,20 @@ private data class AdvEntry(
 
 @Composable
 private fun AdvCard(e: AdvEntry) {
-    val theme = LocalWinTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(theme.windowBackgroundColor)
+            .clip(RoundedCornerShape(16.dp))
+            .background(com.linbox.core.theme.LinShellTheme.card)
+            .border(1.dp, com.linbox.core.theme.LinShellTheme.cardBorder, RoundedCornerShape(16.dp))
             .clickable(onClick = e.onClick)
             .padding(14.dp)
     ) {
         Box(
             modifier = Modifier
                 .size(42.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(theme.accentColor.copy(alpha = 0.16f)),
+                .clip(RoundedCornerShape(12.dp))
+                .background(com.linbox.core.theme.LinShellTheme.blue.copy(alpha = 0.16f)),
             contentAlignment = Alignment.Center
         ) {
             Text(e.emoji, fontSize = 20.sp)
@@ -187,14 +187,14 @@ private fun AdvCard(e: AdvEntry) {
         Spacer(Modifier.height(8.dp))
         Text(
             e.title,
-            color = theme.windowTitleBarTextColor,
+            color = com.linbox.core.theme.LinShellTheme.textPrimary,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold
         )
         Spacer(Modifier.height(2.dp))
         Text(
             e.subtitle,
-            color = theme.windowTitleBarTextColor.copy(alpha = 0.55f),
+            color = com.linbox.core.theme.LinShellTheme.textSecondary,
             fontSize = 11.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

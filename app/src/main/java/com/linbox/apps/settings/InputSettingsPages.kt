@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.linbox.LinBoxApp
 import com.linbox.core.input.keyboardAware
 import com.linbox.core.input.keyboardAwareEditor
+import com.linbox.core.theme.LinShellTheme
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.util.L
 import kotlinx.coroutines.launch
@@ -57,7 +58,7 @@ internal fun SubPageHeader(title: String, onBack: (() -> Unit)?) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "返回",
-                    tint = if (theme.isDark) Color.White else Color.Black,
+                    tint = LinShellTheme.textPrimary,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -65,7 +66,7 @@ internal fun SubPageHeader(title: String, onBack: (() -> Unit)?) {
         }
         Text(
             title,
-            color = if (theme.isDark) Color.White else Color.Black,
+            color = LinShellTheme.textPrimary,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
@@ -85,8 +86,8 @@ internal fun SegmentedControl(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.windowBackgroundColor)
-            .border(1.dp, theme.cardBackgroundColor, RoundedCornerShape(6.dp))
+            .background(LinShellTheme.bg)
+            .border(1.dp, LinShellTheme.surface, RoundedCornerShape(6.dp))
     ) {
         options.forEach { (id, label) ->
             val active = id == selected
@@ -94,14 +95,14 @@ internal fun SegmentedControl(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(if (active) theme.accentColor.copy(alpha = 0.18f) else Color.Transparent)
+                    .background(if (active) LinShellTheme.blue.copy(alpha = 0.18f) else Color.Transparent)
                     .clickable { onSelect(id) }
                     .padding(vertical = 9.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     label,
-                    color = if (active) theme.accentColor else theme.secondaryTextColor,
+                    color = if (active) LinShellTheme.blue else LinShellTheme.textSecondary,
                     fontSize = 12.sp,
                     fontWeight = if (active) FontWeight.Medium else FontWeight.Normal
                 )
@@ -116,7 +117,7 @@ internal fun SettingsBlock(title: String, content: @Composable ColumnScope.() ->
     val theme = LocalWinTheme.current
     Text(
         title,
-        color = if (theme.isDark) Color.White else Color.Black,
+        color = LinShellTheme.textPrimary,
         fontSize = 13.sp,
         fontWeight = FontWeight.Medium
     )
@@ -125,7 +126,7 @@ internal fun SettingsBlock(title: String, content: @Composable ColumnScope.() ->
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .padding(12.dp),
         content = content
     )
@@ -175,7 +176,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
         SettingsBlock("键盘布局") {
             Text(
                 "显示功能键行（Esc + F1-F12）",
-                color = if (theme.isDark) Color.White else Color.Black,
+                color = LinShellTheme.textPrimary,
                 fontSize = 12.sp
             )
             Spacer(Modifier.height(4.dp))
@@ -185,7 +186,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "显示小键盘（数字键 + 方向键）",
-                color = if (theme.isDark) Color.White else Color.Black,
+                color = LinShellTheme.textPrimary,
                 fontSize = 12.sp
             )
             Spacer(Modifier.height(4.dp))
@@ -195,7 +196,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(
                 "两者全开 = 104 键全键盘；键盘顶部工具栏也可快速切换",
-                color = theme.secondaryTextColor,
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp
             )
         }
@@ -212,7 +213,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             Text(
                 "也可用键盘工具栏 - / + 按钮或双指捏合直接调节（75% - 135%）",
-                color = theme.secondaryTextColor,
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp
             )
         }
@@ -244,7 +245,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (active) theme.accentColor.copy(alpha = 0.12f) else Color.Transparent)
+                            .background(if (active) LinShellTheme.blue.copy(alpha = 0.12f) else Color.Transparent)
                             .clickable { scope.launch { app.settingsStore.setKeyboardTheme(id) } }
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
@@ -269,7 +270,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                         Spacer(Modifier.height(6.dp))
                         Text(
                             label,
-                            color = if (active) theme.accentColor else theme.secondaryTextColor,
+                            color = if (active) LinShellTheme.blue else LinShellTheme.textSecondary,
                             fontSize = 11.sp
                         )
                     }
@@ -281,7 +282,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
         SettingsBlock("位置与拖动") {
             Text(
                 "允许拖动键盘（按住键盘顶部工具栏拖动）",
-                color = if (theme.isDark) Color.White else Color.Black,
+                color = LinShellTheme.textPrimary,
                 fontSize = 12.sp
             )
             Spacer(Modifier.height(4.dp))
@@ -291,7 +292,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "位置会自动记忆；重置后回到屏幕底部居中",
-                color = theme.secondaryTextColor,
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp
             )
             Spacer(Modifier.height(8.dp))
@@ -334,7 +335,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                 var multiText by remember { mutableStateOf(TextFieldValue("")) }
                 Text(
                     "单行（点击聚焦呼出键盘，Enter 无动作）",
-                    color = theme.secondaryTextColor,
+                    color = LinShellTheme.textSecondary,
                     fontSize = 11.sp
                 )
                 Spacer(Modifier.height(4.dp))
@@ -343,13 +344,13 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                     onValueChange = { singleLineText = it },
                     singleLine = true,
                     textStyle = TextStyle(
-                        color = if (theme.isDark) Color.White else Color.Black,
+                        color = LinShellTheme.textPrimary,
                         fontSize = 13.sp
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(6.dp))
-                        .background(theme.windowBackgroundColor)
+                        .background(LinShellTheme.bg)
                         .keyboardAware(
                             value = { singleLineText },
                             onValue = { singleLineText = it },
@@ -360,7 +361,7 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "多行（支持光标移动 / Shift / Ctrl+A/C/X/V）",
-                    color = theme.secondaryTextColor,
+                    color = LinShellTheme.textSecondary,
                     fontSize = 11.sp
                 )
                 Spacer(Modifier.height(4.dp))
@@ -368,14 +369,14 @@ internal fun KeyboardSettingsPage(onBack: () -> Unit) {
                     value = multiText,
                     onValueChange = { multiText = it },
                     textStyle = TextStyle(
-                        color = if (theme.isDark) Color.White else Color.Black,
+                        color = LinShellTheme.textPrimary,
                         fontSize = 13.sp
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(84.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(theme.windowBackgroundColor)
+                        .background(LinShellTheme.bg)
                         .keyboardAwareEditor(
                             value = { multiText },
                             onValue = { multiText = it },

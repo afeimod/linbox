@@ -174,22 +174,24 @@ fun GuanliDialogScale(winScale: Float, winFontScale: Float = winScale, content: 
 
 /** wineguanli.py Qt 样式表的配色（QToolBar/QGroupBox/QPushButton 原色）。 */
 private object GuanliColors {
-    val toolbar = Color(0xFF2C3E50)        // QToolBar 背景
-    val toolbarHover = Color(0xFF34495E)   // 工具栏按钮 hover
-    val accent = Color(0xFF3498DB)         // QPushButton 主蓝
-    val accentDark = Color(0xFF2980B9)
-    val accentPressed = Color(0xFF21618C)
-    val green = Color(0xFF2ECC71)          // ▶ 运行
+    // v5.0（安卓化）：全部换成 LinShellTheme 同源暗色系 —— 管理器不再
+    // 是"老 Windows 窗口里的 Qt 亮色面板"，与壳层全局主题统一。
+    val toolbar = Color(0xFF161D33)        // 工具栏/导航底（LinShellTheme.surface）
+    val toolbarHover = Color(0xFF1F2841)   // 工具栏按钮 hover
+    val accent = Color(0xFF4E7CFF)         // 主蓝（LinShellTheme.blue）
+    val accentDark = Color(0xFF3D66E0)
+    val accentPressed = Color(0xFF2F51B8)
+    val green = Color(0xFF34C759)          // ▶ 运行
     val greenDeep = Color(0xFF28A745)      // 💾 立即应用/保存配置
     val greenDeepHover = Color(0xFF218838)
-    val red = Color(0xFFE74C3C)            // 删除类
-    val redFab = Color(0xFFF44336)         // DY 删除变量
-    val blueFab = Color(0xFF2196F3)        // Qt "选择…"类按钮
-    val grey = Color(0xFF9E9E9E)           // 重置默认
-    val info = Color(0xFF7F8C8D)           // 说明文字
-    val panelBg = Color(0xFFF5F7FA)        // 渐变窗口底（浅端）
-    val listSel = Color(0xFFD6EAF8)        // QListWidget::item:selected 浅
-    val rowAlt = Color(0xFFF8F9FA)         // 信息底
+    val red = Color(0xFFFF5A5A)            // 删除类
+    val redFab = Color(0xFFFF5A5A)         // DY 删除变量
+    val blueFab = Color(0xFF4E7CFF)        // "选择…"类按钮
+    val grey = Color(0xFF8A93A8)           // 重置默认
+    val info = Color(0x99FFFFFF)           // 说明文字（次级文本）
+    val panelBg = Color(0xFF0F1424)        // 页面底（LinShellTheme.bg）
+    val listSel = Color(0x334E7CFF)        // 列表选中（蓝色 20%）
+    val rowAlt = Color(0x14FFFFFF)         // 信息底（微白）
 }
 
 // ===========================================================================
@@ -197,15 +199,15 @@ private object GuanliColors {
 // ===========================================================================
 
 @Composable
-private fun themeBg() = LocalWinTheme.current.windowBackgroundColor
+private fun themeBg() = com.linbox.core.theme.LinShellTheme.bg
 @Composable
-private fun themeCard() = LocalWinTheme.current.cardBackgroundColor
+private fun themeCard() = com.linbox.core.theme.LinShellTheme.surface
 @Composable
-private fun themeAccent() = LocalWinTheme.current.accentColor
+private fun themeAccent() = com.linbox.core.theme.LinShellTheme.blue
 @Composable
-private fun themeSec() = LocalWinTheme.current.secondaryTextColor
+private fun themeSec() = com.linbox.core.theme.LinShellTheme.textSecondary
 @Composable
-private fun themeFg() = LocalWinTheme.current.windowTitleBarTextColor
+private fun themeFg() = com.linbox.core.theme.LinShellTheme.textPrimary
 
 @Composable
 fun ContainerListContent(scope: WindowContentScope) {
@@ -1984,7 +1986,7 @@ private fun LibraryTab(
         Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
             listOf("72 (75%)" to 72, "96 (100%)" to 96, "120 (125%)" to 120, "144 (150%)" to 144, "192 (200%)" to 192)
                 .forEach { (label, v) ->
-                    GSmallButton(label, Color(0xFFF0F0F0), Modifier, fg = themeFg()) {
+                    GSmallButton(label, Color(0xFF243049), Modifier, fg = themeFg()) {
                         onChange(edit.copy(dpi = v.toString()))
                     }
                 }
@@ -3288,7 +3290,7 @@ private fun MoreSettingsDialog(
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
                                     listOf(72, 96, 120, 144, 192).forEach { v ->
-                                        GSmallButton("$v", Color(0xFFF0F0F0), Modifier, fg = themeFg()) {
+                                        GSmallButton("$v", Color(0xFF243049), Modifier, fg = themeFg()) {
                                             edit = edit.copy(dpi = v.toString())
                                         }
                                     }
@@ -3825,7 +3827,7 @@ private fun MangoHudConfigDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
                         GuanliSupport.MangoHud.POSITIONS.forEach { p ->
                             GSmallButton(
-                                p, if (position == p) GuanliColors.blueFab else Color(0xFFF0F0F0),
+                                p, if (position == p) GuanliColors.blueFab else Color(0xFF243049),
                                 Modifier, fg = if (position == p) Color.White else themeFg()
                             ) { position = p }
                         }

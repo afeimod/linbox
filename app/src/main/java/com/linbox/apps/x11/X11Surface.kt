@@ -285,7 +285,13 @@ fun X11Screen() {
                         (lifecycleOwner as? SavedStateRegistryOwner)?.let {
                             setViewTreeSavedStateRegistryOwner(it)
                         }
-                        setContent { GamepadOverlayContent() }
+                        // v5.0：手柄元素以基础密度渲染 —— 自带 sizeDp 尺寸
+                        // 语义（手柄设置里单独调），不随全局 UI 缩放。
+                        setContent {
+                            com.linbox.core.theme.KeepBaseDensity {
+                                GamepadOverlayContent()
+                            }
+                        }
                     }
                     root.addView(gamepadHost, FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -378,10 +384,12 @@ fun X11Screen() {
             }
 
             // ===== v2.25 附加键盘栏（showAdditionalKbd；连接后显示，真全屏时隐藏，
-            //      imePadding 使其贴在输入法上沿） =====
+            //      imePadding 使其贴在输入法上沿；
+            //      v5.0：基础密度渲染 —— 输入辅助层不随全局 UI 缩放） =====
             if (connState == X11WindowController.State.Connected &&
                 X11UiPrefs.showAdditionalKbd && !trueFs
             ) {
+                com.linbox.core.theme.KeepBaseDensity {
                 Box(
                     Modifier
                         .matchParentSize()
@@ -390,20 +398,12 @@ fun X11Screen() {
                 ) {
                     X11ExtraKeysBar()
                 }
+                }
             }
 
-            // ===== v2.25 玻璃悬浮球（原底边控制条全部功能收编于此；
-            //      真全屏时隐藏 —— 画面独占，返回键退出） =====
-            if (!trueFs) {
-                X11GlassFab(
-                    areaPx = areaSize,
-                    gamepadEnabled = gamepadEnabled,
-                    fullscreen = trueFs,
-                    onToggleFullscreen = { setFullscreen(!trueFs) },
-                    onOpenSettings = { X11SettingsBridge.requestShow() },
-                    onBackToTerminal = { ShellController.showHome() }
-                )
-            }
+            // ===== v5.0：原 X11 玻璃悬浮球已移除 —— 全部功能并入虚拟手柄
+            //      悬浮球（GamepadFloatingBall，常驻 LinBoxShell 层，尺寸不随
+            //      全局缩放）。此处不再渲染第二个球，修复双悬浮球不统一。 =====
         }
     }
 

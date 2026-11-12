@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
+import com.linbox.core.theme.LocalBaseDensity
 import com.linbox.core.theme.ThemeOverlay
 import com.linbox.core.theme.WinThemeScope
 import com.linbox.core.shell.LinBoxShell
@@ -116,18 +117,15 @@ class MainActivity : ComponentActivity() {
             // ===== v3.2.14（AnWind 移植）：启动器快捷方式「运行容器」 =====
             // ShortcutManager 固定的“运行容器”快捷方式携带
             // linbox_run_container extra（GuanliSupport.Shortcuts 创建），
-            // 这里打开容器管理器窗口，窗口内 launchArgs.autorun 驱动
-            // 选中 + 自动运行（见 ContainerScreens）。
+            // 这里打开容器管理器全屏页（v5.0），页面内 launchArgs.autorun
+            // 驱动选中 + 自动运行（见 ContainerScreens）。
             val shortcutRunContainer = intent?.getStringExtra(
                 com.linbox.apps.containers.GuanliSupport.Shortcuts.EXTRA_RUN_CONTAINER
             )
             LaunchedEffect(shortcutRunContainer) {
                 if (!shortcutRunContainer.isNullOrBlank()) {
-                    com.linbox.core.window.WindowManager.get().open(
-                        appId = "wine-containers",
-                        title = "Bionic 容器",
-                        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-                        launchArgs = mapOf("autorun" to shortcutRunContainer)
+                    com.linbox.core.shell.ShellController.openContainers(
+                        autorun = shortcutRunContainer
                     )
                 }
             }
@@ -186,6 +184,9 @@ class MainActivity : ComponentActivity() {
                     density = baseDensity.density * uiScale * SettingsStore.UI_SCALE_BASE,
                     fontScale = baseDensity.fontScale * fontScale
                 ),
+                // v5.0：基础密度下发 —— 悬浮球 / 手柄元素等自带尺寸语义的层
+                // 经 KeepBaseDensity 读取，不随全局 uiScale 缩放
+                LocalBaseDensity provides baseDensity,
                 // v2.14：全局字体样式（衬线/等宽）—— 未显式指定样式的 Text 全部跟随；
                 // default 模式下 fontFamily 保持原样（零影响）
                 androidx.compose.material3.LocalTextStyle provides baseTextStyle.copy(

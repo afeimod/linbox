@@ -27,8 +27,13 @@ class SettingsStore(private val context: Context) {
          * 用户反馈旧版 100% 桌面元素过大，现把 100% 档位整体缩小到旧版 60% 的
          * 视觉效果；设置里仍显示 100%，其余百分比按同一系数等比映射
          * （如 180% 档 = 旧版 108%，想要旧版大小可调到 300% = 旧版 180%）。
+         *
+         * v5.0（用户："界面 ui 太小……放大到 150"）：基准 0.6 → 0.9。
+         * 所有档位等比放大 1.5 倍 —— 已存档位无需迁移即得放大效果；
+         * 100% 档 = 旧版 90%，紧凑与可读性兼顾。悬浮球与手柄元素以
+         * LocalBaseDensity 渲染，不受此基准影响（尺寸恒定）。
          */
-        const val UI_SCALE_BASE = 0.6f
+        const val UI_SCALE_BASE = 0.9f
     }
 
     object Keys {
@@ -40,8 +45,9 @@ class SettingsStore(private val context: Context) {
         val DEFAULT_BROWSER_HOME = stringPreferencesKey("default_browser_home")
         // UI 缩放（整体缩放所有 dp/sp，>1 放大，<1 缩小）
         // v2.16：存储值不变（默认 1.0 = 菜单里仍显示 100%），但实际渲染时
-        // 乘以 UI_SCALE_BASE（0.6），即 100% 档位的视觉效果相当于旧版的 60%，
-        // 整体桌面更紧凑小巧。滑杆范围同步扩展到 0.6..3.0（实际 0.36..1.8）。
+        // 乘以 UI_SCALE_BASE，即 100% 档位的视觉效果相当于旧版的基准倍率，
+        // 整体桌面更紧凑小巧。滑杆范围同步扩展到 0.6..3.0。
+        // v5.0：基准 0.9（= 旧版 150%），见 UI_SCALE_BASE 注释。
         val UI_SCALE = floatPreferencesKey("ui_scale")
         // 显示方向：auto / portrait / landscape
         val DISPLAY_ORIENTATION = stringPreferencesKey("display_orientation")

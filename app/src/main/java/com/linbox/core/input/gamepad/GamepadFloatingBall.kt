@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +55,8 @@ import androidx.compose.ui.unit.sp
 import com.linbox.LinBoxApp
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.boundsInWindowCompat
+import com.linbox.core.shell.ShellController
+import com.linbox.core.theme.KeepBaseDensity
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlin.math.roundToInt
@@ -79,8 +82,7 @@ import kotlin.math.roundToInt
  * 片、每项配彩色圆底**矢量自绘图标**（Canvas 画线，零字体字形依赖）、
  * 行高 ≥50dp 大触摸目标、分组细分隔线、危险项（关闭手柄）独立分区。
  *
- * 命中登记（缺一不可，否则球/菜单的触摸会被各输入层误吞或误穿透）：
- * - `GamepadController.registerToolbarHit`（球本体）：X11 智能触摸桥
+ * 命中登记（缺一不可，否则球/菜单的触摸会被各输入层误吞或误穿透）： * - `GamepadController.registerToolbarHit`（球本体）：X11 智能触摸桥
  *   （SmartTouchBridge.filterPadPointers）按 isOverPadUi 剥离落在球上的
  *   指针 —— 不登记则按住球的手指会被当成屏幕手势，菜单点不到；
  * - `GamepadController.registerMenuHit`（展开菜单）：同上；
@@ -94,6 +96,15 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
+    // v5.0（用户："悬浮球不要更改大小，现在就行"）：悬浮球以系统基础密度
+    // 渲染 —— 全局 UI 缩放（150% 档）只作用于管理界面，球体 54dp 恒定。
+    KeepBaseDensity {
+        GamepadFloatingBallContent(onPersistConfig)
+    }
+}
+
+@Composable
+private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
     val app = LinBoxApp.get()
     val scope = rememberCoroutineScope()
     // v3.4.7：调用方（LinBoxShell）不传回调时，缺省走标准持久化
@@ -103,9 +114,23 @@ fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
     }
     val profileIo = rememberGamepadProfileIo(persistConfig)
 
+    // v5.0：手柄总开关（球菜单“开启手柄”需感知当前态）
+    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
+    // v5.0：X11 组仅在 X11 屏显示（原 X11GlassFab 功能全部并入本球）
+    val inX11 = ShellController.screen == ShellController.Screen.X11
+
     var expanded by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
+
+    // v5.0：触摸方式快捷循环（模拟→触控板→直触，同原 X11 悬浮球）
+    var touchModeState by remember {
+        mutableStateOf(
+            com.termux.x11.LoriePreferences.prefs?.touchMode?.get()?.toIntOrNull() ?: 2
+        )
+    }
+    // v5.0：键盘切换需要 Context（组合层取，回调内使用）
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // 闭包内保持最新引用（拖动结束时读取基准位置）
     val baseX by rememberUpdatedState(GamepadController.ballPosX)
@@ -173,7 +198,7 @@ fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
             return pts.any { (x, y) -> GamepadController.isOverPadElement(x, y) }
         }
 
-        val menuHpx = menuHeightEstimate(density)
+        val menuHpx = menuHeightEstimate(density, inX11)
         val menuPad = with(density) { 10.dp.toPx() }
         val screenWpxTotal = with(density) { maxWidth.toPx() }
         val screenHpxTotal = with(density) { maxHeight.toPx() }
@@ -257,10 +282,25 @@ fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
                 }
                 BallMenuSectionDivider()
 
-                BallMenuItem(BallIconKind.GAMEPAD, if (GamepadController.visible) "收起手柄" else "显示手柄") {
-                    GamepadController.releaseAllKeys()
-                    GamepadController.visible = !GamepadController.visible
-                    persistConfig()
+                // v5.0：智能开关 —— 总开关关着则“开启手柄”（开总开关 +
+                // 显示），开着则切显示/收起（GamepadOverlay 已尊重 visible）。
+                // 修复：旧版只切 visible 但渲染层从不消费 → 按了没反应。
+                BallMenuItem(
+                    BallIconKind.GAMEPAD,
+                    when {
+                        !gamepadEnabled -> "开启手柄"
+                        GamepadController.visible -> "收起手柄"
+                        else -> "显示手柄"
+                    }
+                ) {
+                    if (!gamepadEnabled) {
+                        GamepadController.visible = true
+                        scope.launch { app.settingsStore.setGamepadEnabled(true) }
+                    } else {
+                        GamepadController.releaseAllKeys()
+                        GamepadController.visible = !GamepadController.visible
+                        persistConfig()
+                    }
                     expanded = false
                 }
                 BallMenuItem(BallIconKind.SETTINGS, "手柄设置") {
@@ -294,6 +334,61 @@ fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
                     GamepadController.editMode = false
                     expanded = false
                     scope.launch { app.settingsStore.setGamepadEnabled(false) }
+                }
+
+                // =====================================================
+                // v5.0：X11 组（用户：“把 x11 设置的悬浮球功能放在虚拟手柄
+                // 悬浮球里” —— 原 X11GlassFab 的全部功能并入本球，仅 X11
+                // 屏显示；修复双悬浮球并存不统一的问题）。
+                // =====================================================
+                if (inX11) {
+                    BallMenuSectionDivider()
+                    BallMenuItem(BallIconKind.KEYBOARD, "键盘") {
+                        val imm = context.getSystemService(
+                            android.content.Context.INPUT_METHOD_SERVICE
+                        ) as android.view.inputmethod.InputMethodManager
+                        @Suppress("DEPRECATION")
+                        imm.toggleSoftInput(android.view.inputmethod.InputMethodManager.SHOW_FORCED, 0)
+                        expanded = false
+                    }
+                    BallMenuItem(
+                        BallIconKind.TOUCH,
+                        "触摸方式·" + when (touchModeState) { 1 -> "触控板"; 3 -> "直接"; else -> "模拟" }
+                    ) {
+                        val lp = com.termux.x11.LoriePreferences.prefs
+                        if (lp != null) {
+                            val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
+                            touchModeState = next
+                            lp.touchMode.put(next.toString())
+                            com.linbox.apps.x11.SmartTouchBridge.applyTouchPrefs()
+                        }
+                        expanded = false
+                    }
+                    BallMenuItem(BallIconKind.FSGAME, "游戏全屏") {
+                        com.termux.x11.X11InputHub.sendAltEnter()
+                        expanded = false
+                    }
+                    BallMenuItem(BallIconKind.CYCLE, "切换窗口") {
+                        com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
+                        expanded = false
+                    }
+                    BallMenuItem(
+                        BallIconKind.FULLSCREEN,
+                        if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏"
+                    ) {
+                        val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
+                        com.linbox.apps.x11.X11UiPrefs.fullscreen = v
+                        com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
+                        expanded = false
+                    }
+                    BallMenuItem(BallIconKind.GEAR, "X11 设置") {
+                        com.linbox.apps.x11.X11SettingsBridge.requestShow()
+                        expanded = false
+                    }
+                    BallMenuItem(BallIconKind.HOME, "回主页", danger = false) {
+                        ShellController.showHome()
+                        expanded = false
+                    }
                 }
             }
         }
@@ -489,8 +584,11 @@ private fun BallMenuItem(
     }
 }
 
-/** 菜单图标类型（v3.4.6）。 */
-private enum class BallIconKind { GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE }
+/** 菜单图标类型（v3.4.6；v5.0 增 X11 组七枚）。 */
+private enum class BallIconKind {
+    GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE,
+    KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME
+}
 
 /** 图标配色（危险项统一红系）。 */
 private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF8A80) else when (this) {
@@ -500,6 +598,13 @@ private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF
     BallIconKind.SAVE -> Color(0xFF7FE8DC)
     BallIconKind.FOLDER -> Color(0xFF9AD8F5)
     BallIconKind.CLOSE -> Color(0xFFFF8A80)
+    BallIconKind.KEYBOARD -> Color(0xFF8FD6FF)
+    BallIconKind.TOUCH -> Color(0xFFFFB86C)
+    BallIconKind.FSGAME -> Color(0xFF7CE87C)
+    BallIconKind.CYCLE -> Color(0xFFC7A6FF)
+    BallIconKind.FULLSCREEN -> Color(0xFF6BD4FF)
+    BallIconKind.GEAR -> Color(0xFFB8C7D9)
+    BallIconKind.HOME -> Color(0xFFF2A6C4)
 }
 
 /**
@@ -589,13 +694,103 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color) {
                 drawLine(tint, Offset(7.2f * u, 7.2f * u), Offset(14.8f * u, 14.8f * u), s.width)
                 drawLine(tint, Offset(14.8f * u, 7.2f * u), Offset(7.2f * u, 14.8f * u), s.width)
             }
+            // v5.0 X11 组：键盘（外框 + 三排键点）
+            BallIconKind.KEYBOARD -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3.0f * u, 6.2f * u),
+                    size = Size(16.0f * u, 9.6f * u),
+                    cornerRadius = CornerRadius(1.4f * u, 1.4f * u),
+                    style = s
+                )
+                for (row in 0..2) {
+                    for (col in 0..4) {
+                        drawCircle(
+                            color = tint,
+                            radius = 0.55f * u,
+                            center = Offset((5.2f + col * 2.9f) * u, (8.6f + row * 2.4f) * u)
+                        )
+                    }
+                }
+            }
+            // 触摸方式：手指点击波纹（指尖 + 两圈波）
+            BallIconKind.TOUCH -> {
+                drawCircle(color = tint, radius = 1.0f * u, center = Offset(11f * u, 7.4f * u))
+                drawCircle(color = tint, radius = 3.2f * u, center = Offset(11f * u, 7.4f * u), style = s)
+                drawCircle(color = tint, radius = 5.6f * u, center = Offset(11f * u, 7.4f * u), style = s)
+                drawLine(tint, Offset(11f * u, 8.4f * u), Offset(11f * u, 15.8f * u), s.width)
+            }
+            // 游戏全屏：四角括号 + 中心箭头
+            BallIconKind.FSGAME -> {
+                drawLine(tint, Offset(4.0f * u, 7.0f * u), Offset(4.0f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(4.0f * u, 4.4f * u), Offset(7.4f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(18.0f * u, 15.0f * u), Offset(18.0f * u, 17.6f * u), s.width)
+                drawLine(tint, Offset(18.0f * u, 17.6f * u), Offset(14.6f * u, 17.6f * u), s.width)
+                drawLine(tint, Offset(7.2f * u, 14.8f * u), Offset(14.8f * u, 7.2f * u), s.width)
+                drawLine(tint, Offset(14.8f * u, 7.2f * u), Offset(14.8f * u, 11.4f * u), s.width)
+                drawLine(tint, Offset(14.8f * u, 7.2f * u), Offset(10.6f * u, 7.2f * u), s.width)
+            }
+            // 切窗：两层叠框
+            BallIconKind.CYCLE -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(4.0f * u, 6.4f * u),
+                    size = Size(10.4f * u, 9.6f * u),
+                    cornerRadius = CornerRadius(1.2f * u, 1.2f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(8.0f * u, 9.2f * u), Offset(8.0f * u, 7.4f * u), s.width)
+                drawLine(tint, Offset(8.0f * u, 7.4f * u), Offset(10.6f * u, 7.4f * u), s.width)
+                drawLine(tint, Offset(8.0f * u, 7.4f * u), Offset(9.4f * u, 6.0f * u), s.width)
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(8.6f * u, 10.8f * u),
+                    size = Size(9.4f * u, 8.8f * u),
+                    cornerRadius = CornerRadius(1.2f * u, 1.2f * u),
+                    style = s
+                )
+            }
+            // 全屏：四角外扩箭头
+            BallIconKind.FULLSCREEN -> {
+                drawLine(tint, Offset(4.4f * u, 8.4f * u), Offset(4.4f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(4.4f * u, 4.4f * u), Offset(8.4f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(17.6f * u, 13.6f * u), Offset(17.6f * u, 17.6f * u), s.width)
+                drawLine(tint, Offset(17.6f * u, 17.6f * u), Offset(13.6f * u, 17.6f * u), s.width)
+                drawLine(tint, Offset(17.6f * u, 8.4f * u), Offset(17.6f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(17.6f * u, 4.4f * u), Offset(13.6f * u, 4.4f * u), s.width)
+                drawLine(tint, Offset(4.4f * u, 13.6f * u), Offset(4.4f * u, 17.6f * u), s.width)
+                drawLine(tint, Offset(4.4f * u, 17.6f * u), Offset(8.4f * u, 17.6f * u), s.width)
+            }
+            // X11 设置：滑杆（两条横杆 + 圆钮）
+            BallIconKind.GEAR -> {
+                drawLine(tint, Offset(4.2f * u, 8.2f * u), Offset(17.8f * u, 8.2f * u), s.width)
+                drawCircle(color = tint, radius = 1.8f * u, center = Offset(13.4f * u, 8.2f * u))
+                drawLine(tint, Offset(4.2f * u, 14.2f * u), Offset(17.8f * u, 14.2f * u), s.width)
+                drawCircle(color = tint, radius = 1.8f * u, center = Offset(8.6f * u, 14.2f * u))
+            }
+            // 回主页：屋顶 + 墙体
+            BallIconKind.HOME -> {
+                drawLine(tint, Offset(4.4f * u, 10.6f * u), Offset(11f * u, 5.4f * u), s.width)
+                drawLine(tint, Offset(11f * u, 5.4f * u), Offset(17.6f * u, 10.6f * u), s.width)
+                drawLine(tint, Offset(6.2f * u, 9.4f * u), Offset(6.2f * u, 16.4f * u), s.width)
+                drawLine(tint, Offset(15.8f * u, 9.4f * u), Offset(15.8f * u, 16.4f * u), s.width)
+                drawLine(tint, Offset(6.2f * u, 16.4f * u), Offset(15.8f * u, 16.4f * u), s.width)
+                drawLine(tint, Offset(9.8f * u, 16.4f * u), Offset(9.8f * u, 12.4f * u), s.width)
+                drawLine(tint, Offset(9.8f * u, 12.4f * u), Offset(12.2f * u, 12.4f * u), s.width)
+                drawLine(tint, Offset(12.2f * u, 12.4f * u), Offset(12.2f * u, 16.4f * u), s.width)
+            }
         }
     }
 }
 
 /**
- * 菜单高度估算（v3.4.6：标题头 + 6 项 + 3 分隔线 + 边距 ≈ 360dp），
+ * 菜单高度估算（v3.4.6：标题头 + 6 项 + 3 分隔线 + 边距 ≈ 360dp；
+ * v5.0 X11 屏再加 X11 组 7 项 + 1 分隔线 ≈ 380dp），
  * 用于下半屏时菜单翻到球上方 / 与手柄元素的碰撞检测。
  */
-private fun menuHeightEstimate(density: androidx.compose.ui.unit.Density): Float =
-    with(density) { 360.dp.toPx() }
+private fun menuHeightEstimate(
+    density: androidx.compose.ui.unit.Density,
+    withX11Group: Boolean = false
+): Float = with(density) {
+    (if (withX11Group) 740.dp else 360.dp).toPx()
+}

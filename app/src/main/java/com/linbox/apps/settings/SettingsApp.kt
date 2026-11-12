@@ -54,6 +54,7 @@ import com.linbox.LinBoxApp
 import com.linbox.apps.terminal.TerminalKeepAliveService
 import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.shell.ShellController
+import com.linbox.core.theme.LinShellTheme
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.util.L
 import kotlinx.coroutines.Dispatchers
@@ -87,82 +88,138 @@ fun SettingsScreen() {
 // 路由
 // ============================================================
 
-/** 右侧内容路由（子页优先） */
+/** 子页路由（v5.0：键盘子页优先） */
 private sealed interface SettingsRoute {
     data object Home : SettingsRoute
     data object Keyboard : SettingsRoute
 }
 
-private enum class NavSection(val id: String, val label: String, val desc: String) {
-    DISPLAY("display", "显示", "缩放、方向、刘海屏"),
-    PERSONALIZATION("personalization", "终端背景", "背景色、自定义图片、透明度、语言"),
-    INPUT("input", "输入", "虚拟键盘"),
-    GAMEPAD("gamepad", "游戏手柄", "虚拟手柄开关与布局设置"),
-    DEVELOPER("developer", "开发者选项", "进程保护、后台存活"),
-    ABOUT("about", "关于", "应用与设备信息")
+/**
+ * v5.0（安卓化重制）：设置页 —— 单列滚动 + 分组卡片。
+ *
+ * 用户需求："设置里也不要那种 windows 的设置界面，把所有还有的
+ * 设置都放在下方设置栏" ——
+ * - 左右分栏（Windows 设置风）废弃，全部分组依序排在单列里：
+ *   显示 / 个性化 / 输入 / 游戏手柄 / 容器 / X11 / 开发者选项 / 关于；
+ * - 底部导航常驻（"设置"即底部导航目的地）；
+ * - 主题统一 LinShellTheme 暗色玻璃（与主页/游戏库/容器页一致）。
+ */
+@Composable
+private fun SettingsContent() {
+    var route by remember { mutableStateOf<SettingsRoute>(SettingsRoute.Home) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(LinShellTheme.bg)
+    ) {
+        when (route) {
+            SettingsRoute.Keyboard -> {
+                KeyboardSettingsPage(onBack = { route = SettingsRoute.Home })
+            }
+            SettingsRoute.Home -> {
+                // ===== 安卓 app bar =====
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "设置",
+                            color = LinShellTheme.textPrimary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "显示 · 输入 · 手柄 · 容器 · X11 · 开发者 · 关于",
+                            color = LinShellTheme.textSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                // ===== 单列分组（全部设置）=====
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 14.dp)
+                ) {
+                    DisplaySection()
+                    PersonalizationSection()
+                    InputSection(onOpenKeyboard = { route = SettingsRoute.Keyboard })
+                    GamepadSection()
+                    ContainerSection()
+                    X11Section()
+                    DeveloperSection()
+                    AboutSection()
+                    Spacer(Modifier.height(24.dp))
+                }
+
+                // v5.0：底部导航常驻（设置即底部导航目的地，与主页/
+                // 游戏库/高级一致；“所有设置都放在下方设置栏”）
+                com.linbox.shellui.ShellBottomBar(current = com.linbox.core.shell.ShellController.Screen.SETTINGS)
+            }
+        }
+    }
+}
+
+// ============================================================
+// 容器 / X11 分组（v5.0 新增：全部设置收编进底部导航"设置"页）
+// ============================================================
+
+@Composable
+private fun ContainerSection() {
+    SectionHeader("容器", "Bionic 容器高级设置与体检")
+
+    SettingsCard(
+        icon = Icons.Default.Memory,
+        iconBackgroundColor = Color(0xFF4E7CFF),
+        title = "容器高级设置",
+        subtitle = "DY / FEX / Box64 / Wine 安装 / MangoHud / 生态配置",
+        onClick = { com.linbox.core.shell.ShellController.openContainers(page = "advanced") }
+    )
+    Spacer(Modifier.height(8.dp))
+    SettingsCard(
+        icon = Icons.Default.Shield,
+        iconBackgroundColor = Color(0xFF34C759),
+        title = "容器体检",
+        subtitle = "rootfs / X11 / wine / box64 / FEX 探活",
+        onClick = { com.linbox.core.shell.ShellController.openContainers(page = "doctor") }
+    )
 }
 
 @Composable
-private fun SettingsContent() {
-    val theme = LocalWinTheme.current
-    var section by remember { mutableStateOf(NavSection.DISPLAY) }
-    var route by remember { mutableStateOf<SettingsRoute>(SettingsRoute.Home) }
+private fun X11Section() {
+    val showAdditionalKbd = com.linbox.apps.x11.X11UiPrefs.showAdditionalKbd
 
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(theme.windowBackgroundColor)
-    ) {
-        // ===== 左侧导航 =====
-        Column(
-            modifier = Modifier
-                .width(200.dp)
-                .fillMaxHeight()
-                .background(theme.cardBackgroundColor)
-                .verticalScroll(rememberScrollState())
-                .padding(8.dp)
-        ) {
-            Text(
-                "LinBox 设置",
-                color = if (theme.isDark) Color.White else Color.Black,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 12.dp)
-            )
-            NavSection.entries.forEach { item ->
-                SettingsNavItem(
-                    label = L(item.label),
-                    active = section == item && route == SettingsRoute.Home,
-                    onClick = {
-                        section = item
-                        route = SettingsRoute.Home
-                    }
-                )
+    SectionHeader("X11", "X11 图形页输入辅助")
+
+    SettingsCard(
+        icon = Icons.Default.Keyboard,
+        iconBackgroundColor = Color(0xFF6BD4FF),
+        title = "附加键盘栏",
+        subtitle = if (showAdditionalKbd) "已开启 · X11 画面底部 ESC/TAB/方向键行"
+        else "已关闭 · 开启后 X11 画面底部显示快捷键行",
+        trailingContent = {
+            ToggleSwitch(showAdditionalKbd) { v ->
+                // 双写：内存态即时生效 + LoriePreferences 持久化
+                com.linbox.apps.x11.X11UiPrefs.showAdditionalKbd = v
+                com.termux.x11.LoriePreferences.prefs?.showAdditionalKbd?.put(v)
             }
         }
-
-        // ===== 右侧内容 =====
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 16.dp)
-        ) {
-            when (route) {
-                SettingsRoute.Home -> when (section) {
-                    NavSection.DISPLAY -> DisplaySection()
-                    NavSection.PERSONALIZATION -> PersonalizationSection()
-                    NavSection.INPUT -> InputSection(onOpenKeyboard = { route = SettingsRoute.Keyboard })
-                    NavSection.GAMEPAD -> GamepadSection()
-                    NavSection.DEVELOPER -> DeveloperSection()
-                    NavSection.ABOUT -> AboutSection()
-                }
-                SettingsRoute.Keyboard -> KeyboardSettingsPage(onBack = { route = SettingsRoute.Home })
-            }
-            Spacer(Modifier.height(24.dp))
-        }
-    }
+    )
+    Spacer(Modifier.height(8.dp))
+    SettingsCard(
+        icon = Icons.Default.Settings,
+        iconBackgroundColor = Color(0xFF8A5CFF),
+        title = "X11 显示设置",
+        subtitle = "分辨率 / 触摸方式 / 全屏 / 保持亮屏（悬浮球菜单 → X11 设置）",
+        onClick = { com.linbox.core.shell.ShellController.showX11() }
+    )
 }
 
 // ============================================================
@@ -177,13 +234,13 @@ private fun SettingsNavItem(label: String, active: Boolean, onClick: () -> Unit)
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
-            .background(if (active) theme.accentColor.copy(alpha = 0.1f) else Color.Transparent)
+            .background(if (active) LinShellTheme.blue.copy(alpha = 0.1f) else Color.Transparent)
             .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             label,
-            color = if (active) theme.accentColor else (if (theme.isDark) Color.White else Color.Black),
+            color = if (active) LinShellTheme.blue else (LinShellTheme.textPrimary),
             fontSize = 13.sp,
             fontWeight = if (active) FontWeight.Medium else FontWeight.Normal
         )
@@ -195,7 +252,7 @@ internal fun SectionHeader(title: String, description: String? = null) {
     val theme = LocalWinTheme.current
     Text(
         L(title),
-        color = if (theme.isDark) Color.White else Color.Black,
+        color = LinShellTheme.textPrimary,
         fontSize = 24.sp,
         fontWeight = FontWeight.Bold
     )
@@ -203,7 +260,7 @@ internal fun SectionHeader(title: String, description: String? = null) {
         Spacer(Modifier.height(4.dp))
         Text(
             L(description),
-            color = theme.secondaryTextColor,
+            color = LinShellTheme.textSecondary,
             fontSize = 12.sp
         )
     }
@@ -227,7 +284,7 @@ internal fun SettingsCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .clickable(enabled = onClick != null, onClick = { onClick?.invoke() })
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -250,14 +307,14 @@ internal fun SettingsCard(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 title,
-                color = if (theme.isDark) Color.White else Color.Black,
+                color = LinShellTheme.textPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(Modifier.height(2.dp))
             Text(
                 subtitle,
-                color = theme.secondaryTextColor,
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp
             )
         }
@@ -280,11 +337,11 @@ internal fun SegmentedOption(label: String, selected: Boolean, onClick: () -> Un
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(
-                if (selected) theme.accentColor.copy(alpha = 0.18f) else theme.cardBackgroundColor
+                if (selected) LinShellTheme.blue.copy(alpha = 0.18f) else LinShellTheme.surface
             )
             .border(
                 1.dp,
-                if (selected) theme.accentColor else theme.dividerColor,
+                if (selected) LinShellTheme.blue else LinShellTheme.cardBorder,
                 RoundedCornerShape(6.dp)
             )
             .clickable(onClick = onClick)
@@ -292,7 +349,7 @@ internal fun SegmentedOption(label: String, selected: Boolean, onClick: () -> Un
     ) {
         Text(
             label,
-            color = if (selected) theme.accentColor else theme.secondaryTextColor,
+            color = if (selected) LinShellTheme.blue else LinShellTheme.textSecondary,
             fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
         )
@@ -306,13 +363,13 @@ internal fun AboutRow(label: String, value: String) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = if (theme.isDark) Color.White else Color.Black, fontSize = 12.sp)
-        Text(value, color = theme.secondaryTextColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, color = LinShellTheme.textPrimary, fontSize = 12.sp)
+        Text(value, color = LinShellTheme.textSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
     Spacer(Modifier.height(4.dp))
 }
@@ -354,11 +411,11 @@ private fun DisplaySection() {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .padding(12.dp)
     ) {
         Column {
-            Text("UI 缩放", color = if (theme.isDark) Color.White else Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("UI 缩放", color = LinShellTheme.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Slider(
@@ -368,12 +425,12 @@ private fun DisplaySection() {
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(12.dp))
-                Text("${(uiScale * 100).roundToInt()}%", color = theme.secondaryTextColor, fontSize = 11.sp)
+                Text("${(uiScale * 100).roundToInt()}%", color = LinShellTheme.textSecondary, fontSize = 11.sp)
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "缩放全部界面（窗口、文字、虚拟键盘与手柄），立即生效。100% 为紧凑布局，最大 300%。",
-                color = theme.secondaryTextColor,
+                "缩放全部管理界面（窗口、文字、弹窗），立即生效；悬浮球与手柄按键保持自身尺寸。当前基准已放大至 150%（v5.0），最大 300%。",
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp
             )
         }
@@ -385,11 +442,11 @@ private fun DisplaySection() {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .padding(12.dp)
     ) {
         Column {
-            Text("显示方向", color = if (theme.isDark) Color.White else Color.Black, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("显示方向", color = LinShellTheme.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 SegmentedOption("自动", orientation == "auto") { scope0.launch { app.settingsStore.setDisplayOrientation("auto") } }
@@ -494,7 +551,7 @@ private fun PersonalizationSection() {
                 Text(
                     if (bgImageEnabled) "已启用：图片暗化叠加，保证文字可读"
                     else "未设置：使用上方纯色背景",
-                    color = theme.secondaryTextColor,
+                    color = LinShellTheme.textSecondary,
                     fontSize = 11.sp
                 )
                 Spacer(Modifier.height(8.dp))
@@ -520,13 +577,13 @@ private fun PersonalizationSection() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "背景向黑底淡化，文字不受影响",
-                color = theme.secondaryTextColor,
+                color = LinShellTheme.textSecondary,
                 fontSize = 11.sp,
                 modifier = Modifier.weight(1f)
             )
             Text(
                 "${(shown * 100).roundToInt()}%",
-                color = if (theme.isDark) Color.White else Color.Black,
+                color = LinShellTheme.textPrimary,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
             )
@@ -558,12 +615,12 @@ private fun SettingsBlockCard(title: String, content: @Composable ColumnScope.()
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(theme.cardBackgroundColor)
+            .background(LinShellTheme.surface)
             .padding(12.dp)
     ) {
         Text(
             title,
-            color = if (theme.isDark) Color.White else Color.Black,
+            color = LinShellTheme.textPrimary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium
         )
@@ -587,13 +644,13 @@ private fun BgSwatch(label: String, colorKey: String, current: String, onClick: 
                 .background(color)
                 .border(
                     width = if (current == colorKey) 2.dp else 1.dp,
-                    color = if (current == colorKey) Color.White else theme.dividerColor,
+                    color = if (current == colorKey) Color.White else LinShellTheme.cardBorder,
                     shape = RoundedCornerShape(6.dp)
                 )
                 .clickable(onClick = onClick)
         )
         Spacer(Modifier.height(4.dp))
-        Text(label, color = theme.secondaryTextColor, fontSize = 10.sp)
+        Text(label, color = LinShellTheme.textSecondary, fontSize = 10.sp)
     }
 }
 
@@ -654,6 +711,9 @@ private fun GamepadSection() {
         trailingContent = {
             ToggleSwitch(gamepadEnabled) { v ->
                 scope0.launch { app.settingsStore.setGamepadEnabled(v) }
+                // v5.0：开启即显示手柄元素（旧版只开总开关，元素仍收起，
+                // 观感上“开关没反应”；球菜单可随时收起）。
+                if (v) com.linbox.core.input.gamepad.GamepadController.visible = true
             }
         }
     )
@@ -677,7 +737,7 @@ private fun GamepadSection() {
     Text(
         "提示：手柄元素会把触控动作映射为键盘按键（WASD/方向/空格等）或鼠标事件，" +
             "适用于 X11 窗口内运行的游戏；布局修改即时保存。",
-        color = theme.secondaryTextColor,
+        color = LinShellTheme.textSecondary,
         fontSize = 11.sp
     )
 }
@@ -906,7 +966,7 @@ private fun DeveloperSection() {
         "报错 9 说明：终端进程突然消失并提示 Killed（signal 9 / 退出码 9），" +
             "多为 Android 12+ 幽灵进程限制（单应用子进程数超限即被杀）或省电冻结所致。" +
             "开启「停止限制子进程」与「忽略电池优化」即可解决。",
-        color = theme.secondaryTextColor,
+        color = LinShellTheme.textSecondary,
         fontSize = 11.sp
     )
 

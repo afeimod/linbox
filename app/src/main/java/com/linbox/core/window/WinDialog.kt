@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -50,6 +51,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -203,7 +205,13 @@ fun WinDialog(
 
 /**
  * 弹窗层宿主：渲染所有弹窗（按 zIndex 排序，大者在上）。
- * 挂载于浮动窗口层之上、开始菜单/任务栏之下。
+ * 挂载于浮动窗口层之上、虚拟键盘/手柄层之下。
+ *
+ * v5.0（安卓化重制）：弹窗改为安卓 Material 对话框形态 ——
+ * - 居中显示（不再自由拖动），同刻多弹窗小级联错开；
+ * - 半透明遮罩暗化背景，点击遮罩关闭最顶层普通弹窗；
+ * - topEnd 规格（前缀构建日志等进度观察窗）仍固定右上角，
+ *   不加遮罩阻断（构建全程可自由点击 X11 画面）。
  */
 @Composable
 fun WinDialogHost(workAreaModifier: Modifier = Modifier) {
@@ -215,168 +223,134 @@ fun WinDialogHost(workAreaModifier: Modifier = Modifier) {
         val workW = constraints.maxWidth
         val workH = constraints.maxHeight
 
-        // 首帧定位：居中 + 顶部 12% 起步 + 级联错开（同刻多弹窗不重叠）；
-        // v3.2.29：topEnd 规格 → 右上角起步（进度观察窗不盖 X11 桌面）
-        dialogs.forEach { spec ->
-            if (spec.x < 0 || spec.y < 0) {
-                val wpx = with(density) { spec.width.roundToPx() }
-                val cascade = (WinDialogManager.cascadeIndex() - 1).coerceAtLeast(0)
-                if (spec.topEnd) {
-                    spec.x = (workW - wpx - with(density) { 12.dp.roundToPx() })
-                        .coerceIn(0, (workW - wpx).coerceAtLeast(0))
-                    spec.y = with(density) { 12.dp.roundToPx() } + cascade * 28
-                } else {
-                    spec.x = ((workW - wpx) / 2 + cascade * 32).coerceIn(0, (workW - wpx).coerceAtLeast(0))
-                    spec.y = (workH / 8 + cascade * 28).coerceIn(0, (workH / 2).coerceAtLeast(0))
-                }
-            }
+        // v5.0：安卓式遮罩 —— 存在普通弹窗时暗化背景；点击遮罩关闭
+        // 最顶层普通弹窗（topEnd 进度窗不拦截，也不被遮罩暗化逻辑关闭）
+        val dismissible = dialogs.filter { !it.topEnd }.maxByOrNull { it.zIndex }
+        if (dismissible != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(com.linbox.core.theme.LinShellTheme.scrim)
+                    .pointerInput(dismissible.id) {
+                        detectTapGestures { dismissible.onDismiss() }
+                    }
+            )
         }
 
-        dialogs.sortedBy { it.zIndex }.forEach { spec ->
+        dialogs.sortedBy { it.zIndex }.forEachIndexed { idx, spec ->
             key(spec.id) {
-                WinDialogFrame(spec, workW, workH)
+                WinDialogFrame(spec, workW, workH, idx)
             }
         }
     }
 }
 
 /**
- * 单个弹窗的框架：标题栏（图标 + 标题 + 关闭）+ 内容区。
- * 标题栏可拖动；任意按下即置前；位置钳制在工作区内。
+ * 单个弹窗的框架（v5.0 安卓化）：居中 + 28dp 大圆角 + 暗色玻璃底 +
+ * 安卓风标题行（图标 + 标题居左 + 圆形关闭钮居右）。
+ * topEnd 规格固定右上角；普通规格同刻多弹窗级联错开 24dp。
  */
 @Composable
 private fun BoxScope.WinDialogFrame(
     spec: WinDialogManager.Spec,
     workW: Int,
-    workH: Int
+    workH: Int,
+    cascadeIndex: Int
 ) {
-    val theme = LocalWinTheme.current
     val density = LocalDensity.current
 
-    // 宽度钳制：不超过工作区（扣两侧 8dp 边距），不小于 240dp
+    // 宽度钳制：不超过工作区（扣两侧 16dp 边距），不小于 280dp
     val frameWidth = with(density) {
-        val maxW = (workW - 16.dp.roundToPx()).toDp()
-        spec.width.coerceIn(240.dp, maxW)
+        val maxW = (workW - 32.dp.roundToPx()).toDp()
+        spec.width.coerceIn(280.dp, maxW)
     }
     val frameWpx = with(density) { frameWidth.roundToPx() }
-
-    // ===== 拖动（本地偏移，松手一次性提交 —— 与 WindowChrome 同方案）=====
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
 
     // 内容高度上限：工作区高的 82%（超出由弹窗内容自滚动）
     val maxContentH = with(density) { (workH * 0.82f).coerceAtLeast(0f).toDp() }
 
-    // v3.2.2：弹窗几何上报 —— WindowFocusHook 按几何直判落点：点弹窗 =
-    // 操作弹窗，不置前底下的应用窗口；弹窗关闭离开组合时注销。
+    // v3.2.2：弹窗几何上报 —— WindowFocusHook 按几何直判落点。
     DisposableEffect(spec.id) {
         onDispose { WindowFocusHook.reportDialog(spec.id, null) }
     }
 
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp)
+    val cascade = cascadeIndex * 24
+
     Box(
         modifier = Modifier
-            // 点击弹窗任意处 → 置前（Initial 阶段观察，不消费事件，
-            // 标题栏拖动/内容手势照常进行）
+            .align(if (spec.topEnd) Alignment.TopEnd else Alignment.Center)
+            .offset {
+                if (spec.topEnd) {
+                    IntOffset(
+                        -with(density) { 12.dp.roundToPx() },
+                        with(density) { 12.dp.roundToPx() } + cascade
+                    )
+                } else {
+                    IntOffset(cascade, cascade)
+                }
+            }
+            // 点击弹窗任意处 → 置前（Initial 阶段观察，不消费事件）
             .pointerInput(spec.id) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     WinDialogManager.focus(spec.id)
                 }
             }
-            .offset {
-                val maxX = (workW - frameWpx).coerceAtLeast(0)
-                val maxY = (workH - 120).coerceAtLeast(0)
-                val x = (spec.x + dragOffset.x.roundToInt()).coerceIn(0, maxX)
-                val y = (spec.y + dragOffset.y.roundToInt()).coerceIn(0, maxY)
-                IntOffset(x, y)
-            }
             .layout { measurable, constraints ->
-                // 修复：原写法把第二个参数（传入约束）命名为 _ 丢弃后，
-                // 函数体内却引用 constraints —— WinDialogFrame 的接收者是
-                // BoxScope 而非 BoxWithConstraintsScope，作用域内并无该标识符，
-                // 编译报 Unresolved reference。改为显式命名 constraints 即可。
                 val w = frameWpx.coerceAtMost(constraints.maxWidth)
                 val placeable = measurable.measure(Constraints.fixedWidth(w))
                 layout(w, placeable.height) { placeable.place(0, 0) }
             }
-            .shadow(theme.windowShadowElevation, theme.windowShape, clip = false)
-            .clip(theme.windowShape)
-            .background(theme.windowBackgroundColor)
-            .border(theme.windowBorderWidth, theme.windowBorderColor, theme.windowShape)
-            // v3.2.2：链尾上报最终布局位置（窗口坐标 Rect）
+            .shadow(18.dp, shape, clip = false)
+            .clip(shape)
+            .background(com.linbox.core.theme.LinShellTheme.surface)
+            .border(1.dp, com.linbox.core.theme.LinShellTheme.surfaceBorder, shape)
             .onGloballyPositioned { coords ->
                 WindowFocusHook.reportDialog(spec.id, WindowFocusHook.boundsOf(coords))
             }
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // ===== 标题栏 =====
+            // ===== 安卓风标题行 =====
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(theme.windowTitleBarHeight)
-                    .background(theme.windowTitleBarColor)
-                    .pointerInput(spec.id) {
-                        detectDragGestures(
-                            onDragStart = {
-                                WinDialogManager.focus(spec.id)
-                                dragOffset = Offset.Zero
-                            },
-                            onDragEnd = {
-                                if (dragOffset != Offset.Zero) {
-                                    val ny = (spec.y + dragOffset.y.roundToInt())
-                                        .coerceIn(0, (workH - 120).coerceAtLeast(0))
-                                    val nx = (spec.x + dragOffset.x.roundToInt())
-                                        .coerceIn(0, (workW - frameWpx).coerceAtLeast(0))
-                                    spec.x = nx
-                                    spec.y = ny
-                                }
-                                dragOffset = Offset.Zero
-                            },
-                            onDragCancel = { dragOffset = Offset.Zero }
-                        ) { change, dragAmount ->
-                            change.consume()
-                            dragOffset += dragAmount
-                        }
-                    }
-                    .pointerInput(spec.id) {
-                        detectTapGestures(onTap = { WinDialogManager.focus(spec.id) })
-                    },
+                    .padding(start = 20.dp, end = 10.dp, top = 10.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 左侧图标
+                // 左侧应用图标（28dp 圆角底）
                 Box(
                     modifier = Modifier
-                        .size(theme.windowTitleBarHeight)
-                        .padding(8.dp),
+                        .size(30.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(9.dp))
+                        .background(com.linbox.core.theme.LinShellTheme.blue.copy(alpha = 0.18f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    // 修复：spec.iconAsset 是 mutableStateOf 委托的可变属性，
-                    // 判空后直接传参会被并发修改打断，Kotlin 拒绝 smart cast。
-                    // 先拷贝到局部 val，判空与使用都基于同一不可变快照。
                     val iconAsset = spec.iconAsset
                     if (iconAsset != null) {
-                        IconPainter(iconAsset, size = 16.dp)
+                        IconPainter(iconAsset, size = 18.dp)
                     } else {
                         Box(
                             modifier = Modifier
-                                .size(16.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
-                                .background(theme.windowTitleBarIconColor)
+                                .size(8.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(com.linbox.core.theme.LinShellTheme.blue)
                         )
                     }
                 }
-
+                Spacer(Modifier.width(10.dp))
                 Text(
                     text = spec.title,
-                    color = theme.windowTitleBarTextColor,
-                    fontSize = theme.fontSizeBody,
-                    fontWeight = theme.fontWeightTitle,
+                    color = com.linbox.core.theme.LinShellTheme.textPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
 
-                // 关闭按钮（红 X，与窗口 chrome 一致）
-                DialogControlButton(icon = Icons.Default.Close, theme = theme, isClose = true) {
+                // 圆形关闭钮（Material 安卓风）
+                DialogControlButton(icon = Icons.Default.Close) {
                     spec.onDismiss()
                 }
             }
@@ -393,17 +367,17 @@ private fun BoxScope.WinDialogFrame(
     }
 }
 
-/** 弹窗标题栏控制按钮（外观与 WindowChrome.ControlButton 一致）。 */
+/** v5.0：弹窗关闭钮（Material 圆形，36dp 触摸目标）。 */
 @Composable
 private fun DialogControlButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    theme: com.linbox.core.theme.WinTheme,
-    isClose: Boolean = false,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .size(width = 46.dp, height = theme.windowTitleBarHeight)
+            .size(36.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Color(0x14FFFFFF))
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { onClick() })
             },
@@ -412,8 +386,8 @@ private fun DialogControlButton(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (isClose) Color(0xFFE81123) else theme.windowTitleBarTextColor,
-            modifier = Modifier.size(12.dp)
+            tint = com.linbox.core.theme.LinShellTheme.textSecondary,
+            modifier = Modifier.size(16.dp)
         )
     }
 }

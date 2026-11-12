@@ -976,18 +976,11 @@ internal fun launchContainer(
     }.start()
 }
 
-/** 打开容器管理器窗口（focus=选中容器；page=advanced/doctor 深链）。 */
+/** 打开容器管理器（v5.0 改全屏页：focus=选中容器；page=advanced/doctor 深链）。 */
 internal fun openManagerWindow(context: Context, focus: String? = null, page: String? = null) {
-    val args = buildMap {
-        focus?.let { put("focus", it) }
-        page?.let { put("page", it) }
-    }
-    WindowManager.get().openOrRestore(
-        appId = "wine-containers",
-        title = "Bionic 容器",
-        launchMode = com.linbox.core.window.LaunchMode.FLOATING,
-        launchArgs = args
-    )
+    // v5.0（用户：“容器创建和管理……改成安卓交互”）：不再以浮动窗口打开，
+    // 直接导航到容器管理器全屏页（底部导航常驻，安卓 app bar）。
+    ShellController.openContainers(focus = focus, page = page)
 }
 
 internal fun toast(context: Context, msg: String) {

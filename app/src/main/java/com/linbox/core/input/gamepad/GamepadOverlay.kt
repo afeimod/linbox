@@ -70,7 +70,11 @@ fun GamepadOverlay() {
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     // v2.32：X11 界面由 X11TouchSplitLayout 内的 Compose 宿主渲染，本层跳过
     if (!gamepadEnabled || ShellController.screen == ShellController.Screen.X11) return
-    GamepadOverlayContent()
+    // v5.0：手柄元素自带 sizeDp 尺寸语义（手柄设置里单独调节），
+    // 以基础密度渲染 —— 不随全局 UI 缩放（用户明确要求）。
+    com.linbox.core.theme.KeepBaseDensity {
+        GamepadOverlayContent()
+    }
 }
 
 /**
@@ -84,6 +88,20 @@ fun GamepadOverlayContent() {
     val app = LinBoxApp.get()
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     if (!gamepadEnabled) return
+
+    // v5.0（用户：“修复虚拟手柄悬浮球无法正常调用虚拟手柄开关”）：
+    // 渲染层真正消费 GamepadController.visible —— 旧版只改状态无任何消费
+    // 方，“显示手柄/收起手柄”按了没反应。收起时释放全部按键 + 清空
+    // 命中矩形（防联键 / 防陈旧矩形误吞触摸）。
+    if (!GamepadController.visible) {
+        SideEffect {
+            GamepadController.releaseAllKeys()
+            GamepadController.clearElementHits()
+            GamepadController.clearToolbarHit()
+            TrackpadRouter.registerPassthrough("gpToolbar", null)
+        }
+        return
+    }
 
     // 首次组合：加载持久化布局
     LaunchedEffect(Unit) {

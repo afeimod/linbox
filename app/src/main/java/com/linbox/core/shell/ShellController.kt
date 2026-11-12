@@ -15,14 +15,17 @@ import androidx.compose.runtime.setValue
  *   “我的游戏 共 N 款” + 添加游戏 + 搜索 + 打开/长按菜单。
  * - ADVANCED：高级页。终端、浏览器、容器高级设置（DY/FEX/Box/Wine 安装/
  *   MangoHud/生态配置）、容器体检、文件管理器、X11 / DAC 显示、应用设置。
+ * - CONTAINERS：v5.0 容器管理器全屏页（安卓化：不再以浮动窗口形式，
+ *   顶部安卓 app bar + 底部导航，容器列表 / 五选项卡 / 高级设置 / 体检）。
  * - TERMINAL：真实 Termux 终端（linbox 自有，未从 AnWind 移植）。
  * - X11：X11 图形页（linbox 自有；wine 容器的 X 服务广播到达时自动跳转，
  *   亦承载 `linbox-x11 :13` 终端侧会话）。
  * - DAC：DAC 显示器（winedac.drv 直合显示栈）。
- * - SETTINGS：应用设置（显示 / 终端背景 / 输入 / 手柄 / 开发者 / 关于）。
+ * - SETTINGS：应用设置（显示 / 输入 / 手柄 / 容器高级 / 开发者 / 关于，
+ *   v5.0 全部设置收进底部导航“设置”页，安卓风重制）。
  *
  * 底部导航（HOME / LIBRARY / ADVANCED 页内渲染）：[主页] [游戏库]
- * [(+)容器] [设置] [高级] —— 中间为蓝色 + 浮钮（打开容器管理器窗口），
+ * [(+)容器] [设置] [高级] —— 中间为蓝色 + 浮钮（进入容器管理器全屏页），
  * 原"我的"页由"高级"取代（终端 / 浏览器 / 容器高级设置）。
  *
  * 修改 screen 的入口：
@@ -32,10 +35,35 @@ import androidx.compose.runtime.setValue
  */
 object ShellController {
 
-    enum class Screen { HOME, LIBRARY, ADVANCED, TERMINAL, X11, DAC, SETTINGS }
+    enum class Screen { HOME, LIBRARY, ADVANCED, CONTAINERS, TERMINAL, X11, DAC, SETTINGS }
 
     var screen by mutableStateOf(Screen.HOME)
         private set
+
+    /**
+     * v5.0：容器管理器深链参数（进入 CONTAINERS 页一次性消费）。
+     *
+     * - focus：选中指定容器（首页卡片“配置”按钮 / 游戏库长按菜单）
+     * - page："advanced"（高级设置视图）/ "doctor"（容器体检）
+     * - autorun：启动器快捷方式自动运行指定容器
+     */
+    object ContainerNav {
+        var focus by mutableStateOf<String?>(null)
+        var page by mutableStateOf<String?>(null)
+        var autorun by mutableStateOf<String?>(null)
+
+        fun consume(): Map<String, String> {
+            val args = buildMap {
+                focus?.let { put("focus", it) }
+                page?.let { put("page", it) }
+                autorun?.let { put("autorun", it) }
+            }
+            focus = null
+            page = null
+            autorun = null
+            return args
+        }
+    }
 
     /** 主页（游戏容器主页）。 */
     fun showHome() {
@@ -50,6 +78,19 @@ object ShellController {
     /** 高级页（终端 / 浏览器 / 容器高级设置）。 */
     fun showAdvanced() {
         screen = Screen.ADVANCED
+    }
+
+    /** v5.0：容器管理器全屏页（focus=选中容器；page=advanced/doctor；autorun=快捷方式自动运行）。 */
+    fun openContainers(focus: String? = null, page: String? = null, autorun: String? = null) {
+        ContainerNav.focus = focus
+        ContainerNav.page = page
+        ContainerNav.autorun = autorun
+        screen = Screen.CONTAINERS
+    }
+
+    /** v5.0：容器管理器页内返回（返回上一页或主页）。 */
+    fun closeContainers() {
+        screen = Screen.HOME
     }
 
     fun showTerminal() {
