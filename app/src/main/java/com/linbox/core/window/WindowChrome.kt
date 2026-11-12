@@ -305,7 +305,9 @@ fun WindowChrome(
                     contentAlignment = Alignment.Center
                 ) {
                     if (appDef != null) {
-                        com.linbox.core.desktop.IconPainter(appDef.iconAsset, size = 16.dp)
+                        // v3.4.7：IconPainter 实际位于 com.linbox.core.window（与本文
+                        // 件同包），旧引用误写成不存在的 com.linbox.core.desktop。
+                        com.linbox.core.window.IconPainter(appDef.iconAsset, size = 16.dp)
                     } else {
                         Box(
                             modifier = Modifier

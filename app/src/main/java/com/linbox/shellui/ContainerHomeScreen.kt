@@ -890,7 +890,7 @@ internal fun ExeIcon(container: ContainerData, size: androidx.compose.ui.unit.Dp
                 .background(Color.White.copy(alpha = 0.10f)),
             contentAlignment = Alignment.Center
         ) {
-            Text("📦", fontSize = size.value * 0.5f.sp)
+            Text("📦", fontSize = (size.value * 0.5f).sp)
         }
     }
 }

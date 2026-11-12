@@ -9,6 +9,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream;
 import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream;
@@ -25,7 +27,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 public abstract class TarCompressorUtils {
-    public enum Type {XZ, ZSTD}
+    // v3.4.7：补 GZIP（tar.gz）与 PLAIN（纯 tar）—— LinBoxTzstAssets /
+    // WineRegistry 的魔数嗅探会返回全部四种类型，枚举缺成员即编译失败。
+    public enum Type {XZ, ZSTD, GZIP, PLAIN}
 
     private static void addFile(ArchiveOutputStream tar, File file, String entryName) {
         try {
@@ -179,6 +183,14 @@ public abstract class TarCompressorUtils {
         else if (type == Type.ZSTD) {
             return new ZstdCompressorInputStream(source);
         }
+        else if (type == Type.GZIP) {
+            return new GzipCompressorInputStream(source);
+        }
+        else if (type == Type.PLAIN) {
+            // 纯 tar：无压缩层，直接透传（保持缓冲语义一致）
+            return source instanceof BufferedInputStream ? source
+                    : new BufferedInputStream(source, StreamUtils.BUFFER_SIZE);
+        }
         return null;
     }
 
@@ -188,6 +200,12 @@ public abstract class TarCompressorUtils {
         }
         else if (type == Type.ZSTD) {
             return new ZstdCompressorOutputStream(new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE), level);
+        }
+        else if (type == Type.GZIP) {
+            return new GzipCompressorOutputStream(new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE));
+        }
+        else if (type == Type.PLAIN) {
+            return new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE);
         }
         return null;
     }

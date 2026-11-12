@@ -74,6 +74,7 @@ import kotlinx.coroutines.withContext
  *    设置卡片图片 / 设为默认 / 固定到启动器 / 容器管理器）
  * 5. 底部导航：[主页] [游戏库] [(+)容器] [设置] [高级]
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GameLibraryScreen() {
     val context = LocalContext.current

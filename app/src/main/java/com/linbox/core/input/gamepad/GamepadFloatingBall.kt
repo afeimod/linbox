@@ -93,10 +93,15 @@ import kotlin.math.roundToInt
  * 完全退出，设置页/通知快捷开关可重新开启。
  */
 @Composable
-fun GamepadFloatingBall(onPersistConfig: () -> Unit) {
+fun GamepadFloatingBall(onPersistConfig: (() -> Unit)? = null) {
     val app = LinBoxApp.get()
     val scope = rememberCoroutineScope()
-    val profileIo = rememberGamepadProfileIo(onPersistConfig)
+    // v3.4.7：调用方（LinBoxShell）不传回调时，缺省走标准持久化
+    // （与 GamepadOverlay.persistConfig 同源：写 gamepad_config v3）。
+    val persistConfig: () -> Unit = onPersistConfig ?: {
+        scope.launch { app.settingsStore.setGamepadConfig(GamepadController.toJson()) }
+    }
+    val profileIo = rememberGamepadProfileIo(persistConfig)
 
     var expanded by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
@@ -255,7 +260,7 @@ fun GamepadFloatingBall(onPersistConfig: () -> Unit) {
                 BallMenuItem(BallIconKind.GAMEPAD, if (GamepadController.visible) "收起手柄" else "显示手柄") {
                     GamepadController.releaseAllKeys()
                     GamepadController.visible = !GamepadController.visible
-                    onPersistConfig()
+                    persistConfig()
                     expanded = false
                 }
                 BallMenuItem(BallIconKind.SETTINGS, "手柄设置") {
@@ -359,7 +364,7 @@ fun GamepadFloatingBall(onPersistConfig: () -> Unit) {
                             GamepadController.ballPosX = nx
                             GamepadController.ballPosY = ny
                             dragOffset = Offset.Zero
-                            onPersistConfig()
+                            persistConfig()
                         },
                         onDragCancel = { dragOffset = Offset.Zero }
                     )

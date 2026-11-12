@@ -156,7 +156,7 @@ fun GlassCircleButton(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(emoji, fontSize = size.value * 0.46f.sp, color = palette.topBarButtonIcon)
+        Text(emoji, fontSize = (size.value * 0.46f).sp, color = palette.topBarButtonIcon)
     }
 }
 
