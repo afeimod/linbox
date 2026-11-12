@@ -146,7 +146,7 @@ fun DacScreen() {
                     .size(34.dp)
                     .background(Color(0xB3141414), CircleShape)
                     .border(1.dp, Color(0x33FFFFFF), CircleShape)
-                    .clickable { ShellController.showTerminal() },
+                    .clickable { ShellController.showHome() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(

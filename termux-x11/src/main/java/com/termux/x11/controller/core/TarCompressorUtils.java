@@ -9,8 +9,6 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.archivers.tar.TarConstants;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
 import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream;
 import org.apache.commons.compress.compressors.zstandard.ZstdCompressorInputStream;
@@ -27,21 +25,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 public abstract class TarCompressorUtils {
-    /**
-     * 归档压缩类型。
-     *
-     * XZ / ZSTD / GZIP / PLAIN：
-     *  - XZ    : tar.xz（.tar.xz / .txz）
-     *  - ZSTD  : tar.zst（.tzst / .tar.zst）
-     *  - GZIP  : tar.gz（.tar.gz / .tgz），支持多成员（concatenated）gzip
-     *  - PLAIN : 未压缩 tar（.tar）
-     *
-     * v3.4.x：:app 侧（LinBoxTzstAssets / WineRegistry）按魔数嗅探归档真实
-     * 类型后回传给 extract()，因此枚举必须覆盖 gzip 与纯 tar 两种形态，
-     * 否则解压路径拿不到对应解压器（此前只有 XZ/ZSTD，gzip/纯 tar 直接
-     * Unresolved reference 或解压失败）。
-     */
-    public enum Type {XZ, ZSTD, GZIP, PLAIN}
+    public enum Type {XZ, ZSTD}
 
     private static void addFile(ArchiveOutputStream tar, File file, String entryName) {
         try {
@@ -195,17 +179,7 @@ public abstract class TarCompressorUtils {
         else if (type == Type.ZSTD) {
             return new ZstdCompressorInputStream(source);
         }
-        else if (type == Type.GZIP) {
-            // 多成员（concatenated）gzip 一并解开：部分打包器会分块压缩后拼接
-            return new GzipCompressorInputStream(source, true);
-        }
-        else if (type == Type.PLAIN) {
-            // 未压缩 tar：直通，不套任何解压器
-            return source;
-        }
-        // 未知类型：抛 IOException（extract() 会转成 false），
-        // 不要再返回 null —— null 会让 TarArchiveInputStream 抛 NPE 逃逸出 catch
-        throw new IOException("Unsupported archive type: " + type);
+        return null;
     }
 
     private static OutputStream getCompressorOutputStream(Type type, File destination, int level) throws IOException {
@@ -215,13 +189,6 @@ public abstract class TarCompressorUtils {
         else if (type == Type.ZSTD) {
             return new ZstdCompressorOutputStream(new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE), level);
         }
-        else if (type == Type.GZIP) {
-            return new GzipCompressorOutputStream(new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE));
-        }
-        else if (type == Type.PLAIN) {
-            // 未压缩 tar：直接写文件流
-            return new BufferedOutputStream(new FileOutputStream(destination), StreamUtils.BUFFER_SIZE);
-        }
-        throw new IOException("Unsupported archive type: " + type);
+        return null;
     }
 }

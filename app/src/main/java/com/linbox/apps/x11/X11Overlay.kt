@@ -172,7 +172,7 @@ fun X11GlassFab(
             },
             X11FabItem(if (fullscreen) "退出全屏" else "全屏", "□") { onToggleFullscreen() },
             X11FabItem("X11 设置", "⚙") { onOpenSettings() },
-            X11FabItem("回终端", "⌂") { onBackToTerminal() }
+            X11FabItem("回主页", "⌂") { onBackToTerminal() }
         )
     }
 

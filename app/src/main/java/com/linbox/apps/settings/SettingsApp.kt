@@ -77,7 +77,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen() {
     androidx.activity.compose.BackHandler(enabled = true) {
-        ShellController.showTerminal()
+        // v4.0：设置已是底部导航目的地，返回回主页
+        ShellController.showHome()
     }
     SettingsContent()
 }

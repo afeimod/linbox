@@ -155,7 +155,7 @@ fun X11Screen() {
 
     // 返回键：真全屏时先退全屏；否则回终端主页
     BackHandler(enabled = trueFs) { setFullscreen(false) }
-    BackHandler(enabled = !trueFs) { ShellController.showTerminal() }
+    BackHandler(enabled = !trueFs) { ShellController.showHome() }
 
     // ------------------------------------------------------------------
     // v2.25 窗口效果（termux-x11 keepScreenOn / forceOrientation / hideCutout）
@@ -401,7 +401,7 @@ fun X11Screen() {
                     fullscreen = trueFs,
                     onToggleFullscreen = { setFullscreen(!trueFs) },
                     onOpenSettings = { X11SettingsBridge.requestShow() },
-                    onBackToTerminal = { ShellController.showTerminal() }
+                    onBackToTerminal = { ShellController.showHome() }
                 )
             }
         }

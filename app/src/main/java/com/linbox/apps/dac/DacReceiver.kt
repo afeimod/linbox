@@ -55,7 +55,7 @@ class DacReceiver : BroadcastReceiver() {
                 if (com.linbox.core.shell.ShellController.screen ==
                     com.linbox.core.shell.ShellController.Screen.DAC
                 ) {
-                    com.linbox.core.shell.ShellController.showTerminal()
+                    com.linbox.core.shell.ShellController.showHome()
                 }
             }
             ACTION_DAC_STATUS -> {

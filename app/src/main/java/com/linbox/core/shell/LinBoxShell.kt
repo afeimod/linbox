@@ -7,7 +7,6 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -20,7 +19,6 @@ import com.linbox.core.input.MouseController
 import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.VirtualKeyboardOverlay
-import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.input.gamepad.GamepadFloatingBall
 import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
@@ -28,14 +26,15 @@ import com.linbox.core.window.WinDialogHost
 import com.linbox.core.window.WindowHost
 import com.linbox.shellui.AdvancedScreen
 import com.linbox.shellui.ContainerHomeScreen
-import kotlinx.coroutines.launch
+import com.linbox.shellui.GameLibraryScreen
 
 /**
  * LinBox 壳层：**以 Wine 容器管理为主页** 的直接性容器管理界面。
  *
  * 结构（自底向上）：
  * 1. 当前页面（ShellController.screen 决定）：
- *    - HOME 主页 = 容器管理（选中容器信息卡 + 容器卡片列表，底部导航）
+ *    - HOME 主页 = 游戏容器主页（游戏模式主卡 + 四大功能入口 + 游戏库预览）
+ *    - LIBRARY 游戏库 = 暗色网格封面卡片 + 添加游戏 + 搜索（v4.0 重制）
  *    - ADVANCED 高级页 = 终端 / 浏览器 / 容器高级设置 / 体检 / 文件管理器
  *      / X11 / DAC / 应用设置（底部导航）
  *    - TERMINAL / X11 / DAC / SETTINGS = linbox 自有全屏页面（无底部导航）
@@ -52,7 +51,6 @@ import kotlinx.coroutines.launch
 fun LinBoxShell() {
     val app = LinBoxApp.get()
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
 
     // 输入设置（触控板模式 / 虚拟鼠标指针 / 右键手势）
     val mouseCursorEnabled by app.settingsStore.mouseCursorEnabled.collectAsState(initial = true)
@@ -91,6 +89,7 @@ fun LinBoxShell() {
         // ===== 1. 当前页面 =====
         when (ShellController.screen) {
             ShellController.Screen.HOME -> ContainerHomeScreen()
+            ShellController.Screen.LIBRARY -> GameLibraryScreen()
             ShellController.Screen.ADVANCED -> AdvancedScreen()
             ShellController.Screen.TERMINAL -> TerminalScreen()
             ShellController.Screen.X11 -> X11Screen()
@@ -110,14 +109,7 @@ fun LinBoxShell() {
         // ===== 5. 虚拟游戏手柄层（悬浮球 + 摇杆/按钮 + 设置窗） =====
         GamepadOverlay()
         GamepadSettingsWindow()
-        // 悬浮球的 .vgp 配置读写（GamepadProfileIo）在载入配置后回调此闭包，
-        // 把最新的手柄布局回写 SettingsStore —— 与 GamepadOverlay /
-        // GamepadSettingsWindow 内的 persist() 同一落盘路径。
-        GamepadFloatingBall(
-            onPersistConfig = {
-                scope.launch { app.settingsStore.setGamepadConfig(GamepadController.toJson()) }
-            }
-        )
+        GamepadFloatingBall()
 
         // ===== 6. 虚拟鼠标指针层（最顶层） =====
         MouseCursorOverlay()

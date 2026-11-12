@@ -305,7 +305,7 @@ fun WindowChrome(
                     contentAlignment = Alignment.Center
                 ) {
                     if (appDef != null) {
-                        IconPainter(appDef.iconAsset, size = 16.dp)
+                        com.linbox.core.desktop.IconPainter(appDef.iconAsset, size = 16.dp)
                     } else {
                         Box(
                             modifier = Modifier

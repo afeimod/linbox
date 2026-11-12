@@ -87,6 +87,10 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun TerminalScreen() {
+    // v4.0：终端是「高级」页的子页面，返回键回主页（游戏容器主页）
+    androidx.activity.compose.BackHandler(enabled = true) {
+        ShellController.showHome()
+    }
     TerminalContent()
 }
 
@@ -579,6 +583,7 @@ private fun GlassFab(
         onPaste, onFontDecrease, onFontIncrease, onLayerToggle, onOpenX11, onOpenDac, onOpenSettings
     ) {
         listOf(
+            FabItem("回主页", "🏠") { ShellController.showHome() },
             FabItem("新会话", "＋") { onNewSession() },
             FabItem("键盘", "⌨") { onKeyboardToggle() },
             FabItem("粘贴", "贴") { onPaste() },

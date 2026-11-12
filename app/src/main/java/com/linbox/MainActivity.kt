@@ -259,6 +259,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * v4.0 截图 / 录屏：MediaProjection 授权结果转发。
+     * （startActivityForResult 由 ScreenCaptureManager 发起）
+     */
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (com.linbox.core.media.ScreenCaptureManager.onActivityResult(
+                this, requestCode, resultCode, data
+            )
+        ) return
+        super.onActivityResult(requestCode, resultCode, data)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
     }

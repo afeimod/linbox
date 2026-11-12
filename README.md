@@ -10,14 +10,24 @@ LinBox 是一个用 **Kotlin + Jetpack Compose** 编写的 Android 应用，由
 [AnWind](https://github.com/afeimod/AnWind) 全量移植改造而来（同根项目，
 包名 `com.linbox`）：
 
-- **主页 = Wine 容器管理**：选中容器信息卡（容器名 / wine 版本 / 后端 /
-  Windows 版本 / 分辨率 / 运行状态）+ 容器卡片列表（支持自定义卡片图片
-  与 exe 内嵌图标），点 ▶ 一键运行，点 ⚙ 进入容器配置；
+- **主页 = Wine 游戏容器（v4.0 按设计图重制）**：玻璃拟态浅色主题 ——
+  游戏模式主卡（「游戏模式已开启」+「容器运行中」标签 + 白色 Xbox
+  手柄图形 + 蓝紫渐变「启动游戏」按钮，识别显示选中容器名 / wine 版本 /
+  Windows 版本，背景支持容器自定义卡片图片）+ 四大功能入口
+  （按键映射 / 性能增强 / 截图录屏 / 手柄连接）+ 游戏库封面预览行；
+- **游戏库页（v4.0 新增）**：暗色玻璃主题网格卡片 —— 「我的游戏 共 N 款」+
+  「添加游戏」+ 搜索（名称 / exe 名过滤）+ 封面卡（自定义图片或 exe
+  内嵌图标）+「打开」按钮 + 长按菜单（wineboot / 卡片图片 / 默认容器 /
+  固定启动器 / 容器管理器）；
 - **容器全部相关设置**：每容器五选项卡（基本 / 图形驱动 / CPU 核心 /
   函数库 / 更多配置）+ 全局高级设置（DY / FEX / Box64 / Wine 安装 /
   MangoHud / 生态配置）；
-- **底部导航 [容器] [高级]**：高级页汇集终端、浏览器、容器高级设置、
-  容器体检、文件管理器、X11 / DAC 显示器、应用设置；
+- **底部导航 [主页] [游戏库] [(＋)容器] [设置] [高级]**（v4.0 五槽位 +
+  中央蓝色渐变 ＋ 浮钮，一键打开容器管理器窗口）：高级页汇集终端、
+  浏览器、容器高级设置、容器体检、文件管理器、X11 / DAC 显示器；
+- **截图 / 录屏（v4.0 新增）**：MediaProjection 系统级整屏捕获 ——
+  截图存 Pictures/LinBox（PNG），录屏存 Movies/LinBox（H.264 MP4，
+  1080p / 8Mbps / 30fps，X11 游戏画面一并录制）；
 - **窗口化容器界面**：容器管理器 / exe 选择器 / 浏览器 / 文件管理器
   以可拖拽缩放的浮动窗口形式展示；
 - **bionic rootfs 全量体系**：rootfs 以 `.tzst` 放在 `assets/linbox/`，
@@ -59,10 +69,12 @@ LinBox 是一个用 **Kotlin + Jetpack Compose** 编写的 Android 应用，由
 ```
 app/src/main/java/com/linbox/
 ├── LinBoxApp.kt / MainActivity.kt     # 入口：Room DB + 容器应用注册 + tzst 铺装 + 孤儿清扫
-├── shellui/                            # 新壳层：容器主页 + 高级页 + 底部导航
-│   ├── ContainerHomeScreen.kt          #   主页：选中容器信息卡 + 容器卡片列表
+├── shellui/                            # 新壳层（v4.0 玻璃拟态）：主页 + 游戏库 + 高级页 + 底部导航
+│   ├── ShellDesign.kt                  #   设计系统：玻璃配色令牌 / 顶栏 / 搜索框 / Xbox 手柄 Canvas
+│   ├── ContainerHomeScreen.kt          #   主页：游戏模式主卡 + 四大功能入口 + 游戏库预览行
+│   ├── GameLibraryScreen.kt            #   游戏库：暗色网格封面卡 + 添加游戏 + 搜索 + 长按菜单
 │   ├── AdvancedScreen.kt               #   高级页：终端/浏览器/容器设置/体检/文件/X11/DAC
-│   └── ShellBottomBar.kt               #   底部导航 [容器] [高级]
+│   └── ShellBottomBar.kt               #   底部导航 [主页][游戏库][(＋)容器][设置][高级]
 ├── core/shell/                         # ShellController 页面路由（HOME/ADVANCED/TERMINAL/X11/DAC/SETTINGS）
 ├── core/window/                        # 浮动窗口系统（拖拽/缩放/最小化/全屏 + WinDialog 弹窗栈）
 ├── apps/containers/                    # 【AnWind 移植】容器管理

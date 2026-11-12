@@ -291,22 +291,22 @@ object DacApp : DacNative.TitleSink {
         val view = dacView
         if (view == null) {
             // 无画面（开屏失败/库不可用/已停止）：退回终端（旧返回键语义）
-            com.linbox.core.shell.ShellController.showTerminal()
+            com.linbox.core.shell.ShellController.showHome()
             return
         }
         if (hostMode == HostMode.MINI) {
-            com.linbox.core.shell.ShellController.showTerminal()
+            com.linbox.core.shell.ShellController.showHome()
             return
         }
         val content = ensureMiniOverlay() ?: run {
             // 悬浮窗建不出来（无 Activity）：退回旧语义 —— 停显回终端
-            com.linbox.core.shell.ShellController.showTerminal()
+            com.linbox.core.shell.ShellController.showHome()
             return
         }
         view.attachTo(content)
         hostMode = HostMode.MINI
         showTitle(if (isRunning) DacNative.backendName(backend) else "DAC 等待 wine ...")
-        com.linbox.core.shell.ShellController.showTerminal()
+        com.linbox.core.shell.ShellController.showHome()
         Log.i(TAG, "DAC minimized to floating overlay (display keeps running)")
     }
 
