@@ -7,6 +7,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
@@ -19,6 +20,7 @@ import com.linbox.core.input.MouseController
 import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.VirtualKeyboardOverlay
+import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.input.gamepad.GamepadFloatingBall
 import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
@@ -26,6 +28,7 @@ import com.linbox.core.window.WinDialogHost
 import com.linbox.core.window.WindowHost
 import com.linbox.shellui.AdvancedScreen
 import com.linbox.shellui.ContainerHomeScreen
+import kotlinx.coroutines.launch
 
 /**
  * LinBox 壳层：**以 Wine 容器管理为主页** 的直接性容器管理界面。
@@ -49,6 +52,7 @@ import com.linbox.shellui.ContainerHomeScreen
 fun LinBoxShell() {
     val app = LinBoxApp.get()
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
 
     // 输入设置（触控板模式 / 虚拟鼠标指针 / 右键手势）
     val mouseCursorEnabled by app.settingsStore.mouseCursorEnabled.collectAsState(initial = true)
@@ -106,7 +110,14 @@ fun LinBoxShell() {
         // ===== 5. 虚拟游戏手柄层（悬浮球 + 摇杆/按钮 + 设置窗） =====
         GamepadOverlay()
         GamepadSettingsWindow()
-        GamepadFloatingBall()
+        // 悬浮球的 .vgp 配置读写（GamepadProfileIo）在载入配置后回调此闭包，
+        // 把最新的手柄布局回写 SettingsStore —— 与 GamepadOverlay /
+        // GamepadSettingsWindow 内的 persist() 同一落盘路径。
+        GamepadFloatingBall(
+            onPersistConfig = {
+                scope.launch { app.settingsStore.setGamepadConfig(GamepadController.toJson()) }
+            }
+        )
 
         // ===== 6. 虚拟鼠标指针层（最顶层） =====
         MouseCursorOverlay()

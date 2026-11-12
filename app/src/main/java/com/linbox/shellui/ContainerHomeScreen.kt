@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -327,6 +328,7 @@ internal object HomeUiState {
 }
 
 /** 顶部小圆钮。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomeActionButton(label: String, onClick: () -> Unit) {
     Box(
@@ -679,7 +681,7 @@ internal fun CardImagePickListener(onPicked: (String) -> Unit) {
  * exe 内嵌图标（PeIcon）：有 exe 时提取 PE 内嵌图标（缓存），失败回退 📦。
  */
 @Composable
-internal fun ExeIcon(container: ContainerData, size: dp) {
+internal fun ExeIcon(container: ContainerData, size: Dp) {
     val bitmap by produceState<Bitmap?>(null, container.exe) {
         value = withContext(Dispatchers.IO) { loadExeIcon(container.exe) }
     }
