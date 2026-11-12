@@ -93,7 +93,7 @@ import java.io.File
 @Composable
 fun ContainerHomeScreen() {
     val context = LocalContext.current
-    val palette = GlassPalette.Light
+    val palette = GlassPalette.current
 
     // ---- 数据状态 ----
     val app = com.linbox.LinBoxApp.get()
@@ -397,7 +397,7 @@ fun ContainerHomeScreen() {
             // ===== 6. 底部导航（中央＋：有容器进列表 / 无容器直进新建） =====
             ShellBottomBar(
                 current = Screen.HOME,
-                palette = GlassPalette.Light,
+                palette = GlassPalette.current,
                 hasContainers = containers.isNotEmpty()
             )
         }
@@ -444,7 +444,7 @@ private fun CurrentContainerPreviewCard(
     onCardImage: () -> Unit,
     onCreate: () -> Unit
 ) {
-    val palette = GlassPalette.Light
+    val palette = GlassPalette.current
 
     // ---- 无容器：空白加号 ----
     if (container == null) {
@@ -637,7 +637,7 @@ internal fun ShortcutCoverCard(
     running: Boolean,
     onOpen: () -> Unit
 ) {
-    val palette = GlassPalette.Light
+    val palette = GlassPalette.current
     val cardBitmap by produceState<Bitmap?>(null, shortcut.cardImage) {
         value = withContext(Dispatchers.IO) { loadBitmapSafely(shortcut.cardImage) }
     }
@@ -722,7 +722,7 @@ internal fun ShortcutCoverCard(
 /** 功能入口（圆形玻璃钮 + 标签，图 1 中部四入口）。 */
 @Composable
 private fun FunctionEntry(emoji: String, label: String, onClick: () -> Unit) {
-    val palette = GlassPalette.Light
+    val palette = GlassPalette.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -766,7 +766,7 @@ internal fun GameCoverCard(
     onClick: () -> Unit,
     onOpen: () -> Unit
 ) {
-    val palette = GlassPalette.Light
+    val palette = GlassPalette.current
     val wineLabel = wineDisplayLabel(container)
     val cardBitmap by produceState<Bitmap?>(null, container.cardImage) {
         value = withContext(Dispatchers.IO) { loadBitmapSafely(container.cardImage) }
@@ -850,14 +850,14 @@ private fun CaptureDialog(onDismiss: () -> Unit) {
         Column(
             modifier = Modifier
                 .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFF182038))
+                .background(com.linbox.core.theme.LinShellTheme.surface)
                 .padding(18.dp)
         ) {
-            Text("📸 截图 · 录屏", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("📸 截图 · 录屏", color = com.linbox.core.theme.LinShellTheme.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Text(
                 "基于系统整屏捕获（X11 游戏画面一并录制）。\n截图 → Pictures/LinBox · 录屏 → Movies/LinBox",
-                color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp, lineHeight = 15.sp
+                color = com.linbox.core.theme.LinShellTheme.textSecondary, fontSize = 11.sp, lineHeight = 15.sp
             )
             Spacer(Modifier.height(14.dp))
             Row {
@@ -920,14 +920,14 @@ private fun CardImagePickerDialog(
         Column(
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF263238))
+                .background(com.linbox.core.theme.LinShellTheme.surface)
                 .padding(16.dp)
         ) {
-            Text("🖼 设置「${container.name}」卡片图片", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("🖼 设置「${container.name}」卡片图片", color = com.linbox.core.theme.LinShellTheme.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
                 "在文件管理器中选择一张图片作为该容器卡片的背景；\n选择后可在游戏库长按菜单中再次更换。",
-                color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp
+                color = com.linbox.core.theme.LinShellTheme.textSecondary, fontSize = 12.sp
             )
             Spacer(Modifier.height(12.dp))
             Row {

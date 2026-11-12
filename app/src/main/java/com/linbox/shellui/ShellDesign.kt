@@ -35,8 +35,12 @@ import androidx.compose.ui.unit.sp
  * v4.0 壳层设计系统（按用户提供的图片重制主页 / 游戏库）。
  *
  * 两种玻璃拟态（Glassmorphism）配色：
- * - [GlassLight]：主页（图 1）——浅色玻璃：柔和蓝白渐变背景 + 半透明白卡。
- * - [GlassDark]：游戏库（图 2）——深色主题：深夜蓝背景 + 微白玻璃卡。
+ * - [GlassLight]：浅色玻璃 —— 柔和蓝白渐变背景 + 半透明白卡；
+ * - [GlassDark]：深色主题 —— 深夜蓝背景 + 微白玻璃卡。
+ *
+ * v6.1（用户：“主页亮色但其他地方全是暗色，不统一”）：新增
+ * [GlassPalette.current] —— 跟随壳层主题设置（亮/暗）实时切换，
+ * 自定义背景启用时页面渐变降为半透明蒙版透出背景图。
  *
  * 组件：[GlassTopBar]（标题 + 搜索 + 设置圆形钮）、[GlassSearchField]、
  * [XboxControllerArt]（白色 Xbox 手柄 Canvas 图形，主页主卡用）。
@@ -82,7 +86,7 @@ data class GlassPalette(
             topBarButtonIcon = Color(0xFF2A3352)
         )
 
-        /** 深色玻璃（游戏库，图 2）。 */
+        /** 深色玻璃（图 2）。 */
         val Dark = GlassPalette(
             bgTop = Color(0xFF101528),
             bgBottom = Color(0xFF0B0F1E),
@@ -97,6 +101,26 @@ data class GlassPalette(
         )
     }
 }
+
+/**
+ * v6.1：当前主题色板 —— 跟随 [com.linbox.core.theme.ShellThemeState]
+ * （亮/暗 + 自定义背景）实时切换。
+ *
+ * 在组合期内读取（Compose 快照状态订阅），设置页切换主题即时生效；
+ * 自定义背景启用时 bgTop/bgBottom 降为半透明蒙版，背景图透出，
+ * 亮色蒙白 / 暗色蒙深，文字对比度由对应色板字色保证。
+ */
+val GlassPalette.Companion.current: GlassPalette
+    get() {
+        val dark = com.linbox.core.theme.ShellThemeState.dark
+        val base = if (dark) GlassPalette.Dark else GlassPalette.Light
+        return if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()) {
+            base.copy(
+                bgTop = base.bgTop.copy(alpha = 0.88f),
+                bgBottom = base.bgBottom.copy(alpha = 0.92f)
+            )
+        } else base
+    }
 
 /**
  * 玻璃顶栏：标题 +（可选）副标题 + 搜索钮 + 设置钮（图 1 / 图 2 布局）。

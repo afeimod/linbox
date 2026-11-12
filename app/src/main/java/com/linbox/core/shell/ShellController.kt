@@ -44,6 +44,28 @@ object ShellController {
         private set
 
     /**
+     * v6.1：进入页面级全屏页（BROWSER / FILES / EXECHOOSER）前的来源页。
+     *
+     * 修复：发起文件选择后只能回「高级」页，永远回不到发起页 ——
+     * 现在选完文件 / 返回都回到真正的发起页（游戏库弹窗选 exe、
+     * 容器编辑器选驱动…均去而复返）。
+     */
+    private var pageOrigin: Screen = Screen.HOME
+
+    /** 进入页面级全屏页，记录来源（已在页内再次拉起时不覆盖原来源）。 */
+    private fun openShellPage(target: Screen) {
+        if (screen != Screen.BROWSER && screen != Screen.FILES && screen != Screen.EXECHOOSER) {
+            pageOrigin = screen
+        }
+        screen = target
+    }
+
+    /** v6.1：页面级返回（文件选择完成/取消后回到发起页）。 */
+    fun closePage() {
+        screen = pageOrigin
+    }
+
+    /**
      * v6.0：安卓全屏页深链参数（浏览器 / 文件管理器 / exe 选择器）。
      *
      * 一次性消费（同 ContainerNav 模式）：
@@ -79,7 +101,7 @@ object ShellController {
     /** 浏览器安卓全屏页（url 可空 = 新标签页）。v6.0 去窗口化。 */
     fun showBrowser(url: String? = null) {
         PageNav.url = url
-        screen = Screen.BROWSER
+        openShellPage(Screen.BROWSER)
     }
 
     /** 文件管理器安卓全屏页（pickMode/targetApp 为选择模式参数）。v6.0 去窗口化。 */
@@ -93,13 +115,13 @@ object ShellController {
         PageNav.targetApp = targetApp
         PageNav.targetWindow = targetWindow
         PageNav.path = path
-        screen = Screen.FILES
+        openShellPage(Screen.FILES)
     }
 
     /** exe 选择器安卓页（path = 待运行 exe 完整路径；文件管理器双击 exe 调起）。 */
     fun showExeChooser(path: String) {
         PageNav.path = path
-        screen = Screen.EXECHOOSER
+        openShellPage(Screen.EXECHOOSER)
     }
 
     /**

@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -70,6 +69,7 @@ import com.linbox.apps.containers.WineSessionLauncher
 import com.linbox.apps.containers.launcher.RootfsLauncher
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
+import com.linbox.core.theme.LinShellTheme
 import com.linbox.data.db.entity.ShortcutEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -90,6 +90,14 @@ import kotlinx.coroutines.withContext
  * - 「添加游戏」：表单弹窗（名称 + 浏览选 exe + 容器下拉 + 卡片图）；
  * - 长按：编辑 / 设置卡片图片 / 删除；
  * - 搜索（顶栏 + 展开式搜索框，主页搜索请求联动）。
+ *
+ * v6.1 主题：色板跟随壳层主题设置（[GlassPalette.current]，
+ * 亮色全亮色 / 暗色全暗色）；弹窗 / 输入框颜色走 [LinShellTheme]。
+ *
+ * v6.1 弹窗状态存活：添加/编辑弹窗与全部草稿字段提升到
+ * [GameLibraryUiState] 单例 —— 「浏览选择程序 / 选择卡片图片」跳去
+ * 文件管理器（页面离开组合）再回来，弹窗原样保留，选择结果经
+ * FilePickBus 待投递信箱自动回填，不再"发起页面已离开，已取消选择"。
  */
 
 /** 游戏快捷方式（Room shortcuts 表 type=4 的映射）。 */
@@ -128,13 +136,65 @@ object GameShortcuts {
     }
 }
 
+/**
+ * v6.1：游戏库跨页面导航存活的 UI 状态。
+ *
+ * 背景：v6.0 全屏页化后，「添加游戏」弹窗里点「浏览选择程序 / 选择卡片
+ * 图片」会跳到文件管理器全屏页 —— 游戏库页面整个离开组合，弹窗开关与
+ * 全部 remember 草稿字段被销毁，选完文件回来弹窗也没了（且 FilePickBus
+ * 投递落空提示"发起页面已离开"）。
+ *
+ * 方案：弹窗开关 + 草稿字段全部放进本单例（Compose 快照状态，进程内
+ * 存活）。文件管理器选完 → ShellController.closePage() 回到游戏库 →
+ * 弹窗原样重现 → FilePickBus 待投递信箱把选择结果回填进草稿。
+ */
+object GameLibraryUiState {
+    /** 添加/编辑弹窗是否打开。 */
+    var editorOpen by mutableStateOf(false)
+    /** 正在编辑的快捷方式（null = 新建）。 */
+    var editing by mutableStateOf<GameShortcut?>(null)
+    /** 删除确认弹窗目标。 */
+    var deleteFor by mutableStateOf<GameShortcut?>(null)
+
+    // ---- 草稿字段（跨导航存活） ----
+    var draftName by mutableStateOf("")
+    var draftExe by mutableStateOf("")
+    var draftContainer by mutableStateOf("")
+    var draftCardImage by mutableStateOf("")
+
+    /** 打开「添加游戏」（defaultContainer = 第一个容器名）。 */
+    fun openNew(defaultContainer: String) {
+        editing = null
+        draftName = ""
+        draftExe = ""
+        draftContainer = defaultContainer
+        draftCardImage = ""
+        editorOpen = true
+    }
+
+    /** 打开「编辑游戏」。 */
+    fun openEdit(s: GameShortcut) {
+        editing = s
+        draftName = s.label
+        draftExe = s.exe
+        draftContainer = s.containerName
+        draftCardImage = s.cardImage
+        editorOpen = true
+    }
+
+    fun closeEditor() {
+        editorOpen = false
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GameLibraryScreen() {
     val context = LocalContext.current
     val app = LinBoxApp.get()
     val cs = rememberCoroutineScope()
-    val palette = GlassPalette.Dark
+    // v6.1：色板跟随主题（亮/暗实时切换）
+    val palette = GlassPalette.current
 
     // ---- 数据状态 ----
     var tick by remember { mutableIntStateOf(0) }
@@ -174,11 +234,6 @@ fun GameLibraryScreen() {
                 it.exe.substringAfterLast('/').contains(query, true)
         }
     }
-
-    // ---- 弹窗 ----
-    var addOpen by remember { mutableStateOf(false) }
-    var editFor by remember { mutableStateOf<GameShortcut?>(null) }
-    var deleteFor by remember { mutableStateOf<GameShortcut?>(null) }
 
     fun runShortcut(s: GameShortcut) {
         val container = containers.firstOrNull { it.name == s.containerName }
@@ -221,7 +276,10 @@ fun GameLibraryScreen() {
                     modifier = Modifier.weight(1f)
                 )
                 Button(
-                    onClick = { addOpen = true },
+                    onClick = {
+                        // v6.1：弹窗状态进单例 —— 去文件管理器选完回来不丢
+                        GameLibraryUiState.openNew(containers.firstOrNull()?.name ?: "")
+                    },
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = palette.blue),
                     shape = RoundedCornerShape(20.dp)
@@ -238,8 +296,8 @@ fun GameLibraryScreen() {
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
-                    placeholder = { Text("搜索游戏名 / exe", fontSize = 12.sp, color = Color(0x66FFFFFF)) },
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = Color.White),
+                    placeholder = { Text("搜索游戏名 / exe", fontSize = 12.sp, color = palette.textSecondary) },
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = palette.textPrimary),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -281,7 +339,7 @@ fun GameLibraryScreen() {
                                 } ?: s.containerName,
                             running = RootfsLauncher.activeSessions.containsKey(s.containerName),
                             onRun = { runShortcut(s) },
-                            onLongPress = { editFor = s }
+                            onLongPress = { GameLibraryUiState.openEdit(s) }
                         )
                     }
                 }
@@ -292,57 +350,45 @@ fun GameLibraryScreen() {
         }
     }
 
-    // ---- 添加游戏 ----
-    if (addOpen) {
+    // ---- 添加 / 编辑（v6.1：状态在单例，去文件管理器选 exe/图片回来不丢） ----
+    if (GameLibraryUiState.editorOpen) {
         GameShortcutEditorDialog(
-            initial = null,
+            initial = GameLibraryUiState.editing,
             containers = containers,
-            onDismiss = { addOpen = false },
+            onDismiss = { GameLibraryUiState.closeEditor() },
             onSave = { s ->
-                addOpen = false
+                GameLibraryUiState.closeEditor()
                 cs.launch(Dispatchers.IO) {
                     GameShortcuts.upsert(app, s)
                     withContext(Dispatchers.Main) { refresh() }
                 }
+            },
+            onDelete = {
+                GameLibraryUiState.editing?.let { GameLibraryUiState.deleteFor = it }
+                GameLibraryUiState.closeEditor()
             }
         )
     }
 
-    // ---- 编辑 / 删除 ----
-    editFor?.let { s ->
-        GameShortcutEditorDialog(
-            initial = s,
-            containers = containers,
-            onDismiss = { editFor = null },
-            onSave = { updated ->
-                editFor = null
-                cs.launch(Dispatchers.IO) {
-                    GameShortcuts.upsert(app, updated)
-                    withContext(Dispatchers.Main) { refresh() }
-                }
-            },
-            onDelete = {
-                editFor = null
-                deleteFor = s
-            }
-        )
-    }
-    deleteFor?.let { s ->
+    // ---- 删除确认 ----
+    GameLibraryUiState.deleteFor?.let { s ->
         AlertDialog(
-            onDismissRequest = { deleteFor = null },
+            onDismissRequest = { GameLibraryUiState.deleteFor = null },
             title = { Text("移出游戏库", fontWeight = FontWeight.Bold) },
             text = { Text("把「${s.label}」从游戏库移除？（不影响容器与游戏文件）") },
             confirmButton = {
                 TextButton(onClick = {
-                    deleteFor = null
+                    GameLibraryUiState.deleteFor = null
                     cs.launch(Dispatchers.IO) {
                         GameShortcuts.delete(app, s)
                         withContext(Dispatchers.Main) { refresh() }
                     }
-                }) { Text("移除", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold) }
+                }) { Text("移除", color = LinShellTheme.red, fontWeight = FontWeight.Bold) }
             },
-            dismissButton = { TextButton(onClick = { deleteFor = null }) { Text("取消") } },
-            containerColor = Color(0xFF1A2233)
+            dismissButton = {
+                TextButton(onClick = { GameLibraryUiState.deleteFor = null }) { Text("取消") }
+            },
+            containerColor = LinShellTheme.surface
         )
     }
 }
@@ -360,7 +406,8 @@ private fun GameShortcutCard(
     onRun: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    val palette = GlassPalette.Dark
+    // v6.1：色板跟随主题
+    val palette = GlassPalette.current
     val cardBitmap by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(null, shortcut.cardImage) {
         value = withContext(Dispatchers.IO) { loadBitmapSafely(shortcut.cardImage) }
     }
@@ -460,7 +507,7 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
         Spacer(Modifier.height(8.dp))
         Text(
             hint ?: "还没有容器 —— 先到「容器」页创建一个，再回来添加游戏",
-            color = GlassPalette.Dark.textSecondary,
+            color = GlassPalette.current.textSecondary,
             fontSize = 12.sp, lineHeight = 17.sp,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
@@ -468,7 +515,7 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
             Spacer(Modifier.height(10.dp))
             Text(
                 "长按游戏卡片可编辑 / 删除",
-                color = Color(0x59FFFFFF), fontSize = 10.sp
+                color = LinShellTheme.textSecondary, fontSize = 10.sp
             )
         }
     }
@@ -478,6 +525,11 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
 // 添加 / 编辑游戏弹窗（安卓表单）
 // ===========================================================================
 
+/**
+ * v6.1：草稿字段全部读写 [GameLibraryUiState]（跨导航存活）——
+ * 「浏览选择程序 / 选择卡片图片」跳去文件管理器再回来，
+ * 已填内容与弹窗本身都原样保留，选择结果经 FilePickBus 信箱回填。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GameShortcutEditorDialog(
@@ -487,29 +539,24 @@ private fun GameShortcutEditorDialog(
     onSave: (GameShortcut) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
-    val app = LinBoxApp.get()
-    var name by remember { mutableStateOf(initial?.label ?: "") }
-    var exe by remember { mutableStateOf(initial?.exe ?: "") }
-    var containerName by remember {
-        mutableStateOf(initial?.containerName ?: containers.firstOrNull()?.name ?: "")
-    }
-    var cardImage by remember { mutableStateOf(initial?.cardImage ?: "") }
+    val st = GameLibraryUiState
     var error by remember { mutableStateOf<String?>(null) }
 
-    // exe 选择回投（文件管理器）
+    // exe 选择回投（文件管理器）—— 发起页离开期间的投递由
+    // FilePickBus 待投递信箱保留，本弹窗重新组合时自动送达
     FilePickListenerEffect(targetApp = "game_library_exe") { path ->
         if (path.endsWith(".exe", true) || path.endsWith(".bat", true) ||
             path.endsWith(".msi", true) || path.endsWith(".cmd", true)
         ) {
-            exe = path
-            if (name.isBlank()) {
-                name = path.substringAfterLast('/').substringBeforeLast('.')
+            st.draftExe = path
+            if (st.draftName.isBlank()) {
+                st.draftName = path.substringAfterLast('/').substringBeforeLast('.')
             }
         }
     }
     // 卡片图片选择回投
     FilePickListenerEffect(targetApp = "game_library_img") { path ->
-        cardImage = path
+        st.draftCardImage = path
     }
 
     AlertDialog(
@@ -524,16 +571,16 @@ private fun GameShortcutEditorDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 // 名称
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; error = null },
+                    value = st.draftName,
+                    onValueChange = { st.draftName = it; error = null },
                     label = { Text("游戏名称") },
                     singleLine = true,
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
                 )
                 // exe
                 OutlinedTextField(
-                    value = exe,
-                    onValueChange = { exe = it; error = null },
+                    value = st.draftExe,
+                    onValueChange = { st.draftExe = it; error = null },
                     label = { Text("程序（exe / bat / msi）") },
                     placeholder = { Text("/storage/emulated/0/Download/game/game.exe", fontSize = 10.sp) },
                     singleLine = true,
@@ -550,14 +597,14 @@ private fun GameShortcutEditorDialog(
                         color = Color(0xFFF6C454), fontSize = 12.sp
                     )
                 } else {
-                    Text("用哪个容器运行", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                    Text("用哪个容器运行", color = LinShellTheme.textSecondary, fontSize = 12.sp)
                     var expanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
                     ) {
                         OutlinedTextField(
-                            value = containerName,
+                            value = st.draftContainer,
                             onValueChange = {},
                             readOnly = true,
                             singleLine = true,
@@ -579,12 +626,12 @@ private fun GameShortcutEditorDialog(
                                             Text(c.name, fontSize = 13.sp)
                                             Text(
                                                 c.wine.ifBlank { "默认 Wine" } + " · " + c.backend.label,
-                                                fontSize = 10.sp, color = Color(0x66FFFFFF)
+                                                fontSize = 10.sp, color = LinShellTheme.textSecondary
                                             )
                                         }
                                     },
                                     onClick = {
-                                        containerName = c.name
+                                        st.draftContainer = c.name
                                         expanded = false
                                     }
                                 )
@@ -594,10 +641,10 @@ private fun GameShortcutEditorDialog(
                 }
 
                 // 卡片图片
-                if (cardImage.isNotBlank()) {
+                if (st.draftCardImage.isNotBlank()) {
                     Text(
-                        "卡片图：$cardImage",
-                        color = Color(0x66FFFFFF), fontSize = 10.sp,
+                        "卡片图：${st.draftCardImage}",
+                        color = LinShellTheme.textSecondary, fontSize = 10.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
@@ -612,18 +659,18 @@ private fun GameShortcutEditorDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val n = name.trim()
+                val n = st.draftName.trim()
                 when {
                     n.isEmpty() -> error = "请输入游戏名称"
-                    exe.isBlank() -> error = "请选择程序（exe）"
-                    containerName.isBlank() -> error = "请选择容器"
+                    st.draftExe.isBlank() -> error = "请选择程序（exe）"
+                    st.draftContainer.isBlank() -> error = "请选择容器"
                     else -> onSave(
                         GameShortcut(
                             id = initial?.id ?: 0,
                             label = n,
-                            containerName = containerName,
-                            exe = exe.trim(),
-                            cardImage = cardImage
+                            containerName = st.draftContainer,
+                            exe = st.draftExe.trim(),
+                            cardImage = st.draftCardImage
                         )
                     )
                 }
@@ -643,6 +690,6 @@ private fun GameShortcutEditorDialog(
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
         },
-        containerColor = Color(0xFF1A2233)
+        containerColor = LinShellTheme.surface
     )
 }

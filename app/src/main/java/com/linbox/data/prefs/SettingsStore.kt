@@ -73,6 +73,12 @@ class SettingsStore(private val context: Context) {
         val FONT_COLOR = stringPreferencesKey("font_color")
         // 全局字体样式：default 无衬线 / serif 衬线 / mono 等宽
         val FONT_STYLE = stringPreferencesKey("font_style")
+
+        // === v6.1：壳层主题（亮/暗 + 自定义背景） ===
+        // 壳层全屏页统一主题模式：light 亮色全亮色 / dark 暗色全暗色
+        val SHELL_THEME_MODE = stringPreferencesKey("shell_theme_mode")
+        // 自定义背景图绝对路径（空串 = 未启用）
+        val SHELL_CUSTOM_BG = stringPreferencesKey("shell_custom_bg")
         // 任务栏图标对齐：true 居中（Win11 风格）/ false 靠左（Win7 风格）
         val TASKBAR_CENTERED = booleanPreferencesKey("taskbar_centered")
 
@@ -253,6 +259,9 @@ class SettingsStore(private val context: Context) {
     // === v2.14：个性化 ===
     val appColorMode: Flow<String> = context.appPrefs.data.map { it[Keys.APP_COLOR_MODE] ?: "auto" }
     val appAccent: Flow<String> = context.appPrefs.data.map { it[Keys.APP_ACCENT] ?: "default" }
+    // === v6.1：壳层主题 ===
+    val shellThemeMode: Flow<String> = context.appPrefs.data.map { it[Keys.SHELL_THEME_MODE] ?: "dark" }
+    val shellCustomBg: Flow<String> = context.appPrefs.data.map { it[Keys.SHELL_CUSTOM_BG] ?: "" }
     val fontScale: Flow<Float> = context.appPrefs.data.map { it[Keys.FONT_SCALE] ?: 1.0f }
     val fontColor: Flow<String> = context.appPrefs.data.map { it[Keys.FONT_COLOR] ?: "auto" }
     val fontStyle: Flow<String> = context.appPrefs.data.map { it[Keys.FONT_STYLE] ?: "default" }
@@ -459,6 +468,16 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAppAccent(accent: String) {
         context.appPrefs.edit { it[Keys.APP_ACCENT] = accent }
+    }
+
+    // === v6.1：壳层主题 setter ===
+    suspend fun setShellThemeMode(mode: String) {
+        val v = if (mode in setOf("light", "dark")) mode else "dark"
+        context.appPrefs.edit { it[Keys.SHELL_THEME_MODE] = v }
+    }
+
+    suspend fun setShellCustomBg(path: String) {
+        context.appPrefs.edit { it[Keys.SHELL_CUSTOM_BG] = path }
     }
 
     suspend fun setFontScale(scale: Float) {

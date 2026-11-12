@@ -134,6 +134,13 @@ object ContainerUiState {
     /** 是否显示容器高级设置页。 */
     var advancedOpen by mutableStateOf(false)
 
+    /**
+     * v6.1：「运行程序」对话框目标 —— 单例存活：弹窗里点「浏览选择程序」
+     * 跳去文件管理器（页面离开组合）再回来，弹窗原样保留，选择结果经
+     * FilePickBus 待投递信箱自动回填。
+     */
+    var runFor by mutableStateOf<ContainerData?>(null)
+
     fun openList() {
         editingName = null
         creating = false
@@ -209,7 +216,8 @@ private fun ContainerListScreen() {
     var actionsFor by remember { mutableStateOf<ContainerData?>(null) }     // 长按操作面板
     var renameFor by remember { mutableStateOf<ContainerData?>(null) }
     var confirmRemove by remember { mutableStateOf<ContainerData?>(null) }
-    var runFor by remember { mutableStateOf<ContainerData?>(null) }         // 运行程序（exe+参数）
+    // v6.1：运行程序对话框状态提升到 ContainerUiState（跨导航存活）
+    var runFor by ContainerUiState::runFor
     var showDoctor by remember { mutableStateOf(false) }
     var showPrefixLog by remember { mutableStateOf(false) }
 
@@ -513,7 +521,7 @@ private fun ContainerListScreen() {
             dismissButton = {
                 TextButton(onClick = { confirmRemove = null }) { Text("取消") }
             },
-            containerColor = Color(0xFF1A2233)
+            containerColor = LinShellTheme.surface
         )
     }
 
@@ -770,7 +778,7 @@ private fun RunProgramDialog(
             ) { Text("运行", fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        containerColor = Color(0xFF1A2233)
+        containerColor = LinShellTheme.surface
     )
 }
 
@@ -804,7 +812,7 @@ private fun RenameSheet(
             ) { Text("确定", fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = { onDone(null) }) { Text("取消") } },
-        containerColor = Color(0xFF1A2233)
+        containerColor = LinShellTheme.surface
     )
 }
 
@@ -1403,7 +1411,7 @@ private fun EditorTextField(
         OutlinedTextField(
             value = value,
             onValueChange = onChange,
-            placeholder = { Text(placeholder, fontSize = 11.sp, color = Color(0x59FFFFFF)) },
+            placeholder = { Text(placeholder, fontSize = 11.sp, color = LinShellTheme.textSecondary) },
             singleLine = true,
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
             modifier = Modifier.fillMaxWidth(),
@@ -1458,14 +1466,14 @@ private fun EditorDropdown(
         }
         if (note != null) {
             Spacer(Modifier.height(3.dp))
-            Text(note, color = Color(0x66FFFFFF), fontSize = 10.sp, lineHeight = 13.sp)
+            Text(note, color = LinShellTheme.textSecondary, fontSize = 10.sp, lineHeight = 13.sp)
         }
     }
 }
 
 @Composable
 private fun EditorNote(text: String) {
-    Text(text, color = Color(0x66FFFFFF), fontSize = 10.sp, lineHeight = 13.sp)
+    Text(text, color = LinShellTheme.textSecondary, fontSize = 10.sp, lineHeight = 13.sp)
 }
 
 /** 启动开关流式多选芯片。 */
@@ -1499,7 +1507,7 @@ private fun FlagFlow(
                     ) {
                         Text(
                             label,
-                            color = if (on) Color.White else Color(0x99FFFFFF),
+                            color = if (on) Color.White else LinShellTheme.textSecondary,
                             fontSize = 11.sp, maxLines = 1
                         )
                     }
@@ -1596,7 +1604,7 @@ private fun ContainerAdvancedScreen() {
                 ) {
                     Text(
                         label,
-                        color = if (on) Color.White else Color(0x99FFFFFF),
+                        color = if (on) Color.White else LinShellTheme.textSecondary,
                         fontSize = 11.sp, maxLines = 1,
                         fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
                     )

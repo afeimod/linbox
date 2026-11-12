@@ -1,5 +1,8 @@
 package com.linbox.apps.filemanager
 
+import android.os.Handler
+import android.os.Looper
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -32,6 +35,18 @@ object FilePickBus {
     private val listeners = CopyOnWriteArrayList<Listener>()
 
     /**
+     * v6.1 待投递信箱：发起页导航离开（去文件管理器选文件的间隙）期间的
+     * 选择结果，按 targetApp 暂存；发起页重新组合（listen 重注册）时取出投递。
+     *
+     * 背景：v6.0 全屏页化后，发起页（如游戏库添加游戏弹窗）在跳转
+     * 文件管理器时离开组合 → 监听器注销 → 选完文件 deliver 落空 →
+     * “发起页面已离开，已取消选择”。信箱把结果保留到发起页归来。
+     */
+    private val pending = ConcurrentHashMap<String, String>()
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
      * 注册文件选择回调。
      *
      * @param targetApp 目标应用 id（"notepad" / "media_player"），
@@ -49,6 +64,11 @@ object FilePickBus {
     ): () -> Unit {
         val l = Listener(targetApp, targetWindow, onPick)
         listeners.add(l)
+        // v6.1：发起页去而复返 —— 取出待投递的选择结果立即送达
+        // （post 到主线程，避免在组合期内同步写状态）
+        pending.remove(targetApp)?.let { path ->
+            mainHandler.post { onPick(path) }
+        }
         return { listeners.remove(l) }
     }
 
@@ -57,7 +77,8 @@ object FilePickBus {
      *
      * @param targetApp 目标应用 id
      * @param targetWindow 目标窗口 id（空串 = 该应用任意监听者）
-     * @return true = 已有监听者接收；false = 无匹配（目标窗口已关闭/最小化）
+     * @return true = 已有监听者接收，或已转入待投递信箱（发起页归来即送达）；
+     *         false = 无匹配且未暂存
      */
     fun deliver(targetApp: String, targetWindow: String, path: String): Boolean {
         var handled = false
@@ -68,6 +89,12 @@ object FilePickBus {
                 it.onPick(path)
                 handled = true
             }
+        }
+        if (!handled && targetApp.isNotBlank()) {
+            // v6.1：发起页暂离（导航去文件管理器的间隙）—— 暂存而非丢弃，
+            // 待发起页重新组合（listen 重注册）时投递，选择不再丢失
+            pending[targetApp] = path
+            handled = true
         }
         return handled
     }

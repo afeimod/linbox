@@ -93,13 +93,14 @@ private fun rememberPageHost(appId: String, title: String, exitTo: () -> Unit): 
 @Composable
 fun BrowserScreen() {
     val host = rememberPageHost(appId = "browser", title = "浏览器") {
-        ShellController.showAdvanced()
+        // v6.1：退出回【发起页】（不再固定回高级页）
+        ShellController.closePage()
     }
 
     // 系统返回：退出浏览器页（内容内部的 BackHandler 优先消费：
     // 网页历史后退 > 视频全屏退出 > 页面级全屏退出 > 本兜底）
     androidx.activity.compose.BackHandler(enabled = true) {
-        ShellController.showAdvanced()
+        ShellController.closePage()
     }
 
     Box(
@@ -125,13 +126,15 @@ fun BrowserScreen() {
 /** 文件管理器页：顶部安卓 app bar（返回 + 标题 + 选择模式提示）。 */
 @Composable
 fun FilesScreen() {
+    // v6.1：退出回【发起页】（游戏库弹窗选 exe / 容器编辑器选驱动…
+    // 选完或取消都回到真正发起的地方）
     val host = rememberPageHost(appId = "file_explorer", title = "文件管理器") {
-        ShellController.showAdvanced()
+        ShellController.closePage()
     }
     val pickMode = host.args["pickMode"] ?: ""
 
     androidx.activity.compose.BackHandler(enabled = true) {
-        ShellController.showAdvanced()
+        ShellController.closePage()
     }
 
     Column(
@@ -151,7 +154,7 @@ fun FilesScreen() {
                     .size(42.dp)
                     .clip(CircleShape)
                     .background(LinShellTheme.card)
-                    .clickable { ShellController.showAdvanced() },
+                    .clickable { ShellController.closePage() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -202,11 +205,11 @@ fun FilesScreen() {
 @Composable
 fun ExeChooserScreen() {
     val host = rememberPageHost(appId = "exe_run_chooser", title = "选择容器运行") {
-        ShellController.showAdvanced()
+        ShellController.closePage()
     }
 
     androidx.activity.compose.BackHandler(enabled = true) {
-        ShellController.showAdvanced()
+        ShellController.closePage()
     }
 
     Column(
@@ -226,7 +229,7 @@ fun ExeChooserScreen() {
                     .size(42.dp)
                     .clip(CircleShape)
                     .background(LinShellTheme.card)
-                    .clickable { ShellController.showAdvanced() },
+                    .clickable { ShellController.closePage() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(

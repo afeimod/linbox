@@ -34,26 +34,31 @@ import com.linbox.core.shell.ShellController.Screen
  *
  * [主页] [游戏库] [ (＋) 容器 ] [设置] [高级]
  *
- * - 中央为蓝色渐变凸起 + 浮钮（带阴影）：打开容器管理器浮动窗口
- *   （Bionic 容器：列表 + 创建 + 五选项卡配置）；
- * - 原"我的"按钮由"高级"取代（终端 / 浏览器 / 容器高级设置，
- *   用户需求）；
- * - 主页用浅色玻璃（图 1），游戏库 / 高级用深色玻璃（图 2），
- *   由 [palette] 参数决定。
+ * - 中央为蓝色渐变凸起 + 浮钮（带阴影）：有容器进容器列表，
+ *   无容器直进新建容器表单；
+ * - v6.1：色板跟随壳层主题（亮/暗）实时切换 —— 不传 [palette] 时
+ *   自动取 [GlassPalette.current]，亮色全亮色 / 暗色全暗色。
  */
 @Composable
 fun ShellBottomBar(
     current: Screen,
-    palette: GlassPalette = GlassPalette.Dark,
+    palette: GlassPalette? = null,
     // v6.0（用户："中间加号有容器了就进容器列表，空白处有个加号"）：
     // 中央＋按钮 —— 有容器进容器列表；无容器直进新建容器表单。
     hasContainers: Boolean = true
 ) {
     val context = LocalContext.current
+    // v6.1：未显式指定色板 → 跟随主题设置（亮/暗实时切换）
+    val palette = palette ?: GlassPalette.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(palette.bgBottom.copy(alpha = 0.92f))
+            // v6.1：自定义背景启用时 bgBottom 已是半透明蒙版，不再叠加不透明度，
+            // 让背景图在底栏区域同样透出
+            .background(
+                if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()) palette.bgBottom
+                else palette.bgBottom.copy(alpha = 0.92f)
+            )
             .padding(horizontal = 4.dp, vertical = 6.dp)
     ) {
         Row(

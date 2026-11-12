@@ -148,6 +148,7 @@ private fun SettingsContent() {
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 14.dp)
                 ) {
+                    ThemeSection()
                     DisplaySection()
                     PersonalizationSection()
                     InputSection(onOpenKeyboard = { route = SettingsRoute.Keyboard })
@@ -158,10 +159,115 @@ private fun SettingsContent() {
                     AboutSection()
                     Spacer(Modifier.height(24.dp))
                 }
+            }
+        }
+    }
+}
 
-                // v5.0：底部导航常驻（设置即底部导航目的地，与主页/
-                // 游戏库/高级一致；“所有设置都放在下方设置栏”）
-                com.linbox.shellui.ShellBottomBar(current = com.linbox.core.shell.ShellController.Screen.SETTINGS)
+// ============================================================
+// 主题（v6.1：亮/暗模式 + 自定义背景）
+// ============================================================
+
+/**
+ * v6.1（用户：“主页亮色但其他地方全是暗色，不统一；设置里加入主题设置
+ * 并支持自定义背景，亮色全亮色，暗色全暗色”）。
+ *
+ * - 主题模式：亮色 / 暗色 —— 全部壳层页面（主页/游戏库/容器/设置/高级/
+ *   文件管理器/浏览器）与弹窗统一切换，文字颜色自动适配保证清晰；
+ * - 自定义背景：SAF 选图（无需存储权限），拷贝到 filesDir 持久化；
+ *   启用后各页面背景降为半透明蒙版（亮色蒙白/暗色蒙深）透出背景图。
+ */
+@Composable
+private fun ThemeSection() {
+    val app = LinBoxApp.get()
+    val scope0 = rememberCoroutineScope()
+    val context = LocalContext.current
+    val mode by app.settingsStore.shellThemeMode.collectAsState(initial = "dark")
+    val customBg by app.settingsStore.shellCustomBg.collectAsState(initial = "")
+    val bgFile = remember { java.io.File(context.filesDir, "shell_bg.jpg") }
+    var preview by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    // 预览缩略图（降采样解码，与实际渲染同路）
+    LaunchedEffect(customBg) {
+        preview = if (customBg.isNotBlank()) withContext(Dispatchers.IO) {
+            decodeBgPreview(bgFile)
+        } else null
+    }
+
+    // 选图（SAF，不需要存储权限）：拷贝到 filesDir 持久化，避免
+    // content:// URI 权限随重启失效
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope0.launch(Dispatchers.IO) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    bgFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                app.settingsStore.setShellCustomBg(bgFile.absolutePath)
+                // 即时生效（不必等 flow 回流）
+                com.linbox.core.theme.ShellThemeState.customBgPath = bgFile.absolutePath
+                com.linbox.core.theme.ShellThemeState.bgVersion++
+            } catch (e: Exception) {
+                android.util.Log.w("LinBoxSettings", "自定义背景保存失败: ${e.message}")
+            }
+        }
+    }
+
+    SectionHeader("主题", "亮暗模式、自定义背景")
+
+    // ===== 主题模式 =====
+    SettingsBlockCard("主题模式") {
+        Text(
+            "亮色全亮色，暗色全暗色；主页 / 游戏库 / 容器 / 设置 / 高级 / 文件管理器全部统一，文字颜色自动适配。",
+            color = LinShellTheme.textSecondary,
+            fontSize = 11.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SegmentedOption("☀ 亮色", mode == "light") {
+                scope0.launch { app.settingsStore.setShellThemeMode("light") }
+            }
+            SegmentedOption("🌙 暗色", mode == "dark") {
+                scope0.launch { app.settingsStore.setShellThemeMode("dark") }
+            }
+        }
+    }
+
+    // ===== 自定义背景 =====
+    SettingsBlockCard("自定义背景") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (preview != null) {
+                Image(
+                    bitmap = preview!!.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(width = 96.dp, height = 64.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (customBg.isNotBlank()) "已启用：所有页面背景叠加此图片（亮/暗色各自带蒙版保证文字清晰）"
+                    else "未设置：使用默认背景；选择图片后全应用统一叠加",
+                    color = LinShellTheme.textSecondary,
+                    fontSize = 11.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SegmentedOption("选择图片…", selected = false) { pickImage.launch("image/*") }
+                    SegmentedOption("恢复默认", selected = false) {
+                        scope0.launch(Dispatchers.IO) {
+                            bgFile.delete()
+                            app.settingsStore.setShellCustomBg("")
+                            com.linbox.core.theme.ShellThemeState.customBgPath = ""
+                            com.linbox.core.theme.ShellThemeState.bgVersion++
+                        }
+                    }
+                }
             }
         }
     }
