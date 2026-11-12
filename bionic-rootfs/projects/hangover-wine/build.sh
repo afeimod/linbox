@@ -1348,12 +1348,31 @@ PCMBSF
   fi
   # 同向排查：EC 趟跳板齐备性兜底校验（spec 里全部非 Nt 的 -syscall 条目都
   # 必须在 signal_arm64ec.c 有跳板或头文件可见声明 —— 防后续 Valve 树再追加
+  # v3.4.8：wine-10.x / proton_10.0+ 树跳板形态升级误杀修复 —— 上游把
+  #    signal_arm64ec.c 的 200+ 逐条手写裸跳板（NTSTATUS SYSCALL_API <sym>(...)
+  #    { __ASM_SYSCALL_FUNC( __id_<sym> ); }）整体重构为表驱动宏：
+  #      #define DEFINE_SYSCALL_(ret,name,args) \
+  #          ret __attribute__((naked, hybrid_patchable)) name args \
+  #          { __ASM_SYSCALL_FUNC( __id_##name, name ); }
+  #      DEFINE_SYSCALL(wine_nt_to_unix_file_name, (...))
+  #      DEFINE_WRAPPED_SYSCALL(NtAllocateVirtualMemory, (...))
+  #    宏展开即完整 EC 裸跳板定义（枚举 id 与 arm64ec_syscalls[] 表同源，
+  #    均取自 ntdll.spec 生成的 ntsyscalls.h 的 ALL_SYSCALLS64 —— spec 收录
+  #    的 -syscall 条目必被宏覆盖，不存在"表有条目而跳板缺失"）。旧校验只
+  #    认 "SYSCALL_API <sym>" 字面量与 extern 声明两种形态 → 对 proton_10.0 /
+  #    official-10.x 的 DEFINE_SYSCALL(wine_nt_to_unix_file_name,...) /
+  #    DEFINE_SYSCALL(wine_unix_to_nt_file_name,...) 误报"无跳板且无可见
+  #    声明"整包误杀（CI wine-build-log-arm64ec (14).zip 实证：pre_setup
+  #    阵亡于两条 wine_*_file_name，而该树跳板实为宏形态齐备）。三种合法
+  #    形态全识别：proton_9.0 手写 SYSCALL_API、wine-10+ 宏
+  #    DEFINE_SYSCALL/DEFINE_WRAPPED_SYSCALL、头文件 extern 声明。
   _ec_syscall_missing=0
   if [[ "${args}" == *"--enable-archs=arm64ec,"* ]] && [[ -f dlls/ntdll/ntdll.spec ]]; then
     while IFS= read -r _spec_line; do
       _sym=$(echo "${_spec_line}" | sed -n 's/^@ stdcall -syscall[^\n]* \([A-Za-z_][A-Za-z0-9_]*\)(.*/\1/p')
       [[ -z "${_sym}" ]] && continue
       if ! grep -q "SYSCALL_API ${_sym}" dlls/ntdll/signal_arm64ec.c 2>/dev/null \
+         && ! grep -qE "DEFINE_SYSCALL\(${_sym},|DEFINE_WRAPPED_SYSCALL\(${_sym}," dlls/ntdll/signal_arm64ec.c 2>/dev/null \
          && ! grep -rq "extern.*${_sym}\b" dlls/ntdll/signal_arm64ec.c include/winternl.h include/wine/debug.h 2>/dev/null; then
         echo "::error::EC 跳板兜底校验失败：ntdll.spec 的 -syscall 条目 ${_sym} 在 signal_arm64ec.c 无跳板且无可见声明！"
         _ec_syscall_missing=1
