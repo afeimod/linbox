@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -266,6 +267,9 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
         LaunchedEffect(expanded) {
             if (!expanded) GamepadController.clearMenuHit()
         }
+        // 菜单高度上限（Dp）——提前取出：AnimatedVisibility 内容 lambda 的
+        // 隐式接收者链里 maxHeight 无法隐式解析，必须在此层取值
+        val menuMaxHeightDp = maxHeight - 16.dp
         Box(
             modifier = Modifier
                 .offset { IntOffset(menuLeft.roundToInt(), menuTopClamped.roundToInt()) }
@@ -286,7 +290,7 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
             ) {
                 Column(
                     modifier = Modifier
-                        .heightIn(max = maxHeight - 16.dp)
+                        .heightIn(max = menuMaxHeightDp)
                         .shadow(10.dp, RoundedCornerShape(20.dp))
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xF2162434))

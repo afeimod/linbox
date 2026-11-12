@@ -19,6 +19,7 @@ import com.linbox.core.input.MouseController
 import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
 import com.linbox.core.input.VirtualKeyboardOverlay
+import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.input.gamepad.GamepadFloatingBall
 import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow

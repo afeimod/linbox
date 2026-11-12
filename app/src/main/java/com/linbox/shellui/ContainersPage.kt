@@ -52,6 +52,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -499,7 +500,7 @@ private fun ContainerListScreen() {
                     confirmRemove = null
                     cs.launch(Dispatchers.IO) {
                         RootfsLauncher.clearPrefixLog(c.name)
-                        val err = ContainerManager.delete(c.name)
+                        val err = ContainerManager.remove(c.name)
                         withContext(Dispatchers.Main) {
                             err?.let { toast(context, it) } ?: run {
                                 toast(context, "已删除 ${c.name}")
@@ -968,7 +969,7 @@ internal fun FilePickListenerEffect(targetApp: String, onPick: (String) -> Unit)
         val un = com.linbox.apps.filemanager.FilePickBus.listen(targetApp, "") { current(it) }
         onDispose { un() }
     }
-}\n
+}
 // ===========================================================================
 // 容器编辑页（winlator 同款表单：新建 / 编辑共用）
 // ===========================================================================
@@ -1411,6 +1412,7 @@ private fun EditorTextField(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditorDropdown(
     label: String,

@@ -33,6 +33,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -477,6 +478,7 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
 // 添加 / 编辑游戏弹窗（安卓表单）
 // ===========================================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GameShortcutEditorDialog(
     initial: GameShortcut?,
@@ -566,7 +568,7 @@ private fun GameShortcutEditorDialog(
                                 .menuAnchor(),
                             shape = RoundedCornerShape(10.dp)
                         )
-                        androidx.compose.material3.ExposedDropdownMenu(
+                        ExposedDropdownMenu(
                             expanded = expanded,
                             onDismissRequest = { expanded = false }
                         ) {
