@@ -97,7 +97,10 @@ fun ShellBottomBar(
                     Box(
                         modifier = Modifier
                             .size(52.dp)
-                            .shadow(10.dp, CircleShape, spotColor = palette.blue)
+                            // v6.7（用户："播放运行按钮阴影太大了"）：10dp 品牌色
+                            // 投影在深色/自定义背景上像一团大光晕 —— 降到 3dp
+                            // 素投影，浮起感保留、不再喧宾夺主
+                            .shadow(3.dp, CircleShape)
                             .clip(CircleShape)
                             .background(Brush.linearGradient(listOf(palette.blue, palette.purple)))
                             .clickable {

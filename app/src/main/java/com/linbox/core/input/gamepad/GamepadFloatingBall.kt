@@ -155,6 +155,14 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
             com.termux.x11.LoriePreferences.prefs?.touchMode?.get()?.toIntOrNull() ?: 2
         )
     }
+    // v6.7（用户：“悬浮球里x11相关的设置加上个拉伸切换的快捷”）：
+    // X11 画面拉伸铺满（displayStretch）本地镜像 —— 菜单芯片点亮态；
+    // 与 X11 设置面板“拉伸铺满”同一偏好，双向一致。
+    var x11Stretch by remember {
+        mutableStateOf(
+            com.termux.x11.LoriePreferences.prefs?.displayStretch?.get() ?: true
+        )
+    }
     // v5.0：键盘切换需要 Context（组合层取，回调内使用）
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -503,6 +511,22 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                                 }
                                 expanded = false
                             },
+                            // v6.7：拉伸铺满快捷切换（displayStretch，即时重生成
+                            // 画面 —— 关时固定分辨率按宽高比居中不变形）
+                            BallChipItem(
+                                icon = BallIconKind.STRETCH,
+                                label = "拉伸",
+                                active = x11Stretch
+                            ) {
+                                val lp = com.termux.x11.LoriePreferences.prefs
+                                if (lp != null) {
+                                    val next = !lp.displayStretch.get()
+                                    x11Stretch = next
+                                    lp.displayStretch.put(next)
+                                    com.linbox.apps.x11.X11ResolutionLink.pokeActiveView()
+                                }
+                                expanded = false
+                            },
                             BallChipItem(BallIconKind.CYCLE, "切窗") {
                                 com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
                                 expanded = false
@@ -802,7 +826,7 @@ private fun X11QuickChip(
 private enum class BallIconKind {
     GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE,
     KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME,
-    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY, PIP
+    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY, PIP, STRETCH
 }
 
 /** 图标配色（危险项统一红系；v6.2 增终端组七枚）。 */
@@ -828,6 +852,7 @@ private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF
     BallIconKind.X11 -> Color(0xFF6BD4FF)
     BallIconKind.DISPLAY -> Color(0xFF7FE8DC)
     BallIconKind.PIP -> Color(0xFF8FB7FF)
+    BallIconKind.STRETCH -> Color(0xFF9AD8F5)
 }
 
 /**
@@ -1095,6 +1120,24 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) 
                     cornerRadius = CornerRadius(1.2f * u, 1.2f * u),
                     style = Fill
                 )
+            }
+            // v6.7 拉伸：画面框 + 左右外扩箭头（拉伸铺满）
+            BallIconKind.STRETCH -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(6.0f * u, 6.6f * u),
+                    size = Size(10.0f * u, 8.8f * u),
+                    cornerRadius = CornerRadius(1.4f * u, 1.4f * u),
+                    style = s
+                )
+                // 左箭头（向左外拉）
+                drawLine(tint, Offset(1.6f * u, 11f * u), Offset(4.6f * u, 11f * u), s.width)
+                drawLine(tint, Offset(1.6f * u, 11f * u), Offset(3.2f * u, 9.4f * u), s.width)
+                drawLine(tint, Offset(1.6f * u, 11f * u), Offset(3.2f * u, 12.6f * u), s.width)
+                // 右箭头（向右外拉）
+                drawLine(tint, Offset(20.4f * u, 11f * u), Offset(17.4f * u, 11f * u), s.width)
+                drawLine(tint, Offset(20.4f * u, 11f * u), Offset(18.8f * u, 9.4f * u), s.width)
+                drawLine(tint, Offset(20.4f * u, 11f * u), Offset(18.8f * u, 12.6f * u), s.width)
             }
         }
     }

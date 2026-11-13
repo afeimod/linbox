@@ -390,7 +390,12 @@ internal fun SettingsCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LinShellTheme.surface)
+            // v6.7（用户："没有修复设置背景时的透明效果，应该像图4那种"）：
+            // 设置页卡片从近不透明 surface 改为高级页同款半透玻璃 card
+            // （+描边），自定义背景图从卡片下方透出；无背景时与高级页
+            // 玻璃风一致。
+            .background(LinShellTheme.card)
+            .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(6.dp))
             .clickable(enabled = onClick != null, onClick = { onClick?.invoke() })
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -443,7 +448,7 @@ internal fun SegmentedOption(label: String, selected: Boolean, onClick: () -> Un
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(
-                if (selected) LinShellTheme.blue.copy(alpha = 0.18f) else LinShellTheme.surface
+                if (selected) LinShellTheme.blue.copy(alpha = 0.18f) else LinShellTheme.card
             )
             .border(
                 1.dp,
@@ -469,7 +474,9 @@ internal fun AboutRow(label: String, value: String) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LinShellTheme.surface)
+            // v6.7：玻璃卡（同步 SettingsCard，背景图透出）
+            .background(LinShellTheme.card)
+            .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(6.dp))
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -517,7 +524,9 @@ private fun DisplaySection() {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LinShellTheme.surface)
+            // v6.7：玻璃卡（背景图透出）
+            .background(LinShellTheme.card)
+            .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(6.dp))
             .padding(12.dp)
     ) {
         Column {
@@ -548,7 +557,9 @@ private fun DisplaySection() {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LinShellTheme.surface)
+            // v6.7：玻璃卡（背景图透出）
+            .background(LinShellTheme.card)
+            .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(6.dp))
             .padding(12.dp)
     ) {
         Column {
@@ -721,7 +732,9 @@ private fun SettingsBlockCard(title: String, content: @Composable ColumnScope.()
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(LinShellTheme.surface)
+            // v6.7：玻璃卡（背景图透出，与高级页/主页同款）
+            .background(LinShellTheme.card)
+            .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(6.dp))
             .padding(12.dp)
     ) {
         Text(

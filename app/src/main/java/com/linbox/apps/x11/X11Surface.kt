@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.Display
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
@@ -207,9 +208,10 @@ fun X11DisplayLayer() {
         )
     }
 
-    // 小窗帧 → View 层 LorieView 内容帧同步（外框去标题栏/快捷条/边框；
-    // 关闭时清空回铺满）。key 含 lorieRootRef：factory 创建根容器（晚于
-    // 首次组合）后也要重启同步；v6.5 快捷条显隐即时重排窗内画面。
+    // 小窗帧 → View 层 LorieView 内容帧同步（v6.7：AndroidView 本体已
+    // 收缩到窗口外框 —— lorieFrame 改为窗口内局部坐标：边框内、标题栏/
+    // 快捷条之下；关闭时清空回铺满）。key 含 lorieRootRef：factory 创建
+    // 根容器（晚于首次组合）后也要重启同步；快捷条显隐即时重排窗内画面。
     LaunchedEffect(
         lorieRootRef, floatWin, X11FloatWindow.x, X11FloatWindow.y,
         X11FloatWindow.w, X11FloatWindow.h, X11FloatWindow.maximized,
@@ -228,8 +230,9 @@ fun X11DisplayLayer() {
             ).roundToPx()
         }
         root.lorieFrame = Rect(
-            f.left + bd, f.top + topPx + bd,
-            f.right - bd, f.bottom - bd
+            bd, topPx + bd,
+            (f.width() - bd).coerceAtLeast(bd + 1),
+            (f.height() - bd).coerceAtLeast(topPx + bd + 1)
         )
     }
 
@@ -273,9 +276,14 @@ fun X11DisplayLayer() {
             SmartTouchBridge.activeBridge = null
             // v2.31：桥分离时清理悬挂冲刷与受跟踪指针（防迟到事件误发）
             touchBridge?.onDetached()
-            // v2.32：手柄 Compose 宿主组合显式销毁（AndroidView 内嵌
-            // ComposeView 的组合不随 View detach 自动释放，防泄漏）
-            gamepadHostRef?.disposeComposition()
+            // v2.32.2：手柄 Compose 宿主组合显式销毁（AndroidView 内嵌
+            // ComposeView 的组合不随 View detach 自动释放，防泄漏）；
+            // v6.7：宿主挂 decorView —— Compose 不再代管其移除，必须手动
+            // 从装饰视图摘除（否则会话结束后残留全屏层吞触摸）
+            gamepadHostRef?.let { host ->
+                host.disposeComposition()
+                (host.parent as? ViewGroup)?.removeView(host)
+            }
             gamepadHostRef = null
             // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
@@ -405,18 +413,33 @@ fun X11DisplayLayer() {
                 .weight(1f)
                 .onGloballyPositioned { areaSize = it.size }
         ) {
-            // v6.4 的“小窗桌面背景层”已随 v6.5 移除：窗口外触摸不再被消费，
-            // 经 View 层分类（画面外不入流）→ dispatchTouchEvent 返回 false
-            // → Compose 命中测试继续下沉 → 底层页面照常操作（用户：
-            // “显示在主界面和其他界面前方，但是不遮挡他们操作”）
+            // v6.7（用户：“x11窗口化后，不能点击窗口外的按钮”）：浮窗形态
+            // 下 AndroidView 本体收缩到窗口外框 —— 窗口外的触摸完全不进入
+            // 本显示层（Compose 命中测试按节点边界判定，窗口外根本不会命中
+            // AndroidView 的 interop 节点），底层页面按钮照常点击，不再依赖
+            // “View 返回 false → interop 放行”的链路。全屏形态仍铺满整屏。
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                modifier = if (floatWin) Modifier
+                    .offset {
+                        val f = X11FloatWindow.effectiveFrame(
+                            areaSize.width, areaSize.height
+                        )
+                        IntOffset(f.left, f.top)
+                    }
+                    .layout { m, ctr ->
+                        val f = X11FloatWindow.effectiveFrame(
+                            ctr.maxWidth, ctr.maxHeight
+                        )
+                        val w = f.width().coerceIn(1, ctr.maxWidth)
+                        val h = f.height().coerceIn(1, ctr.maxHeight)
+                        val p = m.measure(Constraints.fixed(w, h))
+                        layout(w, h) { p.place(0, 0) }
+                    }
+                    else Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    // 根容器：v2.32 起为触摸分流容器（X11TouchSplitLayout）——
-                    // 手柄显示时逐指分流：手柄指针 → 手柄宿主（gamepadHost），
-                    // 屏幕指针 → LorieView 直达桥，与按下顺序无关（View 层
-                    // 硬分离，不再依赖 Compose 命中路径锁定顺序）；手柄未
-                    // 显示时零开销直通。
+                    // 根容器（X11TouchSplitLayout）：v6.7 起仅承载 LorieView
+                    // 动态布局（小窗帧 / 拉伸居中）；手柄分流已上移 decorView
+                    // 由 View 体系原生完成，类内分流逻辑保持休眠。
                     // LorieView 铺满窗口（native 跟随窗口 / exact+stretch
                     // 拉伸铺满，均无黑边）。
                     // v2.22.5 fix12：Gravity.CENTER → FILL —— 画面靠左上锚定
@@ -430,12 +453,21 @@ fun X11DisplayLayer() {
                         Gravity.FILL
                     ))
 
-                    // v2.32：手柄 Compose 宿主（GamepadOverlayContent 渲染于
-                    // LorieView 同层 Z 顶）。View 层分流的手柄侧接收者：摇杆/
-                    // 十字键/按钮/工具条的事件经 split 子事件直达此树，不受
-                    // Compose 主树命中竞争影响。嵌入 ComposeView 需显式挂
-                    // lifecycle/registry owner（Activity 同时实现两者）。
-                    // v6.4：小窗模式下仍铺满全屏 —— 手柄按钮不应被窗口裁切。
+                    // v2.32：手柄 Compose 宿主（GamepadOverlayContent 渲染）。
+                    // v6.7：宿主从 X11TouchSplitLayout 迁移到 Activity
+                    // decorView 顶层（Compose 内容视图之上）—— v6.7 起
+                    // AndroidView 本体在浮窗形态收缩到窗口外框，手柄层若留
+                    // 在根容器内会被窗口裁切且归一化坐标错位；挂 decor 后：
+                    // - 手柄元素恒全屏渲染（全屏/浮窗两形态一致，不被窗口
+                    //   裁切，且置顶于一切界面元素之上）；
+                    // - 触摸分流由 View 体系天然完成：decorView 逐子视图
+                    //   （后加者在前）试探 —— 手柄宿主的 Compose 树命中元素
+                    //   即消费，空区域返回 false 自动落回 Compose 内容视图
+                    //   （页面 / 窗口内 LorieView），不再依赖 Compose interop
+                    //   语义与手写逐指分流；多指同按由 MotionEvent
+                    //   splitting 原生支持。
+                    // 嵌入 ComposeView 需显式挂 lifecycle/registry owner
+                    // （Activity 同时实现两者）。
                     val gamepadHost = ComposeView(ctx).apply {
                         setViewTreeLifecycleOwner(lifecycleOwner)
                         (lifecycleOwner as? SavedStateRegistryOwner)?.let {
@@ -449,11 +481,24 @@ fun X11DisplayLayer() {
                             }
                         }
                     }
-                    root.addView(gamepadHost, FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        Gravity.FILL
-                    ))
+                    val decorParent = (ctx as? android.app.Activity)
+                        ?.window?.decorView as? ViewGroup
+                    if (decorParent != null) {
+                        decorParent.addView(
+                            gamepadHost,
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                    } else {
+                        // 兜底：拿不到 Activity decor（极端宿主）时退回根容器
+                        root.addView(gamepadHost, FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            Gravity.FILL
+                        ))
+                    }
                     gamepadHost.visibility = View.GONE
                     gamepadHostRef = gamepadHost
 
@@ -475,8 +520,9 @@ fun X11DisplayLayer() {
                         }
                     }
                     root.padHitTest = { x, y -> GamepadController.isOverPadUi(x, y) }
-                    root.padHost = gamepadHost
-                    root.padSplitActive = false // update 块按手柄开关驱动
+                    // v6.7：padHost 不再接线（宿主已上挂 decorView，View 体系
+                    // 原生分流；padSplitActive 恒 false，以上 router/hitTest
+                    // 仅作历史路径保留，不会被激活）
                     lorieRootRef = root
 
                     val bridge = SmartTouchBridge(ctx, lv)
@@ -529,14 +575,13 @@ fun X11DisplayLayer() {
                     root
                 },
                 update = { root ->
-                    // v2.32：手柄开关 → 分流激活 + 宿主可见性。命中矩形由
-                    // 元素布局后登记（onGloballyPositioned），分流器内部实时
-                    // 判定可用性 —— 未布局完成时自动退回直通（旧路径兜底），
-                    // 无需在此跟踪命中状态。
-                    root.padSplitActive = gamepadEnabled
-                    // v2.32.2：桥侧剥离随分流激活而直通（记账职责移交容器，
-                    // 防双层记账时序差吞 UP —— 详见 SmartTouchBridge.splitActive）
-                    touchBridge?.splitActive = gamepadEnabled
+                    // v6.7：手柄宿主已迁至 decorView 顶层，View 体系原生完成
+                    // 手柄/画面分流 —— 根容器分流器保持休眠（padSplitActive
+                    // 恒 false，dispatchTouchEvent 走 FrameLayout 直通），
+                    // 桥侧剥离同步关闭（手柄指针在 decor 层即被消费，不会
+                    // 抵达 LorieView，无需记账）。
+                    root.padSplitActive = false
+                    touchBridge?.splitActive = false
                     // v2.32.2：手柄关闭即清命中矩形 —— gamepadHost 仅 GONE
                     // 不销毁组合（onDispose 不触发），残留矩形会让兜底剥离
                     // 路径把撞上旧布局位置的屏幕 tap 误吞（点击失灵来源之一）

@@ -171,20 +171,22 @@ fun ContainerHomeScreen() {
     // ---- 弹窗 ----
     var showCapture by remember { mutableStateOf(false) }
     var cardImageFor by remember { mutableStateOf<ContainerData?>(null) }
-    // 卡片图片选择目标（文件管理器回投后写入该容器的 card_image）
-    var cardImageTarget by remember { mutableStateOf<String?>(null) }
     // 前缀构建日志开关（默认隐藏，用户："默认不显示日志"）
     var prefixLogOpen by remember { mutableStateOf(false) }
     val prefixBuilding by RootfsLauncher.prefixBuildFlow.collectAsState()
 
-    // 文件管理器 pickMode=image 的回投监听（首页在组合期间有效）
+    // 文件管理器 pickMode=image 的回投监听。
+    // v6.7（用户："主页里上方容器设置图片无效了"）：选图发起后跳全屏文件
+    // 管理器页 —— 首页离开组合，remember 的目标容器与监听器都被销毁；
+    // FilePickBus 信箱会把结果保留到首页归来重投，但目标容器名必须活在
+    // 组合之外（进程级暂存），否则回投时目标已丢、静默失效。
     CardImagePickListener { path ->
-        val target = cardImageTarget ?: return@CardImagePickListener
+        val target = HomeCardImagePick.target ?: return@CardImagePickListener
+        HomeCardImagePick.target = null
         containers.firstOrNull { it.name == target }?.let { c ->
             val err = ContainerManager.update(c.copy(cardImage = path))
             toast(context, err ?: "卡片图片已更新：$path")
         }
-        cardImageTarget = null
         refresh()
     }
 
@@ -445,7 +447,7 @@ fun ContainerHomeScreen() {
     cardImageFor?.let { c ->
         CardImagePickerDialog(
             container = c,
-            onSetTarget = { cardImageTarget = it },
+            onSetTarget = { HomeCardImagePick.target = it },
             onDismiss = { cardImageFor = null },
             onPicked = {
                 cardImageFor = null
@@ -1082,6 +1084,17 @@ internal fun CardImagePickListener(onPicked: (String) -> Unit) {
         ) { path -> currentOnPicked(path) }
         onDispose { unregister() }
     }
+}
+
+/**
+ * v6.7：首页卡片图片选择的目标容器（进程级暂存）。
+ *
+ * 选图经全屏文件管理器页发起 —— 首页离开组合期间 remember 状态会被
+ * 销毁，目标容器名必须存在组合之外；FilePickBus 的待投递信箱会把
+ * 选择结果保留到首页归来（listen 重注册时回投），两者配合恢复完整链路。
+ */
+internal object HomeCardImagePick {
+    var target: String? = null
 }
 
 /**

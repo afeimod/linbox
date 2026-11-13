@@ -655,8 +655,11 @@ private fun ContainerActionsSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 10.dp)
                 .clip(RoundedCornerShape(22.dp))
-                .background(LinShellTheme.surface.copy(alpha = 0.98f))
-                .border(1.dp, LinShellTheme.surfaceBorder, RoundedCornerShape(22.dp))
+                // v6.7（用户："没有修复设置背景时的透明效果"）：长按操作
+                // 面板同步玻璃化（0.98 近不透明 → 0.86 半透），背景图从
+                // 面板下方透出；文字色随主题/背景亮度自适应仍可读。
+                .background(LinShellTheme.surface.copy(alpha = 0.86f))
+                .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(22.dp))
                 .clickable(enabled = false) { /* 拦截穿透 */ }
                 .padding(vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -861,8 +864,9 @@ internal fun PrefixBuildCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(LinShellTheme.surface)
-            // v6.6：进度卡改随主题 surface（自定义背景时半透玻璃，背景图透出）
+            // v6.7：进度卡同步玻璃化（surface → card，背景图透出，
+            // 与设置页/高级页卡片同款）
+            .background(LinShellTheme.card)
             .border(1.dp, LinShellTheme.blue.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
