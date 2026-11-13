@@ -639,10 +639,14 @@ private fun ContainerActionsSheet(
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
+    // v6.4（用户：“长按容器时调出的菜单没有根据主题来”）：底部弹层底色
+    // 原为写死深藏青（0xF2172030）—— 亮色主题下整张菜单仍是暗色，且
+    // 菜单项文字用主题色（亮色 = 深藏青）叠在深底上直接不可读。改为
+    // LinShellTheme.surface/scrim 动态取色，亮暗主题均与页面一致。
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0x66000000))
+            .background(LinShellTheme.scrim)
             .clickable { onDismiss() }
     ) {
         Column(
@@ -651,8 +655,8 @@ private fun ContainerActionsSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 10.dp)
                 .clip(RoundedCornerShape(22.dp))
-                .background(Color(0xF2172030))
-                .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(22.dp))
+                .background(LinShellTheme.surface.copy(alpha = 0.98f))
+                .border(1.dp, LinShellTheme.surfaceBorder, RoundedCornerShape(22.dp))
                 .clickable(enabled = false) { /* 拦截穿透 */ }
                 .padding(vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -968,6 +972,9 @@ private fun inferPrefixStage(log: String): String {
     }
     return "准备环境"
 }
+
+// v6.4：X11 页前缀构建悬浮卡复用阶段推断（apps.x11 → shellui 跨包共享）
+internal fun prefixStageOf(log: String): String = inferPrefixStage(log)
 
 /** [com.linbox.apps.filemanager.FilePickBus] 的 Compose 封装：组合期内监听文件选择回投。 */
 @Composable

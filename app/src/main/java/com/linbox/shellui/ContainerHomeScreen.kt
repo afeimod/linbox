@@ -28,8 +28,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -39,6 +41,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,9 +72,11 @@ import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.media.ScreenCaptureManager
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
+import com.linbox.core.theme.LinShellTheme
 import com.linbox.core.window.WindowManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -97,6 +102,7 @@ fun ContainerHomeScreen() {
 
     // ---- 数据状态 ----
     val app = com.linbox.LinBoxApp.get()
+    val cs = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
     var containers by remember { mutableStateOf<List<ContainerData>>(emptyList()) }
     var rootfsReady by remember { mutableStateOf(true) }
@@ -193,6 +199,36 @@ fun ContainerHomeScreen() {
             openManagerWindow(context, focus = c.name)
         }
     }
+
+    // v6.4（用户：“主页的下方游戏库点击游戏图标启动没有按照游戏库内
+    // 游戏的对应配置启动”）：主页快捷方式启动改走与游戏库页同一条合并
+    // 链路 —— GameLaunchConfig.applyTo（游戏专属增量覆盖：分辨率/驱动/
+    // 环境变量…）+ precheckRun 预检 + runExe(merged)。旧版直接
+    // launchContainer 用容器原始配置，游戏编辑页里设置的分辨率等
+    // 全部被忽略（即“没按对应配置启动”的根因）。
+    fun runShortcutHome(s: GameShortcut) {
+        val base = containers.firstOrNull { it.name == s.containerName }
+        if (base == null) {
+            toast(context, "容器「${s.containerName}」不存在，请长按游戏卡片编辑")
+            return
+        }
+        val merged = GameLaunchConfig.applyTo(base, s.config)
+        val pre = WineSessionLauncher.precheckRun(merged)
+        if (pre != null) {
+            toast(context, pre)
+            return
+        }
+        Thread {
+            val err = WineSessionLauncher.runExe(context, merged, s.exe)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                err?.let { toast(context, it) }
+                refresh()
+            }
+        }.start()
+    }
+
+    // v6.4：主页快捷方式长按菜单 → 删除确认目标
+    var deleteShortcut by remember { mutableStateOf<GameShortcut?>(null) }
 
     Box(
         modifier = Modifier
@@ -376,14 +412,14 @@ fun ContainerHomeScreen() {
                                 ShortcutCoverCard(
                                     shortcut = g,
                                     running = RootfsLauncher.activeSessions.containsKey(g.containerName),
-                                    onOpen = {
-                                        val container = containers.firstOrNull { it.name == g.containerName }
-                                        if (container == null) {
-                                            toast(context, "容器「${g.containerName}」不存在")
-                                        } else {
-                                            launchContainer(context, container, g.exe) { refresh() }
-                                        }
-                                    }
+                                    onRun = { runShortcutHome(g) },
+                                    onEdit = {
+                                        // 跳游戏库页打开编辑器（编辑器状态在
+                                        // GameLibraryUiState 单例，跨页存活）
+                                        ShellController.showLibrary()
+                                        GameLibraryUiState.openEdit(g)
+                                    },
+                                    onDelete = { deleteShortcut = g }
                                 )
                             }
                         }
@@ -419,6 +455,28 @@ fun ContainerHomeScreen() {
     }
     if (showCapture) {
         CaptureDialog(onDismiss = { showCapture = false })
+    }
+
+    // v6.4：主页快捷方式删除确认（与游戏库页同款语义）
+    deleteShortcut?.let { g ->
+        AlertDialog(
+            onDismissRequest = { deleteShortcut = null },
+            title = { Text("移出游戏库", fontWeight = FontWeight.Bold) },
+            text = { Text("把「${g.label}」从游戏库移除？（不影响容器与游戏文件）") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deleteShortcut = null
+                    cs.launch(Dispatchers.IO) {
+                        GameShortcuts.delete(app, g)
+                        withContext(Dispatchers.Main) { refresh() }
+                    }
+                }) { Text("移除", color = LinShellTheme.red, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteShortcut = null }) { Text("取消") }
+            },
+            containerColor = LinShellTheme.surface
+        )
     }
 }
 
@@ -629,13 +687,18 @@ private fun CurrentContainerPreviewCard(
 
 /**
  * 游戏快捷方式封面卡（主页横滑行，v6.0：游戏库 = 快捷方式不是容器）。
+ *
+ * v6.4：长按弹上下文菜单（启动 / 编辑 / 删除 / 取消，与游戏库页同款
+ * 交互）；专属配置角标与游戏库页一致。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ShortcutCoverCard(
     shortcut: GameShortcut,
     running: Boolean,
-    onOpen: () -> Unit
+    onRun: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val palette = GlassPalette.current
     val cardBitmap by produceState<Bitmap?>(null, shortcut.cardImage) {
@@ -644,12 +707,14 @@ internal fun ShortcutCoverCard(
     val exeIcon by produceState<Bitmap?>(null, shortcut.exe) {
         value = withContext(Dispatchers.IO) { loadExeIcon(shortcut.exe) }
     }
+    // v6.4：长按上下文菜单
+    var menuOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .width(118.dp)
             .clip(RoundedCornerShape(14.dp))
-            .combinedClickable(onClick = onOpen, onLongClick = onOpen)
+            .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true })
     ) {
         Box(
             modifier = Modifier
@@ -684,6 +749,18 @@ internal fun ShortcutCoverCard(
                     }
                 }
             }
+            // v6.4：游戏专属配置角标（与游戏库页一致，一眼可辨）
+            if (shortcut.config.isNotBlank()) {
+                Text(
+                    "专属配置",
+                    color = Color.White, fontSize = 8.sp,
+                    modifier = Modifier
+                        .padding(5.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Color(0x990659C8))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
             // 运行角标
             if (running) {
                 Box(
@@ -713,6 +790,53 @@ internal fun ShortcutCoverCard(
             overflow = TextOverflow.Ellipsis
         )
     }
+
+    // ===== v6.4：长按上下文菜单（启动 / 编辑 / 删除 / 取消）=====
+    if (menuOpen) {
+        androidx.compose.ui.window.Popup(
+            alignment = Alignment.Center,
+            onDismissRequest = { menuOpen = false },
+            properties = androidx.compose.ui.window.PopupProperties(
+                focusable = true,
+                dismissOnClickOutside = true
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(196.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(LinShellTheme.surface)
+                    .border(1.dp, LinShellTheme.surfaceBorder, RoundedCornerShape(14.dp))
+                    .padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    shortcut.label,
+                    color = LinShellTheme.textSecondary,
+                    fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+                ShortcutMenuItem("▶  启动", LinShellTheme.blue) { menuOpen = false; onRun() }
+                ShortcutMenuItem("✏️  编辑", LinShellTheme.textPrimary) { menuOpen = false; onEdit() }
+                ShortcutMenuItem("🗑  删除", LinShellTheme.red) { menuOpen = false; onDelete() }
+                ShortcutMenuItem("✕  取消", LinShellTheme.textSecondary) { menuOpen = false }
+            }
+        }
+    }
+}
+
+/** v6.4：主页快捷方式长按菜单项（与游戏库页 GameCardMenuItem 同款）。 */
+@Composable
+private fun ShortcutMenuItem(label: String, tint: Color, onClick: () -> Unit) {
+    Text(
+        label,
+        color = tint,
+        fontSize = 14.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 9.dp)
+    )
 }
 
 // ============================================================

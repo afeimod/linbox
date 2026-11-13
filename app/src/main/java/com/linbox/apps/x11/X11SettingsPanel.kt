@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -333,6 +334,27 @@ fun X11SettingsDialog() {
                     onChecked = {
                         X11UiPrefs.fullscreen = it
                         prefs.fullscreen.put(it)
+                    },
+                    labelColor = labelColor, accent = accent,
+                    hintColor = hintColor
+                )
+
+                // ---- v6.4 小窗模式（X11 画面 = 可自由拖动/缩放的悬浮窗口） ----
+                //（用户：“x11界面加入小窗设置，实现x11可以自由拖动的类似
+                //  windows窗口那种，可以参考 AnWind 的实现”）
+                val chromeCtx = LocalContext.current
+                SettingSwitch(
+                    title = "小窗模式（自由窗口）",
+                    desc = "X11 画面变成可自由拖动的悬浮窗口（类 Windows，AnWind 同款）：标题栏拖动移动、双击最大化、边缘八向缩放、✕ 退回主页",
+                    checked = X11FloatWindow.enabled,
+                    enabled = true,
+                    onChecked = {
+                        // 与真全屏互斥：开小窗时退出全屏，避免两层抢占
+                        if (it && X11UiPrefs.fullscreen) {
+                            X11UiPrefs.fullscreen = false
+                            prefs.fullscreen.put(false)
+                        }
+                        X11FloatWindow.setEnabled(chromeCtx, it)
                     },
                     labelColor = labelColor, accent = accent,
                     hintColor = hintColor
