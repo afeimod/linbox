@@ -82,20 +82,20 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
     }
 
     fun addElement(type: GamepadController.ElementType) {
-        // v6.2：新元素默认尺寸同步缩小档（按钮 32 / 摇杆 76 / 十字键 60）
+        // v6.3：新元素默认尺寸同步重校档（按钮 42 / 摇杆 100 / 十字键 80）
         val newElement = when (type) {
             GamepadController.ElementType.BUTTON -> GamepadController.PadElement(
                 type = type, label = "A",
                 action = GamepadController.PadAction.key(android.view.KeyEvent.KEYCODE_SPACE, "Space"),
-                posX = 0.5f, posY = 0.5f, sizeDp = 32f
+                posX = 0.5f, posY = 0.5f, sizeDp = 42f
             )
             GamepadController.ElementType.JOYSTICK -> GamepadController.PadElement(
                 type = type, label = "摇杆",
-                posX = 0.2f, posY = 0.5f, sizeDp = 76f
+                posX = 0.2f, posY = 0.5f, sizeDp = 100f
             )
             GamepadController.ElementType.DPAD -> GamepadController.PadElement(
                 type = type, label = "十字键",
-                posX = 0.8f, posY = 0.5f, sizeDp = 60f
+                posX = 0.8f, posY = 0.5f, sizeDp = 80f
             )
         }
         GamepadController.updateElements(elements + newElement)
@@ -165,14 +165,14 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
                 onDrag = { delta -> applyWindowDrag(delta) }
             )
 
-            // ===== 编辑模式（v2.26 收编进设置窗；v6.2 紧凑行） =====
+            // ===== 编辑模式（v2.26 收编进设置窗；v6.3 紧凑行再收紧） =====
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("编辑模式", color = Color(0xFFE2F5FF), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    Text("拖动元素定位，角标删除", color = Color(0xFF6E8FA5), fontSize = 9.sp, maxLines = 1)
+                    Text("编辑模式", color = Color(0xFFE2F5FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                    Text("拖动元素定位，角标删除", color = Color(0xFF6E8FA5), fontSize = 8.sp, maxLines = 1)
                 }
                 Spacer(Modifier.width(8.dp))
                 Switch(
@@ -339,6 +339,7 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
 
 @Composable
 private fun GpSettingsHeader(onDismiss: () -> Unit, onDrag: (Offset) -> Unit) {
+    // v6.3：标题栏收紧（内边距 8/7→6/5，字号 13→11，关闭钮 22→18）
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -349,37 +350,37 @@ private fun GpSettingsHeader(onDismiss: () -> Unit, onDrag: (Offset) -> Unit) {
                     onDrag(amount)
                 }
             }
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+            .padding(horizontal = 6.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 拖动手柄提示
-        Text("⠿", color = Color(0x66E2F5FF), fontSize = 12.sp)
-        Spacer(Modifier.width(6.dp))
-        Text("🎮", fontSize = 13.sp)
-        Spacer(Modifier.width(6.dp))
+        Text("⠿", color = Color(0x66E2F5FF), fontSize = 10.sp)
+        Spacer(Modifier.width(5.dp))
+        Text("🎮", fontSize = 11.sp)
+        Spacer(Modifier.width(5.dp))
         Text(
             "虚拟手柄设置",
             color = Color(0xFFE2F5FF),
-            fontSize = 13.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f)
         )
         Text(
             "拖动标题栏可移动",
             color = Color(0x66E2F5FF),
-            fontSize = 9.sp,
+            fontSize = 8.sp,
             maxLines = 1
         )
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(5.dp))
         Box(
             modifier = Modifier
-                .size(22.dp)
+                .size(18.dp)
                 .clip(CircleShape)
                 .background(Color(0x1FFFFFFF))
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center
         ) {
-            Text("×", color = Color(0xFFE2F5FF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("×", color = Color(0xFFE2F5FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -389,9 +390,9 @@ private fun GpSectionLabel(text: String) {
     Text(
         text,
         color = Color(0xFF2DD4BF),
-        fontSize = 11.sp,
+        fontSize = 9.5.sp,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(top = 8.dp, bottom = 5.dp)
+        modifier = Modifier.padding(top = 6.dp, bottom = 3.dp)
     )
 }
 
@@ -400,8 +401,8 @@ private fun GpSubLabel(text: String) {
     Text(
         text,
         color = Color(0xFF9FC4D8),
-        fontSize = 10.sp,
-        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+        fontSize = 8.5.sp,
+        modifier = Modifier.padding(top = 4.dp, bottom = 1.dp)
     )
 }
 
@@ -410,57 +411,60 @@ private fun GpHint(text: String) {
     Text(
         text,
         color = Color(0xFF6E8FA5),
-        fontSize = 9.sp,
-        modifier = Modifier.padding(top = 3.dp)
+        fontSize = 8.sp,
+        modifier = Modifier.padding(top = 2.dp)
     )
 }
 
 @Composable
 private fun GpChip(label: String, active: Boolean, compact: Boolean = false, onClick: () -> Unit) {
+    // v6.3：内部框与字体整体缩小（用户："按键编辑界面整体字体和内部框
+    // 也要缩小，整体可以不变"）—— 芯片内边距 13/7→9/4（紧凑 9/4→7/3），
+    // 字号 11→9.5，窗口整体尺寸不变
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(7.dp))
             .background(
                 if (active) Color(0x4D2DD4BF) else Color(0x1FFFFFFF)
             )
             .border(
                 1.dp,
                 if (active) Color(0xFF2DD4BF) else Color(0x26FFFFFF),
-                RoundedCornerShape(8.dp)
+                RoundedCornerShape(7.dp)
             )
             .clickable(onClick = onClick)
             .padding(
-                horizontal = if (compact) 9.dp else 13.dp,
-                vertical = if (compact) 4.dp else 7.dp
+                horizontal = if (compact) 7.dp else 9.dp,
+                vertical = if (compact) 3.dp else 4.dp
             ),
         contentAlignment = Alignment.Center
     ) {
         Text(
             label,
             color = if (active) Color(0xFF5EEAD4) else Color(0xFFCFE4F0),
-            fontSize = 11.sp,
+            fontSize = 9.5.sp,
             fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1
         )
     }
 }
 
-/** v6.2：危险动作按钮（删除元素）。 */
+/** v6.2：危险动作按钮（删除元素）；v6.3 内框缩小。 */
 @Composable
 private fun GpDangerButton(label: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(7.dp))
             .background(Color(0x33EF4444))
-            .border(1.dp, Color(0x66EF4444), RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0x66EF4444), RoundedCornerShape(7.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 13.dp, vertical = 7.dp),
+            .padding(horizontal = 9.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             label,
             color = Color(0xFFFCA5A5),
-            fontSize = 11.sp,
+            fontSize = 9.5.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1
         )
@@ -478,19 +482,20 @@ private fun GpElementChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // v6.3：内框缩小 —— 图标 14→11、标签 9.5→8.5、内边距 6→4
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(if (selected) Color(0x332DD4BF) else Color(0x14FFFFFF))
             .border(
                 1.dp,
                 if (selected) Color(0xFF2DD4BF) else Color(0x26FFFFFF),
-                RoundedCornerShape(10.dp)
+                RoundedCornerShape(8.dp)
             )
             .clickable(onClick = onClick)
-            .padding(vertical = 6.dp)
+            .padding(vertical = 4.dp)
     ) {
         Text(
             when (element.type) {
@@ -499,13 +504,13 @@ private fun GpElementChip(
                 GamepadController.ElementType.DPAD -> "✛"
             },
             color = if (selected) Color(0xFF5EEAD4) else Color(0xFF9FC4D8),
-            fontSize = 14.sp
+            fontSize = 11.sp
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(1.dp))
         Text(
             element.label.ifBlank { typeLabel(element) },
             color = if (selected) Color(0xFFE2F5FF) else Color(0xFFCFE4F0),
-            fontSize = 9.5.sp,
+            fontSize = 8.5.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
@@ -515,32 +520,33 @@ private fun GpElementChip(
 
 @Composable
 private fun GpMappingButton(text: String, onClick: () -> Unit) {
+    // v6.3：内框缩小（12/9→9/6，字号 11/13→9.5/11）
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(7.dp))
             .background(Color(0x1FFFFFFF))
-            .border(1.dp, Color(0x402DD4BF), RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0x402DD4BF), RoundedCornerShape(7.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 9.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             "映射到",
             color = Color(0xFF9FC4D8),
-            fontSize = 11.sp
+            fontSize = 9.5.sp
         )
         Spacer(Modifier.weight(1f))
         Text(
             text,
             color = Color(0xFF5EEAD4),
-            fontSize = 13.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Spacer(Modifier.width(6.dp))
-        Text("▾", color = Color(0xFF5EEAD4), fontSize = 11.sp)
+        Spacer(Modifier.width(5.dp))
+        Text("▾", color = Color(0xFF5EEAD4), fontSize = 9.5.sp)
     }
 }
 
@@ -614,10 +620,10 @@ private fun ActionPickerSheet(
             Text(
                 "选择映射（全部键盘按键 + 鼠标功能）",
                 color = Color(0xFFE2F5FF),
-                fontSize = 13.sp,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
 
             // 分组 Tab
             Row(
@@ -647,17 +653,17 @@ private fun ActionPickerSheet(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(7.dp))
                                     .background(Color(0x1FFFFFFF))
-                                    .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(8.dp))
+                                    .border(1.dp, Color(0x26FFFFFF), RoundedCornerShape(7.dp))
                                     .clickable { onPick(action) }
-                                    .padding(vertical = 9.dp),
+                                    .padding(vertical = 6.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = action.label,
                                     color = Color(0xFFE2F5FF),
-                                    fontSize = 11.sp,
+                                    fontSize = 9.5.sp,
                                     fontWeight = FontWeight.Medium,
                                     textAlign = TextAlign.Center,
                                     maxLines = 1

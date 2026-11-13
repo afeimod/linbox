@@ -195,48 +195,50 @@ object GamepadController {
     // 预设布局
     // ============================================================
 
-    /** 经典手柄布局（v2.15.3 新默认；v6.2 尺寸整体缩小 50% ——
-     *  用户：“虚拟手柄按键默认太大了…全都降低50%”）：左摇杆=WASD +
+    /** 经典手柄布局（v2.15.3 新默认；v6.3 尺寸重校 ——
+     *  用户：“虚拟手柄的按钮默认太大了，默认应该100dp”：摇杆 76→100、
+     *  十字键 60→80、按钮 32→42、L1/R1 28→38、≡ 26→32）：左摇杆=WASD +
      *  左十字键=方向键 + 右六键 JKLUIO + Start≡=Tab。
-     *  按钮表面直接显示映射按键名；已存用户布局不受影响（仅默认值）。 */
+     *  按钮表面直接显示映射按键名；已存用户布局不受影响（仅默认值，
+     *  存量旧默认布局由 loadFromJson 的静默迁移升级）。 */
     fun classicLayout(): List<PadElement> = listOf(
         PadElement(type = ElementType.JOYSTICK, label = "摇杆", dirMode = DirMode.WASD,
-            posX = 0.16f, posY = 0.72f, sizeDp = 76f),
+            posX = 0.16f, posY = 0.72f, sizeDp = 100f),
         PadElement(type = ElementType.DPAD, label = "十字键", dirMode = DirMode.ARROWS,
-            posX = 0.38f, posY = 0.72f, sizeDp = 60f),
+            posX = 0.38f, posY = 0.72f, sizeDp = 80f),
         PadElement(type = ElementType.BUTTON, label = "A",
             action = PadAction.key(KeyEvent.KEYCODE_J, "J"),
-            posX = 0.84f, posY = 0.70f, sizeDp = 32f),
+            posX = 0.84f, posY = 0.70f, sizeDp = 42f),
         PadElement(type = ElementType.BUTTON, label = "B",
             action = PadAction.key(KeyEvent.KEYCODE_K, "K"),
-            posX = 0.76f, posY = 0.80f, sizeDp = 32f),
+            posX = 0.76f, posY = 0.80f, sizeDp = 42f),
         PadElement(type = ElementType.BUTTON, label = "X",
             action = PadAction.key(KeyEvent.KEYCODE_L, "L"),
-            posX = 0.76f, posY = 0.58f, sizeDp = 32f),
+            posX = 0.76f, posY = 0.58f, sizeDp = 42f),
         PadElement(type = ElementType.BUTTON, label = "Y",
             action = PadAction.key(KeyEvent.KEYCODE_U, "U"),
-            posX = 0.66f, posY = 0.66f, sizeDp = 32f),
+            posX = 0.66f, posY = 0.66f, sizeDp = 42f),
         PadElement(type = ElementType.BUTTON, label = "L1",
             action = PadAction.key(KeyEvent.KEYCODE_I, "I"),
-            posX = 0.12f, posY = 0.42f, sizeDp = 28f),
+            posX = 0.12f, posY = 0.42f, sizeDp = 38f),
         PadElement(type = ElementType.BUTTON, label = "R1",
             action = PadAction.key(KeyEvent.KEYCODE_O, "O"),
-            posX = 0.88f, posY = 0.42f, sizeDp = 28f),
+            posX = 0.88f, posY = 0.42f, sizeDp = 38f),
         PadElement(type = ElementType.BUTTON, label = "≡",
             action = PadAction.key(KeyEvent.KEYCODE_TAB, "Tab"),
-            posX = 0.50f, posY = 0.84f, sizeDp = 26f)
+            posX = 0.50f, posY = 0.84f, sizeDp = 32f)
     )
 
-    /** 简单布局：仅左十字键（方向键） + 右 J/K 两键（v6.2 同步缩小 50%）。 */
+    /** 简单布局：仅左十字键（方向键） + 右 J/K 两键（v6.3 尺寸同步重校）。 */
     fun simpleLayout(): List<PadElement> = listOf(
         PadElement(type = ElementType.DPAD, label = "十字键", dirMode = DirMode.ARROWS,
-            posX = 0.18f, posY = 0.72f, sizeDp = 70f),
+            posX = 0.18f, posY = 0.72f, sizeDp = 94f),
         PadElement(type = ElementType.BUTTON, label = "A",
             action = PadAction.key(KeyEvent.KEYCODE_J, "J"),
-            posX = 0.82f, posY = 0.70f, sizeDp = 36f),
+            posX = 0.82f, posY = 0.70f, sizeDp = 48f),
         PadElement(type = ElementType.BUTTON, label = "B",
             action = PadAction.key(KeyEvent.KEYCODE_K, "K"),
-            posX = 0.70f, posY = 0.80f, sizeDp = 36f)
+            posX = 0.70f, posY = 0.80f, sizeDp = 48f)
     )
 
     // ============================================================
@@ -343,6 +345,45 @@ object GamepadController {
                 )
             }
             if (list.isNotEmpty()) elements = list
+            // v6.3：存量旧默认布局静默迁移 —— 仅改默认尺寸时已存配置会一直
+            // 盖住新默认（用户设备上的手柄还是老 150dp 摇杆，改默认值看不到
+            // “还是太大”）。已存布局与任一历史默认（v6.1/v6.2 经典或简单）
+            // 逐元素一致（忽略随机 id，比对类型/标签/位置/尺寸）= 从未自定
+            // 义 → 升级为 v6.3 新默认；动过任何元素（移动/改尺寸/改映射）
+            // 的自定布局不受影响。
+            if (isLegacyDefaultLayout(list)) {
+                elements = if (list.size == 3) simpleLayout() else classicLayout()
+            }
+        }
+    }
+
+    /**
+     * v6.3：已存布局是否与某个历史默认布局完全一致（忽略元素 id）。
+     * 历史默认与当前默认仅尺寸不同（位置/类型/标签/映射各版一致）：
+     * v6.1 经典（150/120/62×4/56×2/48）、v6.2 经典（76/60/32×4/28×2/26）、
+     * v6.1 简单（140/72/72）、v6.2 简单（70/36/36）。按序逐元素比对
+     *（类型/标签/位置/尺寸/映射），动过任何一项的自定布局都不匹配。
+     */
+    private fun isLegacyDefaultLayout(list: List<PadElement>): Boolean {
+        fun legacy(sizes: FloatArray, base: List<PadElement>): List<PadElement> =
+            base.mapIndexed { i, e -> e.copy(sizeDp = sizes[i]) }
+        val candidates = listOf(
+            legacy(floatArrayOf(150f, 120f, 62f, 62f, 62f, 62f, 56f, 56f, 48f), classicLayout()),
+            legacy(floatArrayOf(76f, 60f, 32f, 32f, 32f, 32f, 28f, 28f, 26f), classicLayout()),
+            legacy(floatArrayOf(140f, 72f, 72f), simpleLayout()),
+            legacy(floatArrayOf(70f, 36f, 36f), simpleLayout())
+        )
+        return candidates.any { def ->
+            def.size == list.size && def.indices.all { i ->
+                val a = def[i]
+                val b = list[i]
+                a.type == b.type && a.label == b.label &&
+                    a.action.kind == b.action.kind &&
+                    a.action.keyCode == b.action.keyCode &&
+                    kotlin.math.abs(a.posX - b.posX) < 0.01f &&
+                    kotlin.math.abs(a.posY - b.posY) < 0.01f &&
+                    kotlin.math.abs(a.sizeDp - b.sizeDp) < 0.51f
+            }
         }
     }
 

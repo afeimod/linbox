@@ -33,6 +33,7 @@ import com.linbox.apps.containers.launcher.RootfsLauncher
 import com.linbox.apps.containers.launcher.WineEnvironment
 import com.linbox.apps.containers.launcher.WrapperDriverSupport
 import com.linbox.core.theme.LocalWinTheme
+import com.linbox.core.theme.ShellThemeState
 import com.linbox.core.window.WinConfirmDialog
 import com.linbox.core.window.WinDialog
 import com.linbox.core.window.WindowContentScope
@@ -174,11 +175,16 @@ fun GuanliDialogScale(winScale: Float, winFontScale: Float = winScale, content: 
 
 /** wineguanli.py Qt 样式表的配色（QToolBar/QGroupBox/QPushButton 原色）。 */
 private object GuanliColors {
-    // v5.0（安卓化）：全部换成 LinShellTheme 同源暗色系 —— 管理器不再
-    // 是"老 Windows 窗口里的 Qt 亮色面板"，与壳层全局主题统一。
-    val toolbar = Color(0xFF161D33)        // 工具栏/导航底（LinShellTheme.surface）
-    val toolbarHover = Color(0xFF1F2841)   // 工具栏按钮 hover
-    val accent = Color(0xFF4E7CFF)         // 主蓝（LinShellTheme.blue）
+    // v6.3（用户：“图形驱动cpu游戏库等主题不对没有和前面基本和启动参数
+    // 一样随着全局主题，字体也不对，很多显示不出来”）：全部色值改为
+    // 跟随 ShellThemeState 亮/暗实时切换（LinShellTheme 同款模式）。
+    // 旧版是写死的暗色 —— 亮色主题下 info（60% 白）说明文字直接隐身、
+    // toolbar/深色芯片在浅底上突兀，即“很多显示不出来”的直接根因。
+    val toolbar: Color
+        get() = if (ShellThemeState.dark) Color(0xFF161D33) else Color(0xFFE8EEFB)
+    val toolbarHover: Color
+        get() = if (ShellThemeState.dark) Color(0xFF1F2841) else Color(0xFFD9E4F8)
+    val accent: Color = Color(0xFF4E7CFF)         // 主蓝（LinShellTheme.blue，亮暗通用）
     val accentDark = Color(0xFF3D66E0)
     val accentPressed = Color(0xFF2F51B8)
     val green = Color(0xFF34C759)          // ▶ 运行
@@ -187,11 +193,21 @@ private object GuanliColors {
     val red = Color(0xFFFF5A5A)            // 删除类
     val redFab = Color(0xFFFF5A5A)         // DY 删除变量
     val blueFab = Color(0xFF4E7CFF)        // "选择…"类按钮
-    val grey = Color(0xFF8A93A8)           // 重置默认
-    val info = Color(0x99FFFFFF)           // 说明文字（次级文本）
-    val panelBg = Color(0xFF0F1424)        // 页面底（LinShellTheme.bg）
-    val listSel = Color(0x334E7CFF)        // 列表选中（蓝色 20%）
-    val rowAlt = Color(0x14FFFFFF)         // 信息底（微白）
+    val grey: Color
+        get() = if (ShellThemeState.dark) Color(0xFF8A93A8) else Color(0xFF6B7590)
+    val info: Color
+        get() = if (ShellThemeState.dark) Color(0x99FFFFFF) else Color(0xFF5A6480)
+    val panelBg: Color
+        get() = if (ShellThemeState.dark) Color(0xFF0F1424) else Color(0xFFF2F5FC)
+    val listSel = Color(0x334E7CFF)        // 列表选中（蓝色 20%，亮暗通用）
+    val rowAlt: Color
+        get() = if (ShellThemeState.dark) Color(0x14FFFFFF) else Color(0x0A1C2340)
+    /** v6.3：中性芯片底（旧写死 0xFF243049 深藏青 —— 亮色主题下太突兀）。 */
+    val chipBg: Color
+        get() = if (ShellThemeState.dark) Color(0xFF243049) else Color(0xFFDFE8F8)
+    /** v6.3：toolbar 底上的文字色（暗=白 / 亮=深藏青）。 */
+    val onToolbar: Color
+        get() = if (ShellThemeState.dark) Color.White else Color(0xFF1C2340)
 }
 
 // ===========================================================================
@@ -605,7 +621,7 @@ private fun GuanliToolbar(
         Box {
             Text(
                 "☰",
-                color = Color.White,
+                color = GuanliColors.onToolbar,
                 fontSize = gsp(20.sp),
                 modifier = Modifier
                     .clip(RoundedCornerShape(gdp(4.dp)))
@@ -625,7 +641,7 @@ private fun GuanliToolbar(
         Spacer(Modifier.width(gdp(10.dp)))
         Text(
             if (advancedView) "⚙️ 高级设置" else "🏠 容器管理",
-            color = Color.White,
+            color = GuanliColors.onToolbar,
             fontSize = gsp(20.sp),
             fontWeight = FontWeight.Bold
         )
@@ -644,7 +660,7 @@ private fun GuanliToolbar(
 private fun GTextButton(label: String, onEnabled: (() -> Unit)?) {
     Text(
         label,
-        color = if (onEnabled != null) Color.White else Color.White.copy(alpha = 0.4f),
+        color = if (onEnabled != null) GuanliColors.onToolbar else GuanliColors.onToolbar.copy(alpha = 0.4f),
         fontSize = gsp(14.sp),
         fontWeight = FontWeight.Bold,
         modifier = Modifier
@@ -700,7 +716,7 @@ private fun GuanliContainerPage(
                     "📦 已创建的容器",
                     fontSize = gsp(20.sp),
                     fontWeight = FontWeight.Bold,
-                    color = GuanliColors.toolbar
+                    color = themeFg()
                 )
                 Spacer(Modifier.height(gdp(8.dp)))
                 LeftContainerListBox(
@@ -780,7 +796,7 @@ private fun GuanliContainerPage(
             Text(
                 "↔ 屏幕比容器管理器窄：界面已按 ${"%.0f".format((LocalGuanliScale.current * 100))}% 缩放，左右滑动查看完整面板",
                 fontSize = gsp(10.sp),
-                color = Color.White,
+                color = GuanliColors.onToolbar,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = gdp(4.dp))
@@ -1127,31 +1143,6 @@ internal fun BasicSettingsTab(
                 }
             )
         }
-        GField("🖥️ 分辨率:") {
-            // wineguanli：可编辑下拉（全屏 + 8 档 + 自定义输入）
-            val resOptions = listOf("全屏", "800x600", "1024x768", "1280x720", "1366x768", "1600x900", "1920x1080", "2560x1440")
-            val cur = if (edit.screen == "native") "全屏" else edit.screen
-            GComboBox(
-                options = resOptions,
-                selected = if (cur in resOptions) cur else resOptions.first(),
-                onSelect = { v ->
-                    applyResolution(edit, v, onChange, edit.flagSet.contains(ContainerFlags.INDEPENDENT))
-                },
-                customLabel = if (cur !in resOptions) cur else null
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = cur,
-                    onValueChange = { v ->
-                        applyResolution(edit, v, onChange, edit.flagSet.contains(ContainerFlags.INDEPENDENT))
-                    },
-                    label = { Text("自定义（如 1280x1024）", fontSize = gsp(10.sp)) },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = gsp(12.sp)),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
         GField("🌐 语言:") {
             // v3.3.2 恢复（用户："语言设置你给去掉了？那个更改后可以更改
             // 启动配置语言"）：显式档直接作为 LANG/LC_ALL（配合 wine
@@ -1232,32 +1223,10 @@ internal fun BasicSettingsTab(
         }
     }
 
-    // wineguanli.py：窗口模式组
-    GGroup("窗口模式") {
-        val independent = edit.flagSet.contains(ContainerFlags.INDEPENDENT)
-        GCheckRow("🪟 独立窗口模式 (不支持proton)", independent) { on ->
-            // v3.3.9 修复（用户问题 3：勾选不了独立窗口）：旧版先 onChange 改
-            // flags、再用【旧 edit】调 applyResolution → 第二次 onChange 把
-            // 第一次写入的 flags 覆盖回去，勾选永远不生效。改为单次
-            // onChange 合并 flags + screen + dmode。
-            val flags = edit.flagSet.toMutableSet()
-            if (on) flags.add(ContainerFlags.INDEPENDENT) else flags.remove(ContainerFlags.INDEPENDENT)
-            val screen = if (edit.screen == "native") "native" else edit.screen
-            val dmode = when {
-                on -> DisplayMode.F
-                screen == "native" -> DisplayMode.OFF
-                else -> DisplayMode.D
-            }
-            onChange(
-                edit.copy(
-                    flags = ContainerFlags.serialize(flags),
-                    screen = screen,
-                    dmode = dmode
-                )
-            )
-        }
-        GNote("💡 独立窗口: -f（注册表虚拟桌面，带 wine 界面）；非独立: -d（命令行虚拟桌面）；分辨率选全屏 = 无 wine 界面真全屏")
-    }
+    // v6.3：分辨率 + 窗口模式共享组（容器编辑页 / 游戏快捷方式编辑页
+    // 同一套 UI / 同一套 screen/dmode 联动语义 —— 用户："编辑界面和容器
+    // 编辑不统一"；自定义分辨率输入修复）
+    ResolutionWindowGroup(edit, onChange)
 
     // wineguanli.py：EXE 文件组（留空则运行时再选）
     GGroup("EXE文件 (留空则运行时选择)") {
@@ -1360,6 +1329,80 @@ private fun applyResolution(
         else -> DisplayMode.D
     }
     onChange(edit.copy(screen = screen, dmode = dmode))
+}
+
+/**
+ * v6.3：分辨率 + 窗口模式共享组（容器编辑页 / 游戏快捷方式编辑页共用）。
+ *
+ * 用户需求（"编辑界面和容器编辑不统一，分辨率等所有设置不生效"）：
+ * - 两处编辑器同一套 UI（GComboBox 预设 + 自定义输入 + 独立窗口勾选）
+ *   同一套 screen/dmode 联动 —— 分辨率选 WxH 即 dmode=d，启动链
+ *   `wine explorer /desktop=shell,WxH` 包桌 + X11 握手（AnWind 同款
+ *   容器分辨率逻辑），不再"还是全屏启动没加入 wine 桌面"；
+ * - 自定义分辨率输入修复：旧版输入框直接绑 edit.screen，逐字符输入
+ *   时半截 "1280x10" 不合法 → 不写回 → 框值被旧值弹回，根本打不出
+ *   完整分辨率。改为本地草稿文本，完整 WxH 形态才应用（应用后
+ *   remember(edit.screen) 重置为新值）。
+ */
+@Composable
+internal fun ResolutionWindowGroup(
+    edit: ContainerData,
+    onChange: (ContainerData) -> Unit
+) {
+    val independent = edit.flagSet.contains(ContainerFlags.INDEPENDENT)
+    GGroup("🖥️ 分辨率与窗口") {
+        GField("分辨率:") {
+            // wineguanli：可编辑下拉（全屏 + 8 档 + 自定义输入）
+            val resOptions = listOf("全屏", "800x600", "1024x768", "1280x720", "1366x768", "1600x900", "1920x1080", "2560x1440")
+            val cur = if (edit.screen == "native") "全屏" else edit.screen
+            // v6.3：本地草稿文本 —— 半截输入不再被旧值弹回
+            var customResDraft by remember(edit.screen) {
+                mutableStateOf(if (edit.screen == "native") "" else edit.screen)
+            }
+            GComboBox(
+                options = resOptions,
+                selected = if (cur in resOptions) cur else resOptions.first(),
+                onSelect = { v ->
+                    customResDraft = ""
+                    applyResolution(edit, v, onChange, independent)
+                },
+                customLabel = if (cur !in resOptions) cur else null
+            )
+            OutlinedTextField(
+                value = customResDraft,
+                onValueChange = { v ->
+                    customResDraft = v
+                    val t = v.trim()
+                    if (Regex("^\\d{3,4}[xX]\\d{3,4}$").matches(t)) {
+                        applyResolution(edit, t, onChange, independent)
+                    }
+                },
+                label = { Text("自定义（如 1280x1024）", fontSize = gsp(10.sp)) },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = gsp(12.sp)),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        GCheckRow("🪟 独立窗口模式 (不支持proton)", independent) { on ->
+            // v3.3.9 修复语义保留：单次 onChange 合并 flags + screen + dmode
+            val flags = edit.flagSet.toMutableSet()
+            if (on) flags.add(ContainerFlags.INDEPENDENT) else flags.remove(ContainerFlags.INDEPENDENT)
+            val screen = if (edit.screen == "native") "native" else edit.screen
+            val dmode = when {
+                on -> DisplayMode.F
+                screen == "native" -> DisplayMode.OFF
+                else -> DisplayMode.D
+            }
+            onChange(
+                edit.copy(
+                    flags = ContainerFlags.serialize(flags),
+                    screen = screen,
+                    dmode = dmode
+                )
+            )
+        }
+        GNote("💡 独立窗口: -f（注册表虚拟桌面，带 wine 界面）；非独立: -d（命令行虚拟桌面，启动包入 wine 桌面）；分辨率选全屏 = 无 wine 界面真全屏")
+    }
 }
 
 // ===========================================================================
@@ -1976,7 +2019,7 @@ internal fun LibraryTab(
         Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
             listOf("72 (75%)" to 72, "96 (100%)" to 96, "120 (125%)" to 120, "144 (150%)" to 144, "192 (200%)" to 192)
                 .forEach { (label, v) ->
-                    GSmallButton(label, Color(0xFF243049), Modifier, fg = themeFg()) {
+                    GSmallButton(label, GuanliColors.chipBg, Modifier, fg = themeFg()) {
                         onChange(edit.copy(dpi = v.toString()))
                     }
                 }
@@ -3275,7 +3318,7 @@ internal fun MoreSettingsDialog(
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
                                     listOf(72, 96, 120, 144, 192).forEach { v ->
-                                        GSmallButton("$v", Color(0xFF243049), Modifier, fg = themeFg()) {
+                                        GSmallButton("$v", GuanliColors.chipBg, Modifier, fg = themeFg()) {
                                             edit = edit.copy(dpi = v.toString())
                                         }
                                     }
@@ -3812,7 +3855,7 @@ internal fun MangoHudConfigDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(gdp(6.dp))) {
                         GuanliSupport.MangoHud.POSITIONS.forEach { p ->
                             GSmallButton(
-                                p, if (position == p) GuanliColors.blueFab else Color(0xFF243049),
+                                p, if (position == p) GuanliColors.blueFab else GuanliColors.chipBg,
                                 Modifier, fg = if (position == p) Color.White else themeFg()
                             ) { position = p }
                         }

@@ -152,16 +152,22 @@ object GameShortcuts {
 }
 
 /**
- * v6.2：游戏专属启动配置快照（JSON）。
+ * v6.2：游戏专属启动配置（JSON）。
  *
- * - [snapshotOf]：把一份完整 [ContainerData] 的**全部配置字段**（不含
- *   name/created/exe/cardImage 等容器身份字段）序列化为 JSON；
- * - [applyTo]：以容器为基底，JSON 里出现的字段覆盖基底（缺键 = 跟随
- *   容器现值 —— 旧数据 / 部分字段的快照同样可解析）。
+ * v6.3 语义重制（用户："分辨率等所有设置不生效"）：**增量覆盖**取代
+ * v6.2 的全量快照 ——
+ * - [deltaOf]：只序列化与容器基底【不同】的字段（用户在游戏编辑页
+ *   动过哪些就记哪些）；
+ * - [applyTo]：JSON 里出现的字段覆盖基底，缺键 = 跟随容器现值。
  *
- * 语义：游戏快捷方式的 config 为空串 = 完全跟随容器当前配置（容器页
- * 改了本游戏就跟着变）；一旦在游戏编辑页动过任何高级选项，保存的就是
- * 全量快照（此后容器页的修改不影响本游戏 —— 每游戏独立配置）。
+ * v6.2 全量快照的缺陷（本轮用户实测）：游戏编辑页动过任一高级选项
+ * → 保存的是当时容器全部字段的快照 → 此后在容器页改分辨率/驱动等
+ * 对本游戏全部失效（被旧快照吞掉）—— 即"所有设置不生效"的直接
+ * 根因。增量语义下：没动过的字段永远跟随容器；动过的字段固定为
+ * 游戏专属值；改回与容器相同即自动解除覆盖。
+ *
+ * 兼容：v6.2 旧数据（全量快照）照常解析 —— 全字段存在 = 全覆盖，
+ * 行为同 v6.2；「恢复跟随容器配置」一键清空。
  */
 object GameLaunchConfig {
 
@@ -173,6 +179,7 @@ object GameLaunchConfig {
         put("gallium", d.gallium)
         put("env", d.env)
         put("dxvk", d.dxvk)
+        put("vkd3d", d.vkd3d)
         put("dxoverrides", d.dxoverrides)
         put("wine", d.wine)
         put("lang", d.lang)
@@ -193,7 +200,45 @@ object GameLaunchConfig {
         put("uargs", d.uargs)
     }.toString()
 
-    /** JSON 快照合并进容器基底（缺键 / 空 JSON / 解析失败 = 原样基底）。 */
+    /** v6.3：只记录与容器基底不同的字段（增量覆盖）。 */
+    fun deltaOf(base: ContainerData, d: ContainerData): String {
+        val o = JSONObject()
+        if (d.backend != base.backend) o.put("backend", d.backend.id)
+        if (d.preset != base.preset) o.put("preset", d.preset.id)
+        if (d.screen != base.screen) o.put("screen", d.screen)
+        if (d.dmode != base.dmode) o.put("dmode", d.dmode.id)
+        if (d.gallium != base.gallium) o.put("gallium", d.gallium)
+        if (d.env != base.env) o.put("env", d.env)
+        if (d.dxvk != base.dxvk) o.put("dxvk", d.dxvk)
+        if (d.vkd3d != base.vkd3d) o.put("vkd3d", d.vkd3d)
+        if (d.dxoverrides != base.dxoverrides) o.put("dxoverrides", d.dxoverrides)
+        if (d.wine != base.wine) o.put("wine", d.wine)
+        if (d.lang != base.lang) o.put("lang", d.lang)
+        if (d.audio != base.audio) o.put("audio", d.audio.id)
+        if (d.frame != base.frame) o.put("frame", d.frame)
+        if (d.cores != base.cores) o.put("cores", d.cores)
+        if (d.dsound != base.dsound) o.put("dsound", d.dsound)
+        if (d.dshow != base.dshow) o.put("dshow", d.dshow)
+        if (d.dpi != base.dpi) o.put("dpi", d.dpi)
+        if (d.winver != base.winver) o.put("winver", d.winver)
+        if (d.mangohud != base.mangohud) o.put("mangohud", d.mangohud)
+        if (d.flags != base.flags) o.put("flags", d.flags)
+        if (d.turnip != base.turnip) o.put("turnip", d.turnip)
+        if (d.zink != base.zink) o.put("zink", d.zink)
+        if (d.wined3d != base.wined3d) o.put("wined3d", d.wined3d)
+        if (d.fexcore != base.fexcore) o.put("fexcore", d.fexcore)
+        if (d.wrapper != base.wrapper) o.put("wrapper", d.wrapper)
+        if (d.uargs != base.uargs) o.put("uargs", d.uargs)
+        return o.toString()
+    }
+
+    /** 增量 JSON 里的覆盖项数（0 = 空对象 = 完全跟随容器）。 */
+    fun overrideCount(json: String?): Int {
+        if (json.isNullOrBlank()) return 0
+        return try { JSONObject(json).length() } catch (_: Exception) { 0 }
+    }
+
+    /** JSON 合并进容器基底（缺键 / 空 JSON / 解析失败 = 原样基底）。 */
     fun applyTo(base: ContainerData, json: String?): ContainerData {
         if (json.isNullOrBlank()) return base
         val o = try {
@@ -209,6 +254,7 @@ object GameLaunchConfig {
             gallium = o.optString("gallium", base.gallium),
             env = o.optString("env", base.env),
             dxvk = o.optString("dxvk", base.dxvk),
+            vkd3d = o.optString("vkd3d", base.vkd3d),
             dxoverrides = o.optString("dxoverrides", base.dxoverrides),
             wine = o.optString("wine", base.wine),
             lang = o.optString("lang", base.lang),
@@ -330,8 +376,10 @@ fun GameLibraryScreen() {
     }
 
     /**
-     * v6.2 启动：合并游戏专属配置（config 空 = 跟随容器现值）→ 原生链路
-     * runExe；成功 / 失败都给出可见反馈（旧版成功时无任何提示）。
+     * v6.3 启动：合并游戏增量覆盖（config 空 = 跟随容器现值）→ 原生链路
+     * runExe。分辨率（screen=WxH + dmode=d）在启动链里生效：
+     * `wine explorer /desktop=shell,WxH` 包入 wine 桌面 + X11 分辨率握手
+     *（AnWind 同款容器分辨率逻辑）。成功 toast 附分辨率，一眼可验证。
      */
     fun runShortcut(s: GameShortcut) {
         val base = containers.firstOrNull { it.name == s.containerName }
@@ -339,20 +387,28 @@ fun GameLibraryScreen() {
             toast(context, "容器「${s.containerName}」不存在，请长按游戏卡片编辑")
             return
         }
-        // 同步预检先行（rootfs / wine 可解析），错误立刻可见
-        val pre = WineSessionLauncher.precheckRun(base)
+        // v6.3：先合并再预检（游戏专属 wine 覆盖也参与解析）
+        val merged = GameLaunchConfig.applyTo(base, s.config)
+        val pre = WineSessionLauncher.precheckRun(merged)
         if (pre != null) {
             toast(context, pre)
             return
         }
         cs.launch(Dispatchers.IO) {
-            val merged = GameLaunchConfig.applyTo(base, s.config)
             val err = WineSessionLauncher.runExe(context, merged, s.exe)
             withContext(Dispatchers.Main) {
                 if (err != null) {
                     toast(context, err)
                 } else {
-                    toast(context, "已在容器「${base.name}」中启动 · ${s.label}\n首次运行需构建前缀，进度见容器页")
+                    val res = merged.screen
+                    toast(
+                        context,
+                        "已在容器「${base.name}」中启动 · ${s.label}\n" +
+                            (if (res != "native" && Regex("^\\d+x\\d+$").matches(res))
+                                "分辨率 $res（wine 虚拟桌面）"
+                            else "跟随窗口（全屏）") +
+                            "\n首次运行需构建前缀，进度见容器页"
+                    )
                 }
             }
         }
@@ -469,7 +525,8 @@ fun GameLibraryScreen() {
                                 } ?: s.containerName,
                             running = RootfsLauncher.activeSessions.containsKey(s.containerName),
                             onRun = { runShortcut(s) },
-                            onLongPress = { GameLibraryUiState.openEdit(s) }
+                            onEdit = { GameLibraryUiState.openEdit(s) },
+                            onDelete = { GameLibraryUiState.deleteFor = s }
                         )
                     }
                 }
@@ -520,8 +577,9 @@ fun GameLibraryScreen() {
  * - 🖥️ CPU 核心 / 📚 函数库：同容器编辑页（核心勾选 / DLL 加载序 / DPI /
  *   Windows 版本 / 立即应用）。
  *
- * 配置模型：working = 容器基底 + draftConfig 快照（[GameLaunchConfig]）；
- * 任何高级选项的修改即时写回 draftConfig（跨导航存活）。
+ * 配置模型（v6.3 增量）：working = 容器基底 + draftConfig 增量覆盖
+ * （[GameLaunchConfig.deltaOf]，只记改过的字段）；任何高级选项的修改
+ * 即时写回 draftConfig（跨导航存活），未覆盖字段永远跟随容器现值。
  */
 @Composable
 private fun GameShortcutEditorPage(
@@ -567,21 +625,11 @@ private fun GameShortcutEditorPage(
         base?.let { GameLaunchConfig.applyTo(it, st.draftConfig) }
     }
 
-    /** 任何高级配置修改 → 即时快照写回单例（跨导航存活）。 */
+    /** 任何高级配置修改 → 即时写回单例（v6.3 增量：只记与容器基底
+     * 不同的字段 —— 容器页后续修改对未覆盖字段继续生效）。 */
     fun setConfig(d: ContainerData) {
-        st.draftConfig = GameLaunchConfig.snapshotOf(d)
-    }
-
-    /** 分辨率/窗口模式联动（与容器编辑 applyResolution 同款语义）。 */
-    fun applyResolution(resLabel: String, w: ContainerData) {
-        val screen = if (resLabel == "跟随窗口（全屏）") "native" else resLabel
-        val independent = w.hasFlag(ContainerFlags.INDEPENDENT)
-        val dmode = when {
-            independent -> DisplayMode.F
-            screen == "native" -> DisplayMode.OFF
-            else -> DisplayMode.D
-        }
-        setConfig(w.copy(screen = screen, dmode = dmode))
+        st.draftConfig = if (base != null) GameLaunchConfig.deltaOf(base, d)
+        else GameLaunchConfig.snapshotOf(d)
     }
 
     fun save() {
@@ -610,7 +658,8 @@ private fun GameShortcutEditorPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(LinShellTheme.bg, Color(0xFF0B0F1C))))
+            // v6.3：背景随全局主题（旧版写死暗色渐变底端）
+            .background(Brush.verticalGradient(listOf(LinShellTheme.bg, LinShellTheme.bgDeep)))
     ) {
         Column(Modifier.fillMaxSize()) {
 
@@ -749,17 +798,19 @@ private fun GameShortcutEditorPage(
                         }
 
                         EditorSection("启动配置状态") {
+                            val n = GameLaunchConfig.overrideCount(st.draftConfig)
                             Text(
-                                if (st.draftConfig.isBlank())
+                                if (n == 0)
                                     "跟随容器配置 —— 容器页修改对本游戏即时生效"
-                                else "游戏专属配置（已固定）—— 容器页修改不影响本游戏",
+                                else "游戏专属覆盖 $n 项 —— 其余 " +
+                                    "${26 - n.coerceAtMost(26)} 项跟随容器当前配置（改回相同值即自动解除覆盖）",
                                 color = LinShellTheme.textSecondary, fontSize = 11.sp
                             )
-                            if (st.draftConfig.isNotBlank()) {
+                            if (n > 0) {
                                 Spacer(Modifier.height(4.dp))
                                 OutlinedButton(onClick = {
                                     st.draftConfig = ""
-                                }) { Text("恢复跟随容器配置", fontSize = 12.sp) }
+                                }) { Text("恢复全部跟随容器", fontSize = 12.sp) }
                             }
                         }
                     }
@@ -806,54 +857,20 @@ private fun GameShortcutEditorPage(
                                 )
                             }
 
+                            // v6.3：分辨率与窗口 —— 与容器编辑页同一套共享组
+                            //（ResolutionWindowGroup：预设下拉 + 自定义输入 +
+                            // 独立窗口勾选，同一套 screen/dmode 联动语义）
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                com.linbox.apps.containers.LocalGuanliScale provides 1f,
+                                com.linbox.apps.containers.LocalGuanliFontScale provides 1f
+                            ) {
+                                com.linbox.apps.containers.ResolutionWindowGroup(
+                                    edit = w,
+                                    onChange = { setConfig(it) }
+                                )
+                            }
+
                             EditorSection("显示") {
-                                EditorDropdown(
-                                    "分辨率",
-                                    selected = if (w.screen == "native") "跟随窗口（全屏）" else w.screen,
-                                    options = listOf("跟随窗口（全屏）") +
-                                        ContainerData.SCREEN_CHOICES.filter { it != "native" },
-                                    onSelect = { applyResolution(it, w) }
-                                )
-                                EditorTextField(
-                                    "自定义分辨率（如 1280x1024）",
-                                    if (w.screen == "native") "" else w.screen,
-                                    {
-                                        // 仅完整 WxH 形态才应用（避免逐字符输入把半截分辨率写进配置）
-                                        if (Regex("^\\d{3,4}[xX]\\d{3,4}$").matches(it.trim())) {
-                                            applyResolution(it.trim(), w)
-                                        }
-                                    },
-                                    "1280x1024"
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("独立窗口", color = LinShellTheme.textPrimary, fontSize = 13.sp)
-                                        Text(
-                                            "注册表虚拟桌面（-f），不支持 proton",
-                                            color = LinShellTheme.textSecondary, fontSize = 10.sp
-                                        )
-                                    }
-                                    Switch(
-                                        checked = w.hasFlag(ContainerFlags.INDEPENDENT),
-                                        onCheckedChange = { on ->
-                                            val flags = w.flagSet.toMutableSet()
-                                            if (on) flags.add(ContainerFlags.INDEPENDENT)
-                                            else flags.remove(ContainerFlags.INDEPENDENT)
-                                            val dmode = when {
-                                                on -> DisplayMode.F
-                                                w.screen == "native" -> DisplayMode.OFF
-                                                else -> DisplayMode.D
-                                            }
-                                            setConfig(w.copy(
-                                                flags = ContainerFlags.serialize(flags),
-                                                dmode = dmode
-                                            ))
-                                        }
-                                    )
-                                }
                                 EditorDropdown(
                                     "帧数限制",
                                     selected = if (w.frame == "0") "不限制" else "${w.frame} fps",
@@ -978,7 +995,8 @@ private fun GameShortcutEditorPage(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color(0xE60D1420))
+                // v6.3：随全局主题（旧版写死暗色）
+                .background(LinShellTheme.surface.copy(alpha = 0.94f))
                 .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
             Button(
@@ -1011,7 +1029,8 @@ private fun GameShortcutCard(
     containerLabel: String,
     running: Boolean,
     onRun: () -> Unit,
-    onLongPress: () -> Unit
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
 ) {
     // v6.1：色板跟随主题
     val palette = GlassPalette.current
@@ -1022,11 +1041,15 @@ private fun GameShortcutCard(
         value = withContext(Dispatchers.IO) { loadExeIcon(shortcut.exe) }
     }
 
+    // v6.3：长按上下文菜单（AnWind 桌面右键菜单同款交互 —— 用户：
+    // "长按应该显示启动编辑删除等，点编辑再进编辑界面"）
+    var menuOpen by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onRun, onLongClick = onLongPress)
+            .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true })
     ) {
         Box(
             modifier = Modifier
@@ -1085,7 +1108,7 @@ private fun GameShortcutCard(
                         .background(Color(0xFF66BB6A))
                 )
             }
-            // ▶ 运行钮
+            // ▶ 运行钮（v6.3：长按同样弹菜单，与卡片一致）
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -1093,7 +1116,7 @@ private fun GameShortcutCard(
                     .size(34.dp)
                     .clip(androidx.compose.foundation.shape.CircleShape)
                     .background(palette.blue)
-                    .combinedClickable(onClick = onRun, onLongClick = onLongPress),
+                    .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true }),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Filled.PlayArrow, "运行", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -1112,6 +1135,53 @@ private fun GameShortcutCard(
             fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
         )
     }
+
+    // ===== v6.3：长按上下文菜单（启动 / 编辑 / 删除 / 取消）=====
+    if (menuOpen) {
+        androidx.compose.ui.window.Popup(
+            alignment = Alignment.Center,
+            onDismissRequest = { menuOpen = false },
+            properties = androidx.compose.ui.window.PopupProperties(
+                focusable = true,
+                dismissOnClickOutside = true
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(196.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(LinShellTheme.surface)
+                    .border(1.dp, LinShellTheme.surfaceBorder, RoundedCornerShape(14.dp))
+                    .padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    shortcut.label,
+                    color = LinShellTheme.textSecondary,
+                    fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
+                GameCardMenuItem("▶  启动", LinShellTheme.blue) { menuOpen = false; onRun() }
+                GameCardMenuItem("✏️  编辑", LinShellTheme.textPrimary) { menuOpen = false; onEdit() }
+                GameCardMenuItem("🗑  删除", LinShellTheme.red) { menuOpen = false; onDelete() }
+                GameCardMenuItem("✕  取消", LinShellTheme.textSecondary) { menuOpen = false }
+            }
+        }
+    }
+}
+
+/** v6.3：长按菜单项。 */
+@Composable
+private fun GameCardMenuItem(label: String, tint: Color, onClick: () -> Unit) {
+    Text(
+        label,
+        color = tint,
+        fontSize = 14.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 10.dp)
+    )
 }
 
 @Composable
@@ -1133,7 +1203,7 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
         if (hasContainers) {
             Spacer(Modifier.height(10.dp))
             Text(
-                "长按游戏卡片可编辑 / 删除",
+                "长按游戏卡片：启动 / 编辑 / 删除",
                 color = LinShellTheme.textSecondary, fontSize = 10.sp
             )
         }
