@@ -70,7 +70,12 @@ fun DacScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            // v6.5：自定义背景启用时半透明 —— 背景图透出（DAC 画布深色，
+            // 显示内容对比度优先）
+            .background(
+                if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                    Color(0xD9000000) else Color.Black
+            )
     ) {
         if (nativeReady) {
             // ===== DAC 画面宿主：DacApp 在此容器内创建 DacView =====

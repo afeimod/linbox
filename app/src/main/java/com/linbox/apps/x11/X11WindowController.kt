@@ -8,12 +8,33 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.linbox.core.shell.ShellController
 import com.termux.x11.ICmdEntryInterface
 import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * v6.5：X11 全局显示层状态（供壳层其它覆盖层感知，避免循环依赖）。
+ *
+ * - [layerActive]：X11DisplayLayer 正在组合（全屏页或小窗浮窗任一形态）。
+ *   全局手柄覆盖层（GamepadOverlay）据此让位 —— 小窗模式下 X11 画面
+ *   不占整屏，但手柄仍由 X11TouchSplitLayout 内的 Compose 宿主全屏
+ *   渲染（View 层分流），全局层必须退场防双渲染。
+ * - [fullscreenActive]：当前处于全屏形态（X11 页或浮窗一键全屏）。
+ *   PerfGovernor 据此静止主界面周期刷新（把大核让给 wine/box64）。
+ */
+object X11DisplayState {
+    /** X11 显示层正在组合（全屏或小窗）。 */
+    var layerActive by mutableStateOf(false)
+
+    /** X11 显示层处于全屏形态（游戏会话独占，主界面刷新静止）。 */
+    var fullscreenActive by mutableStateOf(false)
+}
 
 /**
  * v2.22.2 fix9.6：X11 显示端连接中枢。
@@ -90,8 +111,16 @@ object X11WindowController {
 
         if (_state.value != State.Connected) _state.value = State.Waiting
 
-        if (isNewSession || _state.value == State.Waiting)
-            showX11Screen(context.applicationContext)
+        if (isNewSession || _state.value == State.Waiting) {
+            // v6.5 小窗模式：不跳页 —— 全局显示层（X11DisplayLayer，挂在
+            // LinBoxShell）随会话状态在当前界面前方亮出浮窗；用户可在
+            // 主页/游戏库等任意页面边看画面边操作底层界面（浮窗外触摸
+            // 全部穿透）。小窗关闭（默认）时才自动跳转 X11 全屏页。
+            X11FloatWindow.initIfNeed(context.applicationContext)
+            if (!X11FloatWindow.enabled) {
+                showX11Screen(context.applicationContext)
+            }
+        }
     }
 
     /** 主动入口（常驻服务通知按钮等）：跳转 X11 全屏界面。 */
@@ -167,6 +196,20 @@ object X11WindowController {
         }
 
         mainHandler.post(::attempt)
+    }
+
+    /**
+     * v6.5：用户关闭小窗 —— 终止显示（配合 X11Session.killWine 结束会话）。
+     *
+     * 断开渲染连接（X server 端 renderer client 释放，恢复每秒广播）、
+     * 抑制本会话自动弹窗、状态归 Idle（X11DisplayLayer 随之退场）。
+     */
+    fun closeSession() {
+        connectGeneration++
+        suppressedBinder = sessionBinder
+        if (LorieView.connected())
+            LorieView.connect(-1)
+        _state.value = State.Idle
     }
 
     /**

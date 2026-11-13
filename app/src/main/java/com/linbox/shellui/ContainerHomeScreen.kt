@@ -81,7 +81,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * LinBox 主页（v4.0 按用户图片重制）：**Wine 游戏容器** 玻璃拟态主页。
+ * LinBox 主页（v4.0 按用户图片重制）：**Linbox Bionic** 玻璃拟态主页。
  *
  * 结构（v6.0 按用户最新指令重排）：
  * 1. 顶部标题栏：应用名 + 容器概览 + 搜索钮（跳游戏库并聚焦搜索）+ 设置钮
@@ -242,7 +242,7 @@ fun ContainerHomeScreen() {
             // ===== 1. 顶部标题栏（图 1：标题 + 搜索 + 设置） =====
             GlassTopBar(
                 palette = palette,
-                title = "Wine 游戏容器",
+                title = "Linbox Bionic",
                 subtitle = if (rootfsReady)
                     if (containers.isEmpty()) "就绪 · 点 + 创建容器"
                     else "${containers.size} 容器 · ${wineCount} Wine"

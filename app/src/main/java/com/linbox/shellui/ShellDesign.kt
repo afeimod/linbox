@@ -114,10 +114,29 @@ val GlassPalette.Companion.current: GlassPalette
     get() {
         val dark = com.linbox.core.theme.ShellThemeState.dark
         val base = if (dark) GlassPalette.Dark else GlassPalette.Light
-        return if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()) {
-            base.copy(
-                bgTop = base.bgTop.copy(alpha = 0.88f),
-                bgBottom = base.bgBottom.copy(alpha = 0.92f)
+        val st = com.linbox.core.theme.ShellThemeState
+        return if (st.customBgPath.isNotBlank()) {
+            // v6.5：背景全层穿透 —— 页面渐变完全透明，背景图直接透出；
+            // 卡片 / 文字按背景图亮度自动切换（字体自动识别高亮）：
+            // 亮图 → 白玻璃 + 深藏青字，暗图 → 深玻璃 + 白字
+            if (st.bgBright) base.copy(
+                bgTop = Color.Transparent,
+                bgBottom = Color.Transparent,
+                card = Color(0x5AFFFFFF),
+                cardBorder = Color(0x66FFFFFF),
+                textPrimary = Color(0xFF16203C),
+                textSecondary = Color(0xFF44506E),
+                topBarButtonBg = Color(0x66FFFFFF),
+                topBarButtonIcon = Color(0xFF16203C)
+            ) else base.copy(
+                bgTop = Color.Transparent,
+                bgBottom = Color.Transparent,
+                card = Color(0x42101828),
+                cardBorder = Color(0x3D10E0FF),
+                textPrimary = Color.White,
+                textSecondary = Color(0xB3FFFFFF),
+                topBarButtonBg = Color(0x42101828),
+                topBarButtonIcon = Color.White
             )
         } else base
     }

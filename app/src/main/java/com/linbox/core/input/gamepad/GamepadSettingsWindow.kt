@@ -133,15 +133,14 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
             )
         }
 
-        // ===== 背景遮罩：点击关闭 =====
+        // ===== v6.5：非拦截背景暗化 =====
+        //（旧版全屏遮罩 clickable 拦截全部触摸 —— 手柄元素点选编辑没法做。
+        // 现在只画轻量暗化不拦截：点手柄元素 = 选中编辑（Overlay 侧处理），
+        // 点空白处正常穿透；关闭设置窗用标题栏 ✕）
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x33000000))
-                .clickable(
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    indication = null
-                ) { GamepadController.settingsOpen = false }
+                .background(Color(0x22000000))
         )
 
         // ===== 设置卡片（v6.2：屏幕居中，紧凑 260-320dp，高度受限可滚动） =====
@@ -186,10 +185,20 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
                 )
             }
 
+            // v6.5：点选手柄元素后自动滚到编辑器（编辑器在列表下方，
+            // 小窗不滚动就看不见 —— 点了元素却"没反应"）；稍等一拍让
+            // 编辑器先组合完成（maxValue 更新后再滚，防滚不到位）
+            val editorScroll = rememberScrollState()
+            LaunchedEffect(selectedId) {
+                if (selectedId != null) {
+                    kotlinx.coroutines.delay(150)
+                    editorScroll.animateScrollTo(editorScroll.maxValue)
+                }
+            }
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(editorScroll)
                     .padding(horizontal = 10.dp)
             ) {
                 // ===== 预设布局 =====
@@ -199,7 +208,7 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
                     GpChip("简单布局", false) { applyPreset("simple") }
                     Spacer(Modifier.weight(1f))
                 }
-                GpHint("提示：开启编辑模式后可直接拖动元素；点元素芯片展开编辑")
+                GpHint("提示：点击手柄上的按钮即可编辑对应按键；编辑模式下可拖动定位、角标删除")
 
                 // ===== 元素列表（v6.2：三列小芯片网格 —— 旧版大行卡太占空间） =====
                 GpSectionLabel("元素（${elements.size}）")

@@ -197,12 +197,17 @@ internal fun BrowserContent(scope: WindowContentScope) {
         toggleFullscreen()
     }
 
+    // v6.5：自定义背景启用时窗口底半透明 —— 背景图透出（内容色/字色不变，
+    // 可读性优先）
+    val bgOn = com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()
+    val winBg = if (bgOn) theme.windowBackgroundColor.copy(alpha = 0.90f)
+    else theme.windowBackgroundColor
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(theme.windowBackgroundColor)
+            .background(winBg)
     ) {
-        Column(modifier = Modifier.fillMaxSize().background(theme.windowBackgroundColor)) {
+        Column(modifier = Modifier.fillMaxSize().background(winBg)) {
 
             // ===== 标签栏（真全屏时隐藏，F11 风格纯页面） =====
             if (!isFullscreen) {

@@ -636,7 +636,14 @@ internal fun FileExplorerContent(scope: WindowContentScope) {
     }
 
     // ===== 布局 =====
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(theme.windowBackgroundColor)) {
+    // v6.5：自定义背景启用时窗口底半透明 —— 背景图透出（内容色/字色不变）
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize().background(
+            if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                theme.windowBackgroundColor.copy(alpha = 0.90f)
+            else theme.windowBackgroundColor
+        )
+    ) {
         // 窄屏（手机竖屏）阈值：窗口宽度 < 600dp 时启用窄屏布局
         val isNarrow = maxWidth < 600.dp
         // 侧边栏开关：null = 跟随窗口宽度（宽屏默认展开，窄屏默认收起）

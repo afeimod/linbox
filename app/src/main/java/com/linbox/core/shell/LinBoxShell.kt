@@ -18,7 +18,7 @@ import com.linbox.LinBoxApp
 import com.linbox.apps.dac.DacScreen
 import com.linbox.apps.settings.SettingsScreen
 import com.linbox.apps.terminal.TerminalScreen
-import com.linbox.apps.x11.X11Screen
+import com.linbox.apps.x11.X11DisplayLayer
 import com.linbox.core.input.MouseController
 import com.linbox.core.input.MouseCursorOverlay
 import com.linbox.core.input.TrackpadRouter
@@ -117,16 +117,21 @@ fun LinBoxShell() {
         }
     }
 
-    // ===== v6.1：自定义背景图（降采样解码，全屏铺底）=====
-    // 各页面背景色/渐变在背景启用时自动降为半透明蒙版（见
+    // ===== v6.1：自定义背景图（降采样解码，全屏铺底；v6.5 追加亮度采样）=====
+    // 各页面背景色/渐变在背景启用时自动透明化（v6.5 全层穿透，见
     // LinShellTheme / GlassPalette.current），背景图自页面之下透出。
+    // v6.5：解码后同步计算平均亮度 → ShellThemeState.bgLuminance，驱动
+    // 字体自动高亮（亮图深字 / 暗图白字，全部界面即时重组）。
     val customBgBitmap by produceState<android.graphics.Bitmap?>(
         initialValue = null,
         key1 = ShellThemeState.customBgPath,
         key2 = ShellThemeState.bgVersion
     ) {
         val path = ShellThemeState.customBgPath
-        value = if (path.isBlank()) null else withContext(Dispatchers.IO) {
+        if (path.isBlank()) {
+            value = null
+            ShellThemeState.bgLuminance = -1f
+        } else withContext(Dispatchers.IO) {
             try {
                 val bounds = android.graphics.BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
@@ -136,12 +141,36 @@ fun LinBoxShell() {
                 while (bounds.outWidth / (sample * 2) >= 1080 &&
                     bounds.outHeight / (sample * 2) >= 1080
                 ) sample *= 2
-                android.graphics.BitmapFactory.decodeFile(
+                val bmp = android.graphics.BitmapFactory.decodeFile(
                     path,
                     android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
                 )
+                value = bmp
+                // v6.5：亮度采样 —— 16x16 缩略图逐像素相对亮度加权平均
+                //（0.299R + 0.587G + 0.114B），毫秒级开销，每次换图只算一次
+                if (bmp != null) {
+                    try {
+                        val tiny = android.graphics.Bitmap.createScaledBitmap(bmp, 16, 16, true)
+                        var sum = 0.0
+                        var n = 0
+                        for (px in 0 until tiny.width) {
+                            for (py in 0 until tiny.height) {
+                                val c = tiny.getPixel(px, py)
+                                sum += (0.299 * ((c shr 16) and 0xFF) +
+                                    0.587 * ((c shr 8) and 0xFF) +
+                                    0.114 * (c and 0xFF)) / 255.0
+                                n++
+                            }
+                        }
+                        ShellThemeState.bgLuminance = if (n > 0) (sum / n).toFloat() else -1f
+                        tiny.recycle()
+                    } catch (_: Exception) {
+                        ShellThemeState.bgLuminance = -1f
+                    }
+                } else ShellThemeState.bgLuminance = -1f
             } catch (_: Exception) {
-                null
+                value = null
+                ShellThemeState.bgLuminance = -1f
             }
         }
     }
@@ -170,7 +199,9 @@ fun LinBoxShell() {
                 ShellController.Screen.ADVANCED -> AdvancedScreen()
                 ShellController.Screen.CONTAINERS -> ContainersScreen()
                 ShellController.Screen.TERMINAL -> TerminalScreen()
-                ShellController.Screen.X11 -> X11Screen()
+                // v6.5：X11 页占位 —— 画面本体由下方全局显示层接管
+                //（X11DisplayLayer：全屏形态 / 浮窗形态双形态）
+                ShellController.Screen.X11 -> { }
                 ShellController.Screen.DAC -> DacScreen()
                 ShellController.Screen.SETTINGS -> SettingsScreen()
                 // v6.0：浏览器 / 文件管理器 / exe 选择器 —— 安卓全屏页
@@ -180,6 +211,11 @@ fun LinBoxShell() {
                 ShellController.Screen.EXECHOOSER -> com.linbox.shellui.ExeChooserScreen()
             }
         }
+
+        // ===== 1.5 v6.5：X11 全局显示层 =====
+        //（全屏页形态 / AnWind 式浮窗形态 —— 会话期间画面始终在所有
+        // 界面前方；浮窗外触摸穿透，底层页面照常操作；详见 X11Surface）
+        X11DisplayLayer()
 
         // ===== 2. 浮动窗口层（浏览器 / 文件管理器 / exe 选择器…；
         //      v5.0 容器管理器已改全屏页，不再走窗口系统） =====

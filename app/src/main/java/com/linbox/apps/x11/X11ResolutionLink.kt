@@ -174,8 +174,10 @@ object X11ResolutionLink {
      * fix19：值可携带 "fitwin" 标记（如 "1024x768 fitwin"，glibc-runner
      * -F/--fitwin 产生）→ 同步置位 windowStretch；其余情况归 false。
      * 旧版 App 解析带标记值：regex 照样提取 WxH，行为不变（向后兼容）。
+     * v6.5：manual = 控制条/设置面板手动切换 —— 不弹"glibc-runner
+     * 握手成功” toast（用户自己刚按的，提示语义不对）。
      */
-    fun apply(valueRaw: String) {
+    fun apply(valueRaw: String, manual: Boolean = false) {
         val value = valueRaw.trim().lowercase()
         val wantStretch = value.contains("fitwin")
         // fix28：解析出的握手宽高（native 为 0 = 未知，供缩屏下限跳过）
@@ -236,7 +238,7 @@ object X11ResolutionLink {
         // 后能立刻看到 X11 是否接收到分辨率（之前握手失败只有黑边一个症状，
         // 无从判断是终端侧没写还是 App 侧没应用）。
         val toastKey = "$mode:$exact:$fromGame"
-        if (fromGame && toastKey != lastToastKey && activeView != null) {
+        if (fromGame && !manual && toastKey != lastToastKey && activeView != null) {
             lastToastKey = toastKey
             mainHandler.post {
                 val ctx = activeView?.context?.applicationContext ?: return@post
@@ -264,10 +266,10 @@ object X11ResolutionLink {
     }
 
     /** 供控制条手动切换回"跟随窗口"。 */
-    fun setNative() = apply("native")
+    fun setNative() = apply("native", manual = true)
 
     /** 供控制条手动设置固定分辨率。 */
-    fun setExact(w: Int, h: Int) = apply("${w}x${h}")
+    fun setExact(w: Int, h: Int) = apply("${w}x${h}", manual = true)
 
     /**
      * v2.25：手动切换"缩放"模式（LoriePreferences 原生 scaled 档）——

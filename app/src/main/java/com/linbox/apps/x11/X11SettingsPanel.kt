@@ -339,17 +339,18 @@ fun X11SettingsDialog() {
                     hintColor = hintColor
                 )
 
-                // ---- v6.4 小窗模式（X11 画面 = 可自由拖动/缩放的悬浮窗口） ----
-                //（用户：“x11界面加入小窗设置，实现x11可以自由拖动的类似
-                //  windows窗口那种，可以参考 AnWind 的实现”）
+                // ---- v6.5 窗口模式（X11 画面 = 悬浮在所有界面前方的自由窗口） ----
+                //（用户：“根据分辨率调整窗口大小，就像anwind那种，显示在
+                //  主界面和其他界面前方，但是不遮挡他们操作，滑动窗口周边
+                //  拖动自由大小，还有相关快捷配置，点击全屏按钮恢复”）
                 val chromeCtx = LocalContext.current
                 SettingSwitch(
-                    title = "小窗模式（自由窗口）",
-                    desc = "X11 画面变成可自由拖动的悬浮窗口（类 Windows，AnWind 同款）：标题栏拖动移动、双击最大化、边缘八向缩放、✕ 退回主页",
+                    title = "窗口模式（悬浮窗）",
+                    desc = "会话画面悬浮在所有界面前方（AnWind 同款）：窗口大小按分辨率自适应、可拖动、边缘八向缩放、快捷配置条（跟随窗口/固定分辨率/切窗/键盘/游戏全屏）、全屏按钮一键恢复；窗口外触摸穿透，底层界面照常操作",
                     checked = X11FloatWindow.enabled,
                     enabled = true,
                     onChecked = {
-                        // 与真全屏互斥：开小窗时退出全屏，避免两层抢占
+                        // 与真全屏互斥：开窗口模式时退出全屏，避免两层抢占
                         if (it && X11UiPrefs.fullscreen) {
                             X11UiPrefs.fullscreen = false
                             prefs.fullscreen.put(false)

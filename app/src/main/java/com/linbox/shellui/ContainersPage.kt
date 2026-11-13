@@ -256,7 +256,7 @@ private fun ContainerListScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(
-                Brush.verticalGradient(listOf(LinShellTheme.bg, Color(0xFF0B0F1C)))
+                Brush.verticalGradient(listOf(LinShellTheme.bg, LinShellTheme.bgDeep))
             )
     ) {
         Column(Modifier.fillMaxSize()) {
@@ -1086,7 +1086,7 @@ private fun ContainerEditorScreen() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(LinShellTheme.bg, Color(0xFF0B0F1C))))
+            .background(Brush.verticalGradient(listOf(LinShellTheme.bg, LinShellTheme.bgDeep)))
     ) {
         Column(Modifier.fillMaxSize()) {
 

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -69,7 +70,12 @@ fun GamepadOverlay() {
     val app = LinBoxApp.get()
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     // v2.32：X11 界面由 X11TouchSplitLayout 内的 Compose 宿主渲染，本层跳过
-    if (!gamepadEnabled || ShellController.screen == ShellController.Screen.X11) return
+    // v6.5：X11 全局显示层激活（全屏页或浮窗会话）同样跳过 —— 画面层内
+    // 自带嵌入式手柄宿主，双层渲染会重复出按键 + 双路输入竞争
+    if (!gamepadEnabled ||
+        com.linbox.apps.x11.X11DisplayState.layerActive ||
+        ShellController.screen == ShellController.Screen.X11
+    ) return
     // v5.0：手柄元素自带 sizeDp 尺寸语义（手柄设置里单独调节），
     // 以基础密度渲染 —— 不随全局 UI 缩放（用户明确要求）。
     com.linbox.core.theme.KeepBaseDensity {
@@ -189,6 +195,10 @@ fun GamepadOverlayContent() {
 /**
  * 手柄元素宿主：
  * - 编辑模式：整体可拖动（松手持久化新位置），右上角显示删除角标，内部游戏输入禁用
+ * - v6.5 点选编辑（用户："按键设置打开后应该支持点击对应按钮元素设置
+ *   对应按钮，而不是在框里选择元素"）：设置窗打开期间，点手柄上的元素
+ *   即选中该元素 —— 设置窗立即展开它的编辑器；元素输入让位给点选
+ *   （不再发键），选中元素高亮描边指示；
  * - 游戏模式：内容自理输入，宿主不拦截事件
  */
 @Composable
@@ -206,6 +216,10 @@ private fun GamepadElementHost(
     val sizePx = with(density) { element.sizeDp.dp.toPx() }
     val radius = sizePx / 2f
     val editMode = GamepadController.editMode
+    // v6.5：设置窗打开 = 点选编辑态（点元素选中，输入让位）
+    val settingsOpen = GamepadController.settingsOpen
+    val tapSelect = editMode || settingsOpen
+    val selected = GamepadController.selectedElementId == element.id
 
     var editDrag by remember { mutableStateOf(Offset.Zero) }
 
@@ -218,6 +232,18 @@ private fun GamepadElementHost(
                 )
             }
             .size(element.sizeDp.dp)
+            // v6.5：选中元素高亮描边（点选后一眼看清正在编辑哪个按钮）
+            .then(
+                if (selected) {
+                    Modifier.border(
+                        2.5.dp,
+                        Color(0xFF2DD4BF),
+                        if (element.type == GamepadController.ElementType.BUTTON)
+                            androidx.compose.foundation.shape.CircleShape
+                        else androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                    )
+                } else Modifier
+            )
             // v2.16.4：把元素命中矩形（窗口坐标）登记给 GamepadController，
             // interop 容器据此把"落在手柄元素上"的指针从 MotionEvent 流中
             // 剥离，让页面拖动/点击与手柄操作互不干扰
@@ -249,10 +275,24 @@ private fun GamepadElementHost(
                     }
                 } else Modifier
             )
+            // v6.5：点选编辑 —— 设置窗打开（或编辑模式）期间，点元素即选中：
+            // 设置窗立即展开该元素的编辑器（label / 映射 / 尺寸 / 位置）。
+            // tapSelect 时输入内容已让位（editBlocked），宿主 tap 不会被
+            // 按键内容吞掉，点选 100% 可靠。
+            .then(
+                if (tapSelect) {
+                    Modifier.pointerInput(element.id) {
+                        detectTapGestures(
+                            onTap = { GamepadController.selectElement(element.id) }
+                        )
+                    }
+                } else Modifier
+            )
     ) {
         // 注：composable 函数类型调用不支持具名参数（Kotlin 2.0 起报错），
         // 这里的 editBlocked 必须按位置传递
-        content(editMode)
+        // v6.5：设置窗打开期间同样阻断输入（点选优先，防误触按键）
+        content(tapSelect)
 
         // 编辑模式删除角标（v6.2：随元素尺寸缩放 —— 默认按键缩小 50% 后
         // 固定 24dp 角标会盖住整个按钮，改为 14-22dp 自适应）

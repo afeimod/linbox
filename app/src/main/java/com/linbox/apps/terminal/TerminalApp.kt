@@ -117,7 +117,12 @@ private fun TerminalContent() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0C0C0C))
+            // v6.5：自定义背景启用时半透明 —— 背景图透出（终端本体深色，
+            // 绿字/白字可读性优先，仅降 ~14% 不透明度）
+            .background(
+                if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                    Color(0xD90C0C0C) else Color(0xFF0C0C0C)
+            )
     ) {
         when (val st = installState) {
             is TermuxBootstrapInstaller.InstallState.Installing -> {
