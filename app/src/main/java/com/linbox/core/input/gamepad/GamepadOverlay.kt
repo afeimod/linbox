@@ -254,13 +254,15 @@ private fun GamepadElementHost(
         // 这里的 editBlocked 必须按位置传递
         content(editMode)
 
-        // 编辑模式删除角标
+        // 编辑模式删除角标（v6.2：随元素尺寸缩放 —— 默认按键缩小 50% 后
+        // 固定 24dp 角标会盖住整个按钮，改为 14-22dp 自适应）
         if (editMode) {
+            val badgeSize = (element.sizeDp.value * 0.42f).coerceIn(14f, 22f).dp
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .size(24.dp)
-                    .shadow(4.dp, CircleShape)
+                    .size(badgeSize)
+                    .shadow(3.dp, CircleShape)
                     .clip(CircleShape)
                     .background(Color(0xE6EF4444))
                     .pointerInput(element.id) {
@@ -268,7 +270,8 @@ private fun GamepadElementHost(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Text("×", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("×", color = Color.White, fontSize = (badgeSize.value * 0.6f).sp,
+                    fontWeight = FontWeight.Bold)
             }
         }
     }

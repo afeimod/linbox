@@ -92,7 +92,10 @@ class LinBoxApp : Application() {
         }
 
         // Room 数据库（浏览器书签/历史 + 容器运行快捷方式）
+        // v6.2：注册显式迁移（shortcuts 加 config 列）—— 显式迁移优先于
+        // fallbackToDestructiveMigration 生效，存量数据不丢。
         database = Room.databaseBuilder(this, AppDatabase::class.java, AppDatabase.NAME)
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 

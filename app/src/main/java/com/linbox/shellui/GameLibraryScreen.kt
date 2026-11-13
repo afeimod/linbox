@@ -3,6 +3,7 @@ package com.linbox.shellui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -21,21 +22,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,9 +64,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.linbox.LinBoxApp
+import com.linbox.apps.containers.ContainerAudio
+import com.linbox.apps.containers.ContainerBackend
 import com.linbox.apps.containers.ContainerData
+import com.linbox.apps.containers.ContainerFlags
+import com.linbox.apps.containers.ContainerLangs
 import com.linbox.apps.containers.ContainerManager
+import com.linbox.apps.containers.DisplayMode
+import com.linbox.apps.containers.WineInstall
 import com.linbox.apps.containers.WineSessionLauncher
+import com.linbox.apps.containers.WindowsVersions
 import com.linbox.apps.containers.launcher.RootfsLauncher
 import com.linbox.core.shell.ShellController
 import com.linbox.core.shell.ShellController.Screen
@@ -74,30 +82,34 @@ import com.linbox.data.db.entity.ShortcutEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * v6.0 游戏库（完全重制）：**游戏快捷方式库**，不是容器列表。
  *
  * 用户诉求："游戏库不是容器库，游戏库是添加游戏快捷方式的不是容器" ——
- * 一条游戏快捷方式 = （显示名 + exe 路径 + 所属容器 + 可选卡片图），
- * 点击即用所属容器运行该 exe；容器本体管理全部在「容器」页。
+ * 一条游戏快捷方式 = （显示名 + exe 路径 + 所属容器 + 可选卡片图 +
+ * 游戏专属启动配置），点击即用所属容器运行该 exe；容器本体管理全部在
+ * 「容器」页。
  *
  * 存储：Room shortcuts 表 type=4（label=游戏名 / target=容器名 /
- * launchArgs=exe 路径 / iconAsset=卡片图片路径）。
+ * launchArgs=exe 路径 / iconAsset=卡片图片路径 / config=启动配置快照）。
  *
- * 交互（winlator 风格）：
- * - 网格卡片：exe 图标 / 自定义卡片图 + 游戏名 + 容器名 + ▶ 运行；
- * - 「添加游戏」：表单弹窗（名称 + 浏览选 exe + 容器下拉 + 卡片图）；
- * - 长按：编辑 / 设置卡片图片 / 删除；
- * - 搜索（顶栏 + 展开式搜索框，主页搜索请求联动）。
+ * v6.2（用户："游戏快捷方式创建和启动缺少很多设置(包括分辨率dxvkd3d驱动
+ * 等等配置)以及启动参数，而且根本无法正常调用启动"）：
+ * - 添加/编辑改为**全屏编辑页**（不再是小弹窗）：基本信息 + 五选项卡
+ *  （基本 / 启动参数 / 图形驱动 / CPU核心 / 函数库）—— 图形驱动直接
+ *   复用 wineguanli GraphicsDriverTab（Vulkan Turnip/Wrapper/专有包/
+ *   系统专有 + Zink/DXVK/WineD3D/FEXCore 全部从 /opt 扫描选择）；
+ * - [GameLaunchConfig]：游戏专属启动配置快照（JSON，shortcuts.config 列）。
+ *   空 = 跟随容器当前配置；非空 = 启动时以容器为基底合并（会话级，
+ *   不回写 container.conf）；
+ * - 启动反馈：成功 / 失败都有 toast（旧版成功时无任何提示，"按了没反应"）；
+ *   启动参数（uargs）/ 环境变量 / 启动开关全部生效。
  *
- * v6.1 主题：色板跟随壳层主题设置（[GlassPalette.current]，
- * 亮色全亮色 / 暗色全暗色）；弹窗 / 输入框颜色走 [LinShellTheme]。
- *
- * v6.1 弹窗状态存活：添加/编辑弹窗与全部草稿字段提升到
- * [GameLibraryUiState] 单例 —— 「浏览选择程序 / 选择卡片图片」跳去
- * 文件管理器（页面离开组合）再回来，弹窗原样保留，选择结果经
- * FilePickBus 待投递信箱自动回填，不再"发起页面已离开，已取消选择"。
+ * v6.1 弹窗状态存活：草稿字段全部在 [GameLibraryUiState] 单例 ——
+ * 「浏览选择程序 / 选择卡片图片」跳去文件管理器再回来，已填内容与
+ * 编辑页原样保留，选择结果经 FilePickBus 待投递信箱回填。
  */
 
 /** 游戏快捷方式（Room shortcuts 表 type=4 的映射）。 */
@@ -106,7 +118,9 @@ data class GameShortcut(
     val label: String,
     val containerName: String,
     val exe: String,
-    val cardImage: String
+    val cardImage: String,
+    /** v6.2：游戏专属启动配置快照（[GameLaunchConfig] JSON；空 = 跟随容器）。 */
+    val config: String = ""
 )
 
 object GameShortcuts {
@@ -115,7 +129,7 @@ object GameShortcuts {
     suspend fun list(app: LinBoxApp): List<GameShortcut> =
         app.database.shortcutDao().getAll()
             .filter { it.type == TYPE }
-            .map { GameShortcut(it.id, it.label, it.target, it.launchArgs, it.iconAsset) }
+            .map { GameShortcut(it.id, it.label, it.target, it.launchArgs, it.iconAsset, it.config) }
 
     suspend fun upsert(app: LinBoxApp, s: GameShortcut) {
         val dao = app.database.shortcutDao()
@@ -126,7 +140,8 @@ object GameShortcuts {
             type = TYPE,
             target = s.containerName,
             launchArgs = s.exe,
-            sortOrder = 0
+            sortOrder = 0,
+            config = s.config
         )
         if (s.id > 0) dao.update(entity) else dao.insert(entity)
     }
@@ -137,19 +152,94 @@ object GameShortcuts {
 }
 
 /**
- * v6.1：游戏库跨页面导航存活的 UI 状态。
+ * v6.2：游戏专属启动配置快照（JSON）。
  *
- * 背景：v6.0 全屏页化后，「添加游戏」弹窗里点「浏览选择程序 / 选择卡片
- * 图片」会跳到文件管理器全屏页 —— 游戏库页面整个离开组合，弹窗开关与
- * 全部 remember 草稿字段被销毁，选完文件回来弹窗也没了（且 FilePickBus
- * 投递落空提示"发起页面已离开"）。
+ * - [snapshotOf]：把一份完整 [ContainerData] 的**全部配置字段**（不含
+ *   name/created/exe/cardImage 等容器身份字段）序列化为 JSON；
+ * - [applyTo]：以容器为基底，JSON 里出现的字段覆盖基底（缺键 = 跟随
+ *   容器现值 —— 旧数据 / 部分字段的快照同样可解析）。
  *
- * 方案：弹窗开关 + 草稿字段全部放进本单例（Compose 快照状态，进程内
- * 存活）。文件管理器选完 → ShellController.closePage() 回到游戏库 →
- * 弹窗原样重现 → FilePickBus 待投递信箱把选择结果回填进草稿。
+ * 语义：游戏快捷方式的 config 为空串 = 完全跟随容器当前配置（容器页
+ * 改了本游戏就跟着变）；一旦在游戏编辑页动过任何高级选项，保存的就是
+ * 全量快照（此后容器页的修改不影响本游戏 —— 每游戏独立配置）。
+ */
+object GameLaunchConfig {
+
+    fun snapshotOf(d: ContainerData): String = JSONObject().apply {
+        put("backend", d.backend.id)
+        put("preset", d.preset.id)
+        put("screen", d.screen)
+        put("dmode", d.dmode.id)
+        put("gallium", d.gallium)
+        put("env", d.env)
+        put("dxvk", d.dxvk)
+        put("dxoverrides", d.dxoverrides)
+        put("wine", d.wine)
+        put("lang", d.lang)
+        put("audio", d.audio.id)
+        put("frame", d.frame)
+        put("cores", d.cores)
+        put("dsound", d.dsound)
+        put("dshow", d.dshow)
+        put("dpi", d.dpi)
+        put("winver", d.winver)
+        put("mangohud", d.mangohud)
+        put("flags", d.flags)
+        put("turnip", d.turnip)
+        put("zink", d.zink)
+        put("wined3d", d.wined3d)
+        put("fexcore", d.fexcore)
+        put("wrapper", d.wrapper)
+        put("uargs", d.uargs)
+    }.toString()
+
+    /** JSON 快照合并进容器基底（缺键 / 空 JSON / 解析失败 = 原样基底）。 */
+    fun applyTo(base: ContainerData, json: String?): ContainerData {
+        if (json.isNullOrBlank()) return base
+        val o = try {
+            JSONObject(json)
+        } catch (_: Exception) {
+            return base
+        }
+        return base.copy(
+            backend = ContainerBackend.fromId(o.optString("backend", base.backend.id)),
+            preset = com.linbox.apps.containers.Box64Preset.fromId(o.optString("preset", base.preset.id)),
+            screen = o.optString("screen", base.screen),
+            dmode = DisplayMode.fromId(o.optString("dmode", base.dmode.id)),
+            gallium = o.optString("gallium", base.gallium),
+            env = o.optString("env", base.env),
+            dxvk = o.optString("dxvk", base.dxvk),
+            dxoverrides = o.optString("dxoverrides", base.dxoverrides),
+            wine = o.optString("wine", base.wine),
+            lang = o.optString("lang", base.lang),
+            audio = ContainerAudio.fromId(o.optString("audio", base.audio.id)),
+            frame = o.optString("frame", base.frame),
+            cores = o.optString("cores", base.cores),
+            dsound = o.optString("dsound", base.dsound),
+            dshow = o.optString("dshow", base.dshow),
+            dpi = o.optString("dpi", base.dpi),
+            winver = o.optString("winver", base.winver),
+            mangohud = o.optString("mangohud", base.mangohud),
+            flags = o.optString("flags", base.flags),
+            turnip = o.optString("turnip", base.turnip),
+            zink = o.optString("zink", base.zink),
+            wined3d = o.optString("wined3d", base.wined3d),
+            fexcore = o.optString("fexcore", base.fexcore),
+            wrapper = o.optString("wrapper", base.wrapper),
+            uargs = o.optString("uargs", base.uargs)
+        )
+    }
+}
+
+/**
+ * v6.1：游戏库跨页面导航存活的 UI 状态（v6.2 编辑页化后沿用）。
+ *
+ * 弹窗开关 + 草稿字段全部放进本单例（Compose 快照状态，进程内存活）。
+ * 文件管理器选完 → ShellController.closePage() 回到游戏库 → 编辑页
+ * 原样重现 → FilePickBus 待投递信箱把选择结果回填进草稿。
  */
 object GameLibraryUiState {
-    /** 添加/编辑弹窗是否打开。 */
+    /** 添加/编辑编辑页是否打开。 */
     var editorOpen by mutableStateOf(false)
     /** 正在编辑的快捷方式（null = 新建）。 */
     var editing by mutableStateOf<GameShortcut?>(null)
@@ -161,6 +251,8 @@ object GameLibraryUiState {
     var draftExe by mutableStateOf("")
     var draftContainer by mutableStateOf("")
     var draftCardImage by mutableStateOf("")
+    /** v6.2：游戏专属启动配置快照（JSON；空 = 跟随容器）。 */
+    var draftConfig by mutableStateOf("")
 
     /** 打开「添加游戏」（defaultContainer = 第一个容器名）。 */
     fun openNew(defaultContainer: String) {
@@ -169,6 +261,7 @@ object GameLibraryUiState {
         draftExe = ""
         draftContainer = defaultContainer
         draftCardImage = ""
+        draftConfig = ""
         editorOpen = true
     }
 
@@ -179,6 +272,7 @@ object GameLibraryUiState {
         draftExe = s.exe
         draftContainer = s.containerName
         draftCardImage = s.cardImage
+        draftConfig = s.config
         editorOpen = true
     }
 
@@ -235,16 +329,52 @@ fun GameLibraryScreen() {
         }
     }
 
+    /**
+     * v6.2 启动：合并游戏专属配置（config 空 = 跟随容器现值）→ 原生链路
+     * runExe；成功 / 失败都给出可见反馈（旧版成功时无任何提示）。
+     */
     fun runShortcut(s: GameShortcut) {
-        val container = containers.firstOrNull { it.name == s.containerName }
-        if (container == null) {
-            toast(context, "容器「${s.containerName}」不存在，请先编辑该游戏")
+        val base = containers.firstOrNull { it.name == s.containerName }
+        if (base == null) {
+            toast(context, "容器「${s.containerName}」不存在，请长按游戏卡片编辑")
+            return
+        }
+        // 同步预检先行（rootfs / wine 可解析），错误立刻可见
+        val pre = WineSessionLauncher.precheckRun(base)
+        if (pre != null) {
+            toast(context, pre)
             return
         }
         cs.launch(Dispatchers.IO) {
-            val err = WineSessionLauncher.runExe(context, container, s.exe)
-            withContext(Dispatchers.Main) { err?.let { toast(context, it) } }
+            val merged = GameLaunchConfig.applyTo(base, s.config)
+            val err = WineSessionLauncher.runExe(context, merged, s.exe)
+            withContext(Dispatchers.Main) {
+                if (err != null) {
+                    toast(context, err)
+                } else {
+                    toast(context, "已在容器「${base.name}」中启动 · ${s.label}\n首次运行需构建前缀，进度见容器页")
+                }
+            }
         }
+    }
+
+    // ---- v6.2：编辑页打开时整页替换网格视图（草稿在单例，跨导航存活） ----
+    if (GameLibraryUiState.editorOpen) {
+        GameShortcutEditorPage(
+            containers = containers,
+            onSave = { s ->
+                GameLibraryUiState.closeEditor()
+                cs.launch(Dispatchers.IO) {
+                    GameShortcuts.upsert(app, s)
+                    withContext(Dispatchers.Main) { refresh() }
+                }
+            },
+            onDeleteRequest = {
+                GameLibraryUiState.editing?.let { GameLibraryUiState.deleteFor = it }
+                GameLibraryUiState.closeEditor()
+            }
+        )
+        return
     }
 
     Box(
@@ -350,26 +480,6 @@ fun GameLibraryScreen() {
         }
     }
 
-    // ---- 添加 / 编辑（v6.1：状态在单例，去文件管理器选 exe/图片回来不丢） ----
-    if (GameLibraryUiState.editorOpen) {
-        GameShortcutEditorDialog(
-            initial = GameLibraryUiState.editing,
-            containers = containers,
-            onDismiss = { GameLibraryUiState.closeEditor() },
-            onSave = { s ->
-                GameLibraryUiState.closeEditor()
-                cs.launch(Dispatchers.IO) {
-                    GameShortcuts.upsert(app, s)
-                    withContext(Dispatchers.Main) { refresh() }
-                }
-            },
-            onDelete = {
-                GameLibraryUiState.editing?.let { GameLibraryUiState.deleteFor = it }
-                GameLibraryUiState.closeEditor()
-            }
-        )
-    }
-
     // ---- 删除确认 ----
     GameLibraryUiState.deleteFor?.let { s ->
         AlertDialog(
@@ -390,6 +500,503 @@ fun GameLibraryScreen() {
             },
             containerColor = LinShellTheme.surface
         )
+    }
+}
+
+// ===========================================================================
+// 添加 / 编辑游戏（v6.2 全屏编辑页：完整启动配置）
+// ===========================================================================
+
+/**
+ * 游戏快捷方式编辑页（v6.2）：
+ * - 📋 基本：游戏名 / exe（浏览）/ 容器 / 卡片图 —— 草稿在单例，
+ *   去文件管理器选完回来不丢；
+ * - 🚀 启动参数：启动参数（uargs）/ 环境变量 / 高级启动开关 /
+ *   分辨率（预设 + 自定义）/ 独立窗口 / 帧率 / Wine 版本 / Windows 版本 / 音频；
+ * - 🎮 图形驱动：复用 wineguanli GraphicsDriverTab —— Vulkan 驱动
+ *   （Turnip / Wrapper / 专有包 / 系统专有 + 版本）+ Zink(/opt/zink) +
+ *   DXVK(/opt/dxvk1 + APK 内置) + WineD3D(/opt/vkord3d) + FEXCore
+ *   (/opt/fexcore)，全部从 /opt 扫描选择，➕ 安装 zip/tar；
+ * - 🖥️ CPU 核心 / 📚 函数库：同容器编辑页（核心勾选 / DLL 加载序 / DPI /
+ *   Windows 版本 / 立即应用）。
+ *
+ * 配置模型：working = 容器基底 + draftConfig 快照（[GameLaunchConfig]）；
+ * 任何高级选项的修改即时写回 draftConfig（跨导航存活）。
+ */
+@Composable
+private fun GameShortcutEditorPage(
+    containers: List<ContainerData>,
+    onSave: (GameShortcut) -> Unit,
+    onDeleteRequest: () -> Unit
+) {
+    val st = GameLibraryUiState
+    val editing = st.editing
+    val context = LocalContext.current
+    val cs = rememberCoroutineScope()
+    var error by remember { mutableStateOf<String?>(null) }
+    var tab by remember { mutableIntStateOf(0) }
+
+    // Wine 版本列表（启动参数页 Wine 版本覆盖用）
+    var wines by remember { mutableStateOf<List<WineInstall>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { wines = ContainerManager.listWines() }
+    }
+
+    // exe 选择回投（文件管理器）—— 发起页离开期间的投递由
+    // FilePickBus 待投递信箱保留，本页重新组合时自动送达
+    FilePickListenerEffect(targetApp = "game_library_exe") { path ->
+        if (path.endsWith(".exe", true) || path.endsWith(".bat", true) ||
+            path.endsWith(".msi", true) || path.endsWith(".cmd", true)
+        ) {
+            st.draftExe = path
+            if (st.draftName.isBlank()) {
+                st.draftName = path.substringAfterLast('/').substringBeforeLast('.')
+            }
+            error = null
+        }
+    }
+    // 卡片图片选择回投
+    FilePickListenerEffect(targetApp = "game_library_img") { path ->
+        st.draftCardImage = path
+    }
+
+    // ---- 工作配置：容器基底 + 游戏专属快照 ----
+    val base = containers.firstOrNull { it.name == st.draftContainer }
+        ?: containers.firstOrNull()
+    val working: ContainerData? = remember(st.draftContainer, st.draftConfig, base) {
+        base?.let { GameLaunchConfig.applyTo(it, st.draftConfig) }
+    }
+
+    /** 任何高级配置修改 → 即时快照写回单例（跨导航存活）。 */
+    fun setConfig(d: ContainerData) {
+        st.draftConfig = GameLaunchConfig.snapshotOf(d)
+    }
+
+    /** 分辨率/窗口模式联动（与容器编辑 applyResolution 同款语义）。 */
+    fun applyResolution(resLabel: String, w: ContainerData) {
+        val screen = if (resLabel == "跟随窗口（全屏）") "native" else resLabel
+        val independent = w.hasFlag(ContainerFlags.INDEPENDENT)
+        val dmode = when {
+            independent -> DisplayMode.F
+            screen == "native" -> DisplayMode.OFF
+            else -> DisplayMode.D
+        }
+        setConfig(w.copy(screen = screen, dmode = dmode))
+    }
+
+    fun save() {
+        val n = st.draftName.trim()
+        when {
+            n.isEmpty() -> { error = "请输入游戏名称"; return }
+            st.draftExe.isBlank() -> { error = "请选择程序（exe）"; return }
+            st.draftContainer.isBlank() -> { error = "请选择容器"; return }
+            else -> onSave(
+                GameShortcut(
+                    id = editing?.id ?: 0,
+                    label = n,
+                    containerName = st.draftContainer,
+                    exe = st.draftExe.trim(),
+                    cardImage = st.draftCardImage,
+                    config = st.draftConfig
+                )
+            )
+        }
+    }
+
+    androidx.activity.compose.BackHandler(enabled = true) {
+        GameLibraryUiState.closeEditor()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(LinShellTheme.bg, Color(0xFF0B0F1C))))
+    ) {
+        Column(Modifier.fillMaxSize()) {
+
+            // ===== app bar =====
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(RoundedCornerShape(21.dp))
+                        .background(LinShellTheme.card)
+                        .clickable { GameLibraryUiState.closeEditor() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                        tint = LinShellTheme.textPrimary, modifier = Modifier.size(22.dp))
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (editing == null) "添加游戏" else "编辑游戏",
+                        color = LinShellTheme.textPrimary,
+                        fontSize = 20.sp, fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (editing == null) "游戏快捷方式 · 完整启动配置（/opt 驱动 / 启动参数）"
+                        else editing.label,
+                        color = LinShellTheme.textSecondary, fontSize = 11.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (editing != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(21.dp))
+                            .background(LinShellTheme.red.copy(alpha = 0.14f))
+                            .clickable { onDeleteRequest() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Delete, "删除",
+                            tint = LinShellTheme.red, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+
+            // ===== 五选项卡 =====
+            val tabs = listOf("📋 基本", "🚀 启动参数", "🎮 图形驱动", "🖥️ CPU", "📚 函数库")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LinShellTheme.card)
+                    .padding(3.dp)
+            ) {
+                tabs.forEachIndexed { i, label ->
+                    val on = tab == i
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(
+                                if (on) LinShellTheme.blue.copy(alpha = 0.85f)
+                                else Color.Transparent
+                            )
+                            .clickable { tab = i }
+                            .padding(vertical = 7.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            label,
+                            color = if (on) Color.White else LinShellTheme.textSecondary,
+                            fontSize = 10.sp, maxLines = 1,
+                            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+
+            // ===== 选项卡内容 =====
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                when (tab) {
+                    // ---------- 0 基本 ----------
+                    0 -> {
+                        EditorSection("基本信息") {
+                            EditorTextField(
+                                "游戏名称", st.draftName,
+                                { st.draftName = it; error = null }, "如 Fallout 3"
+                            )
+                            EditorTextField(
+                                "程序（exe / bat / msi）", st.draftExe,
+                                { st.draftExe = it; error = null },
+                                "/storage/emulated/0/Download/game/game.exe"
+                            )
+                            OutlinedButton(onClick = {
+                                ShellController.showFiles(pickMode = "exe", targetApp = "game_library_exe")
+                            }) { Text("浏览选择程序", fontSize = 12.sp) }
+
+                            // 容器下拉
+                            if (containers.isEmpty()) {
+                                Text(
+                                    "还没有容器 —— 先到「容器」页创建",
+                                    color = Color(0xFFF6C454), fontSize = 12.sp
+                                )
+                            } else {
+                                EditorDropdown(
+                                    "用哪个容器运行",
+                                    selected = st.draftContainer.ifBlank { "请选择容器" },
+                                    options = containers.map { it.name },
+                                    onSelect = { st.draftContainer = it }
+                                )
+                            }
+
+                            // 卡片图片
+                            if (st.draftCardImage.isNotBlank()) {
+                                Text(
+                                    "卡片图：${st.draftCardImage}",
+                                    color = LinShellTheme.textSecondary, fontSize = 10.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            OutlinedButton(onClick = {
+                                ShellController.showFiles(pickMode = "image", targetApp = "game_library_img")
+                            }) { Text("选择卡片图片（可选）", fontSize = 12.sp) }
+                        }
+
+                        EditorSection("启动配置状态") {
+                            Text(
+                                if (st.draftConfig.isBlank())
+                                    "跟随容器配置 —— 容器页修改对本游戏即时生效"
+                                else "游戏专属配置（已固定）—— 容器页修改不影响本游戏",
+                                color = LinShellTheme.textSecondary, fontSize = 11.sp
+                            )
+                            if (st.draftConfig.isNotBlank()) {
+                                Spacer(Modifier.height(4.dp))
+                                OutlinedButton(onClick = {
+                                    st.draftConfig = ""
+                                }) { Text("恢复跟随容器配置", fontSize = 12.sp) }
+                            }
+                        }
+                    }
+
+                    // ---------- 1 启动参数 ----------
+                    1 -> {
+                        if (working == null) {
+                            EditorNote("还没有容器 —— 先到「容器」页创建后再配置启动参数")
+                        } else {
+                            val w = working
+                            EditorSection("启动参数") {
+                                EditorTextField(
+                                    "启动参数（追加在程序后）", w.uargs,
+                                    { setConfig(w.copy(uargs = it)) }, "-windowed -nosound"
+                                )
+                                EditorTextField(
+                                    "环境变量（K=V 空格分隔）", w.env,
+                                    { setConfig(w.copy(env = it)) },
+                                    "MESA_GL_VERSION_OVERRIDE=4.6"
+                                )
+                                Text(
+                                    "启动开关",
+                                    color = LinShellTheme.textSecondary,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                                FlagFlow(
+                                    all = listOf(
+                                        ContainerFlags.DX11 to "强制 DX11",
+                                        ContainerFlags.OPENGL to "OpenGL 修复",
+                                        ContainerFlags.UNITY to "Unity 修复",
+                                        ContainerFlags.F5TASK to "F5 任务栏",
+                                        ContainerFlags.FEXMODE to "FEX 模式",
+                                        ContainerFlags.WOWBOXMODE to "wowbox64",
+                                        ContainerFlags.CLOSESERVICE to "关闭服务",
+                                        ContainerFlags.DEBUG to "调试输出"
+                                    ),
+                                    selected = w.flagSet,
+                                    onToggle = { f, on ->
+                                        val flags = w.flagSet.toMutableSet()
+                                        if (on) flags.add(f) else flags.remove(f)
+                                        setConfig(w.copy(flags = ContainerFlags.serialize(flags)))
+                                    }
+                                )
+                            }
+
+                            EditorSection("显示") {
+                                EditorDropdown(
+                                    "分辨率",
+                                    selected = if (w.screen == "native") "跟随窗口（全屏）" else w.screen,
+                                    options = listOf("跟随窗口（全屏）") +
+                                        ContainerData.SCREEN_CHOICES.filter { it != "native" },
+                                    onSelect = { applyResolution(it, w) }
+                                )
+                                EditorTextField(
+                                    "自定义分辨率（如 1280x1024）",
+                                    if (w.screen == "native") "" else w.screen,
+                                    {
+                                        // 仅完整 WxH 形态才应用（避免逐字符输入把半截分辨率写进配置）
+                                        if (Regex("^\\d{3,4}[xX]\\d{3,4}$").matches(it.trim())) {
+                                            applyResolution(it.trim(), w)
+                                        }
+                                    },
+                                    "1280x1024"
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("独立窗口", color = LinShellTheme.textPrimary, fontSize = 13.sp)
+                                        Text(
+                                            "注册表虚拟桌面（-f），不支持 proton",
+                                            color = LinShellTheme.textSecondary, fontSize = 10.sp
+                                        )
+                                    }
+                                    Switch(
+                                        checked = w.hasFlag(ContainerFlags.INDEPENDENT),
+                                        onCheckedChange = { on ->
+                                            val flags = w.flagSet.toMutableSet()
+                                            if (on) flags.add(ContainerFlags.INDEPENDENT)
+                                            else flags.remove(ContainerFlags.INDEPENDENT)
+                                            val dmode = when {
+                                                on -> DisplayMode.F
+                                                w.screen == "native" -> DisplayMode.OFF
+                                                else -> DisplayMode.D
+                                            }
+                                            setConfig(w.copy(
+                                                flags = ContainerFlags.serialize(flags),
+                                                dmode = dmode
+                                            ))
+                                        }
+                                    )
+                                }
+                                EditorDropdown(
+                                    "帧数限制",
+                                    selected = if (w.frame == "0") "不限制" else "${w.frame} fps",
+                                    options = listOf("不限制", "60 fps", "120 fps"),
+                                    onSelect = {
+                                        setConfig(w.copy(frame = when (it) {
+                                            "60 fps" -> "60"; "120 fps" -> "120"; else -> "0"
+                                        }))
+                                    }
+                                )
+                            }
+
+                            EditorSection("兼容性") {
+                                EditorDropdown(
+                                    "Wine 版本",
+                                    selected = w.wine.ifBlank { "跟随容器" },
+                                    options = listOf("跟随容器") + wines.map { it.displayLabel },
+                                    onSelect = { label ->
+                                        setConfig(w.copy(
+                                            wine = wines.firstOrNull { it.displayLabel == label }?.name ?: ""
+                                        ))
+                                    }
+                                )
+                                EditorDropdown(
+                                    "Windows 版本",
+                                    selected = WindowsVersions.fromId(w.winver).label,
+                                    options = WindowsVersions.ALL.map { it.label },
+                                    onSelect = {
+                                        setConfig(w.copy(
+                                            winver = WindowsVersions.ALL.first { v -> v.label == it }.id
+                                        ))
+                                    }
+                                )
+                                EditorDropdown(
+                                    "音频",
+                                    selected = w.audio.label,
+                                    options = ContainerAudio.entries.map { it.label },
+                                    onSelect = {
+                                        setConfig(w.copy(
+                                            audio = ContainerAudio.entries.first { a -> a.label == it }
+                                        ))
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // ---------- 2 图形驱动（/opt）----------
+                    2 -> {
+                        if (working == null) {
+                            EditorNote("还没有容器 —— 先到「容器」页创建后再配置图形驱动")
+                        } else {
+                            // wineguanli GraphicsDriverTab（Vulkan 驱动 / Zink /
+                            // DXVK / WineD3D / FEXCore —— 全部 /opt 扫描选择）
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                com.linbox.apps.containers.LocalGuanliScale provides 1f,
+                                com.linbox.apps.containers.LocalGuanliFontScale provides 1f
+                            ) {
+                                com.linbox.apps.containers.GraphicsDriverTab(
+                                    edit = working,
+                                    onChange = { setConfig(it) }
+                                )
+                            }
+                        }
+                    }
+
+                    // ---------- 3 CPU 核心 ----------
+                    3 -> {
+                        if (working == null) {
+                            EditorNote("还没有容器 —— 先到「容器」页创建后再配置 CPU 核心")
+                        } else {
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                com.linbox.apps.containers.LocalGuanliScale provides 1f,
+                                com.linbox.apps.containers.LocalGuanliFontScale provides 1f
+                            ) {
+                                com.linbox.apps.containers.CpuCoresTab(
+                                    edit = working,
+                                    onChange = { setConfig(it) }
+                                )
+                            }
+                        }
+                    }
+
+                    // ---------- 4 函数库 ----------
+                    4 -> {
+                        if (working == null) {
+                            EditorNote("还没有容器 —— 先到「容器」页创建后再配置函数库")
+                        } else {
+                            androidx.compose.runtime.CompositionLocalProvider(
+                                com.linbox.apps.containers.LocalGuanliScale provides 1f,
+                                com.linbox.apps.containers.LocalGuanliFontScale provides 1f
+                            ) {
+                                com.linbox.apps.containers.LibraryTab(
+                                    edit = working,
+                                    onChange = { setConfig(it) },
+                                    onApplyNow = {
+                                        cs.launch(Dispatchers.IO) {
+                                            val err = runCatching {
+                                                com.linbox.apps.containers.launcher.WineLibrary
+                                                    .applyNow(working)
+                                            }.getOrElse { "应用异常：${it.message}" }
+                                            withContext(Dispatchers.Main) {
+                                                toast(context, err ?: "函数库设置已应用到容器注册表")
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (error != null) {
+                    Text(error ?: "", color = Color(0xFFFF8A80), fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(84.dp))
+            }
+        }
+
+        // ===== 底部保存按钮 =====
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color(0xE60D1420))
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            Button(
+                onClick = { save() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = LinShellTheme.blue)
+            ) {
+                Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (editing == null) "添加到游戏库" else "保存修改",
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 
@@ -455,6 +1062,18 @@ private fun GameShortcutCard(
                     }
                 }
             }
+            // 游戏专属配置角标（v6.2：一眼可辨哪些游戏固定了专属配置）
+            if (shortcut.config.isNotBlank()) {
+                Text(
+                    "专属配置",
+                    color = Color.White, fontSize = 8.sp,
+                    modifier = Modifier
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Color(0x990659C8))
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
             // 运行角标
             if (running) {
                 Box(
@@ -519,177 +1138,4 @@ private fun EmptyLibraryHint(hasContainers: Boolean, hint: String? = null) {
             )
         }
     }
-}
-
-// ===========================================================================
-// 添加 / 编辑游戏弹窗（安卓表单）
-// ===========================================================================
-
-/**
- * v6.1：草稿字段全部读写 [GameLibraryUiState]（跨导航存活）——
- * 「浏览选择程序 / 选择卡片图片」跳去文件管理器再回来，
- * 已填内容与弹窗本身都原样保留，选择结果经 FilePickBus 信箱回填。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun GameShortcutEditorDialog(
-    initial: GameShortcut?,
-    containers: List<ContainerData>,
-    onDismiss: () -> Unit,
-    onSave: (GameShortcut) -> Unit,
-    onDelete: (() -> Unit)? = null
-) {
-    val st = GameLibraryUiState
-    var error by remember { mutableStateOf<String?>(null) }
-
-    // exe 选择回投（文件管理器）—— 发起页离开期间的投递由
-    // FilePickBus 待投递信箱保留，本弹窗重新组合时自动送达
-    FilePickListenerEffect(targetApp = "game_library_exe") { path ->
-        if (path.endsWith(".exe", true) || path.endsWith(".bat", true) ||
-            path.endsWith(".msi", true) || path.endsWith(".cmd", true)
-        ) {
-            st.draftExe = path
-            if (st.draftName.isBlank()) {
-                st.draftName = path.substringAfterLast('/').substringBeforeLast('.')
-            }
-        }
-    }
-    // 卡片图片选择回投
-    FilePickListenerEffect(targetApp = "game_library_img") { path ->
-        st.draftCardImage = path
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                if (initial == null) "添加游戏" else "编辑游戏",
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // 名称
-                OutlinedTextField(
-                    value = st.draftName,
-                    onValueChange = { st.draftName = it; error = null },
-                    label = { Text("游戏名称") },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-                )
-                // exe
-                OutlinedTextField(
-                    value = st.draftExe,
-                    onValueChange = { st.draftExe = it; error = null },
-                    label = { Text("程序（exe / bat / msi）") },
-                    placeholder = { Text("/storage/emulated/0/Download/game/game.exe", fontSize = 10.sp) },
-                    singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
-                )
-                OutlinedButton(onClick = {
-                    ShellController.showFiles(pickMode = "exe", targetApp = "game_library_exe")
-                }) { Text("浏览选择程序", fontSize = 12.sp) }
-
-                // 容器下拉
-                if (containers.isEmpty()) {
-                    Text(
-                        "还没有容器 —— 先到「容器」页创建",
-                        color = Color(0xFFF6C454), fontSize = 12.sp
-                    )
-                } else {
-                    Text("用哪个容器运行", color = LinShellTheme.textSecondary, fontSize = 12.sp)
-                    var expanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = it }
-                    ) {
-                        OutlinedTextField(
-                            value = st.draftContainer,
-                            onValueChange = {},
-                            readOnly = true,
-                            singleLine = true,
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            shape = RoundedCornerShape(10.dp)
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            containers.forEach { c ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(c.name, fontSize = 13.sp)
-                                            Text(
-                                                c.wine.ifBlank { "默认 Wine" } + " · " + c.backend.label,
-                                                fontSize = 10.sp, color = LinShellTheme.textSecondary
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        st.draftContainer = c.name
-                                        expanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 卡片图片
-                if (st.draftCardImage.isNotBlank()) {
-                    Text(
-                        "卡片图：${st.draftCardImage}",
-                        color = LinShellTheme.textSecondary, fontSize = 10.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                OutlinedButton(onClick = {
-                    ShellController.showFiles(pickMode = "image", targetApp = "game_library_img")
-                }) { Text("选择卡片图片（可选）", fontSize = 12.sp) }
-
-                if (error != null) {
-                    Text(error ?: "", color = Color(0xFFFF8A80), fontSize = 12.sp)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                val n = st.draftName.trim()
-                when {
-                    n.isEmpty() -> error = "请输入游戏名称"
-                    st.draftExe.isBlank() -> error = "请选择程序（exe）"
-                    st.draftContainer.isBlank() -> error = "请选择容器"
-                    else -> onSave(
-                        GameShortcut(
-                            id = initial?.id ?: 0,
-                            label = n,
-                            containerName = st.draftContainer,
-                            exe = st.draftExe.trim(),
-                            cardImage = st.draftCardImage
-                        )
-                    )
-                }
-            }) { Text(if (initial == null) "添加" else "保存", fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = {
-            Row {
-                if (onDelete != null) {
-                    TextButton(onClick = onDelete) {
-                        Icon(Icons.Filled.Delete, null, modifier = Modifier.size(15.dp),
-                            tint = Color(0xFFFF6B6B))
-                        Spacer(Modifier.width(3.dp))
-                        Text("删除", color = Color(0xFFFF6B6B))
-                    }
-                    Spacer(Modifier.width(6.dp))
-                }
-                TextButton(onClick = onDismiss) { Text("取消") }
-            }
-        },
-        containerColor = LinShellTheme.surface
-    )
 }

@@ -292,6 +292,71 @@ object TermuxTerminalHolder {
     fun hasLiveSession(): Boolean = controller?.session?.isRunning() == true
 }
 
+// ====================================================================
+// 终端快捷动作桥（v6.2）
+// ====================================================================
+
+/**
+ * v6.2 终端快捷动作桥（用户："终端界面的悬浮球没有集中到虚拟手柄
+ * 悬浮球里，要和 x11 那样多排集合进去"）。
+ *
+ * 原终端独立玻璃悬浮球（GlassFab，v2.24）已移除 —— 其全部功能
+ * （新会话 / 键盘 / 粘贴 / 字号± / 符号层 / X11 / DAC / 设置 / 回主页）
+ * 并入**虚拟手柄悬浮球**的「终端快捷」组（多排紧凑网格，与 X11 快捷组
+ * 同款；见 GamepadFloatingBall）。X11 / DAC / 设置 / 回主页四项不依赖
+ * 终端会话，由悬浮球直接调 ShellController；会话相关动作经本桥投递：
+ *
+ * - RealTerminalArea 组合时 [register] 登记动作回调（终端页在场 =
+ *   [available]=true）；离开组合 [release] 注销；
+ * - 悬浮球的终端组仅在校验可用时点亮对应芯片，会话不在场时点击无副作用；
+ * - 符号层点亮态（[symbolLayerActive]）随组合周期同步。
+ */
+object TerminalQuickBus {
+    /** 终端会话是否在场（RealTerminalArea 组合中 = true）。 */
+    var available by mutableStateOf(false)
+        private set
+
+    /** 符号层是否激活（悬浮球芯片点亮态）。 */
+    var symbolLayerActive by mutableStateOf(false)
+        private set
+
+    var newSession: (() -> Unit)? = null
+    var toggleKeyboard: (() -> Unit)? = null
+    var paste: (() -> Unit)? = null
+    var fontDecrease: (() -> Unit)? = null
+    var fontIncrease: (() -> Unit)? = null
+    var toggleSymbolLayer: (() -> Unit)? = null
+
+    fun register(
+        symbolLayerActive: Boolean,
+        onNewSession: () -> Unit,
+        onKeyboardToggle: () -> Unit,
+        onPaste: () -> Unit,
+        onFontDecrease: () -> Unit,
+        onFontIncrease: () -> Unit,
+        onLayerToggle: () -> Unit
+    ) {
+        this.symbolLayerActive = symbolLayerActive
+        newSession = onNewSession
+        toggleKeyboard = onKeyboardToggle
+        paste = onPaste
+        fontDecrease = onFontDecrease
+        fontIncrease = onFontIncrease
+        toggleSymbolLayer = onLayerToggle
+        available = true
+    }
+
+    fun release() {
+        available = false
+        newSession = null
+        toggleKeyboard = null
+        paste = null
+        fontDecrease = null
+        fontIncrease = null
+        toggleSymbolLayer = null
+    }
+}
+
 // ------------------------------------------------------------------
 // 终端背景（设置→终端背景：纯色 / 自定义图片）
 // ------------------------------------------------------------------
@@ -439,23 +504,26 @@ private fun RealTerminalArea() {
                 )
             }
 
-            // ---------- 透明悬浮球（原顶部工具栏功能全部收编于此） ----------
-            GlassFab(
-                areaPx = areaSize,
-                symbolLayerActive = symbolLayer,
-                onNewSession = { TermuxTerminalHolder.newSession(context) },
-                onKeyboardToggle = { toggleSoftKeyboard(context, viewRef.value) },
-                onPaste = {
-                    val text = clipboardText(context) ?: return@GlassFab
-                    viewRef.value?.mEmulator?.paste(text)
-                },
-                onFontDecrease = { controller.changeFontSize(-2) },
-                onFontIncrease = { controller.changeFontSize(+2) },
-                onLayerToggle = { symbolLayer = !symbolLayer },
-                onOpenX11 = { ShellController.showX11() },
-                onOpenDac = { ShellController.showDac() },
-                onOpenSettings = { ShellController.showSettings() }
-            )
+            // ---------- v6.2：终端快捷动作桥 ----------
+            // 原独立玻璃悬浮球（GlassFab）已移除 —— 全部功能并入虚拟手柄
+            // 悬浮球的「终端快捷」组（多排紧凑网格，与 X11 快捷组同款）。
+            // 会话相关动作（新会话/键盘/粘贴/字号/符号层）经 TerminalQuickBus
+            // 投递；X11 / DAC / 设置 / 回主页由悬浮球直调 ShellController。
+            DisposableEffect(controller, symbolLayer) {
+                TerminalQuickBus.register(
+                    symbolLayerActive = symbolLayer,
+                    onNewSession = { TermuxTerminalHolder.newSession(context) },
+                    onKeyboardToggle = { toggleSoftKeyboard(context, viewRef.value) },
+                    onPaste = {
+                        val text = clipboardText(context)
+                        if (text != null) viewRef.value?.mEmulator?.paste(text)
+                    },
+                    onFontDecrease = { controller.changeFontSize(-2) },
+                    onFontIncrease = { controller.changeFontSize(+2) },
+                    onLayerToggle = { symbolLayer = !symbolLayer }
+                )
+                onDispose { TerminalQuickBus.release() }
+            }
         }
 
         // ---------- 快捷键栏（两排，透明底：背景图整屏铺放后从此透出） ----------
@@ -506,283 +574,6 @@ private fun SessionEndedOverlay(onNewSession: () -> Unit) {
     }
 }
 
-// ====================================================================
-// 透明悬浮球（v2.24）
-// ====================================================================
-//
-// 原顶部工具栏（新会话/键盘/粘贴/字号/符号层/X11/设置）全部收编进
-// 一个玻璃质感的可拖动悬浮球：
-// - 玻璃拟态：多层半透明白渐变 + 顶部高光 + 细描边 + 终端绿辉光投影，
-//   附带缓慢的呼吸缩放，悬浮但不"死板"；
-// - 单击展开玻璃胶囊菜单（自球体上/下侧扇出，逐项错峰浮现），
-//   菜单打开时点击任意空白处收起；
-// - 长按拖动改变位置，松手持久化（归一化坐标，跨分辨率/方向）；
-// - "虚拟手柄"项实时反映手柄开关状态（点亮态），单击切换；
-//   长按直接打开手柄布局设置悬浮窗。
-
-/** 悬浮球菜单项数据（onClick 放在末位以支持尾随 lambda 写法）。 */
-private data class FabItem(
-    val label: String,
-    val glyph: String,
-    val active: Boolean = false,
-    val onLongClick: (() -> Unit)? = null,
-    val onClick: () -> Unit
-)
-
-@Composable
-private fun GlassFab(
-    areaPx: IntSize,
-    symbolLayerActive: Boolean,
-    onNewSession: () -> Unit,
-    onKeyboardToggle: () -> Unit,
-    onPaste: () -> Unit,
-    onFontDecrease: () -> Unit,
-    onFontIncrease: () -> Unit,
-    onLayerToggle: () -> Unit,
-    onOpenX11: () -> Unit,
-    onOpenDac: () -> Unit,
-    onOpenSettings: () -> Unit
-) {
-    val app = LinBoxApp.get()
-    val scope = rememberCoroutineScope()
-    val density = LocalDensity.current
-
-    // 悬浮球位置（归一化 0..1）+ 拖动偏移
-    val fabPosX by app.settingsStore.fabPosX.collectAsState(initial = 0.85f)
-    val fabPosY by app.settingsStore.fabPosY.collectAsState(initial = 0.85f)
-    val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
-
-    var expanded by remember { mutableStateOf(false) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
-    var dragging by remember { mutableStateOf(false) }
-
-    val fabSizePx = with(density) { 54.dp.toPx() }
-    val itemHPx = with(density) { 38.dp.toPx() }
-    val gapPx = with(density) { 6.dp.toPx() }
-    val menuWPx = with(density) { 118.dp.toPx() }
-    val maxX = (areaPx.width - fabSizePx).coerceAtLeast(0f)
-    val maxY = (areaPx.height - fabSizePx).coerceAtLeast(0f)
-
-    val x = (maxX * fabPosX + dragOffset.x).coerceIn(0f, maxX)
-    val y = (maxY * fabPosY + dragOffset.y).coerceIn(0f, maxY)
-    // 球体在下半屏 → 菜单向上展开；上半屏 → 向下展开
-    val expandUp = y > maxY * 0.45f
-
-    fun persistPos() {
-        if (maxX <= 0f || maxY <= 0f) return
-        val cx = (maxX * fabPosX + dragOffset.x).coerceIn(0f, maxX)
-        val cy = (maxY * fabPosY + dragOffset.y).coerceIn(0f, maxY)
-        dragOffset = Offset.Zero
-        val nx = (cx / maxX).coerceIn(0f, 1f)
-        val ny = (cy / maxY).coerceIn(0f, 1f)
-        scope.launch { app.settingsStore.setFabPos(nx, ny) }
-    }
-
-    val items = remember(
-        symbolLayerActive, gamepadEnabled, onNewSession, onKeyboardToggle,
-        onPaste, onFontDecrease, onFontIncrease, onLayerToggle, onOpenX11, onOpenDac, onOpenSettings
-    ) {
-        listOf(
-            FabItem("回主页", "🏠") { ShellController.showHome() },
-            FabItem("新会话", "＋") { onNewSession() },
-            FabItem("键盘", "⌨") { onKeyboardToggle() },
-            FabItem("粘贴", "贴") { onPaste() },
-            FabItem("字号－", "A-") { onFontDecrease() },
-            FabItem("字号＋", "A+") { onFontIncrease() },
-            FabItem("符号层", "SY", active = symbolLayerActive) { onLayerToggle() },
-            FabItem("虚拟手柄", "柄", active = gamepadEnabled,
-                onClick = { scope.launch { app.settingsStore.setGamepadEnabled(!gamepadEnabled) } },
-                onLongClick = { GamepadController.settingsOpen = true }),
-            // v2.26：原虚拟手柄右上角迷你工具条 ⚙ 设置收编进悬浮球 ——
-            // GamepadSettingsWindow 在 LinBoxShell 顶层组合，任意界面单击即弹
-            FabItem("手柄设置", "🎮") {
-                GamepadController.releaseAllKeys()
-                GamepadController.settingsOpen = true
-            },
-            FabItem("X11 桌面", "X") { onOpenX11() },
-            // v1.18：全屏 DAC 显示器页（winedac.drv 画面直出安卓屏，不依赖 X11；
-            // wine wrapper 提示的"点开「DAC 显示器」应用"即此入口）
-            FabItem("DAC 显示器", "D") { onOpenDac() },
-            FabItem("设置", "⚙") { onOpenSettings() }
-        )
-    }
-
-    // 呼吸动画（轻微缩放，赋予"活"的质感）
-    val pulse by rememberInfiniteTransition(label = "fabPulse").animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "fabPulseScale"
-    )
-    // 展开进度 0..1
-    val expand by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
-        label = "fabExpand"
-    )
-    val menuHPx = items.size * (itemHPx + gapPx)
-
-    Box(Modifier.fillMaxSize()) {
-        // 展开时的半透明遮罩：点击任意处收起（折叠时不存在，不拦截终端触摸）
-        if (expanded) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) { detectTapGestures { expanded = false } }
-            )
-        }
-
-        // ===== 玻璃胶囊菜单 =====
-        Column(
-            modifier = Modifier
-                .offset {
-                    val menuLeft = (x + fabSizePx / 2f - menuWPx / 2f)
-                        .coerceIn(0f, (areaPx.width - menuWPx).coerceAtLeast(0f))
-                    val menuTop = if (expandUp) y - menuHPx * expand - with(density) { 10.dp.toPx() }
-                    else y + fabSizePx + with(density) { 10.dp.toPx() }
-                    IntOffset(menuLeft.roundToInt(), menuTop.roundToInt())
-                }
-                .width(118.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items.forEachIndexed { i, item ->
-                // 错峰浮现：后一项比前一项晚 ~6% 进度
-                val progress = ((expand * 1.4f) - i * 0.06f).coerceIn(0f, 1f)
-                FabMenuItem(
-                    item = item,
-                    progress = progress
-                )
-            }
-        }
-
-        // ===== 玻璃球本体 =====
-        val ballBorder = Brush.linearGradient(
-            listOf(
-                if (expanded) Color(0xB369F0AE) else Color(0x8CFFFFFF),
-                if (expanded) Color(0x3300E676) else Color(0x1FFFFFFF)
-            )
-        )
-        Box(
-            modifier = Modifier
-                .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
-                .size(54.dp)
-                .graphicsLayer {
-                    if (!dragging) {
-                        scaleX = pulse
-                        scaleY = pulse
-                    }
-                }
-                .shadow(
-                    elevation = if (expanded) 18.dp else 10.dp,
-                    shape = CircleShape,
-                    clip = false,
-                    ambientColor = Color(0xFF00E676),
-                    spotColor = Color(0xFF00E676)
-                )
-                .clip(CircleShape)
-                .background(
-                    // 玻璃球面：左上高光 → 右下近透明的斜向白渐变
-                    Brush.linearGradient(
-                        listOf(Color(0x66FFFFFF), Color(0x26FFFFFF), Color(0x0FFFFFFF)),
-                        start = Offset.Zero,
-                        end = Offset.Infinite
-                    )
-                )
-                .border(1.2.dp, ballBorder, CircleShape)
-                // 终端绿内辉光
-                .background(
-                    Brush.radialGradient(
-                        listOf(Color(0x3300E676), Color(0x0000E676))
-                    )
-                )
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { dragging = true },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragOffset += amount
-                        },
-                        onDragEnd = { dragging = false; persistPos() },
-                        onDragCancel = { dragging = false; persistPos() }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { expanded = !expanded })
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "❯_",
-                color = Color(0xFF69F0AE),
-                fontSize = 16.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-/** 玻璃胶囊菜单项：progress 0..1 控制浮现（透明度 + 缩放），未浮现完成前不可点。 */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FabMenuItem(item: FabItem, progress: Float) {
-    val scale = 0.7f + 0.3f * progress
-    val clickable = if (progress > 0.2f) {
-        if (item.onLongClick != null) {
-            Modifier.combinedClickable(
-                onClick = { item.onClick() },
-                onLongClick = { item.onLongClick!!() }
-            )
-        } else Modifier.clickable(onClick = { item.onClick() })
-    } else Modifier
-    Row(
-        modifier = Modifier
-            .graphicsLayer {
-                alpha = progress
-                scaleX = scale
-                scaleY = scale
-            }
-            .height(38.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(19.dp))
-            .background(
-                if (item.active) Brush.linearGradient(listOf(Color(0x9600C853), Color(0x5C00E676)))
-                else Brush.linearGradient(listOf(Color(0x3DFFFFFF), Color(0x1AFFFFFF)))
-            )
-            .border(
-                0.8.dp,
-                if (item.active) Brush.linearGradient(listOf(Color(0xAA69F0AE), Color(0x3300E676)))
-                else Brush.linearGradient(listOf(Color(0x59FFFFFF), Color(0x1FFFFFFF))),
-                RoundedCornerShape(19.dp)
-            )
-            .then(clickable)
-            .padding(horizontal = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(
-            item.glyph,
-            color = if (item.active) Color(0xFFB9F6CA) else Color(0xFF69F0AE),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace
-        )
-        Text(
-            item.label,
-            color = Color.White.copy(alpha = 0.93f),
-            fontSize = 12.sp
-        )
-        if (item.active) {
-            Spacer(Modifier.weight(1f))
-            Box(
-                Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFB9F6CA))
-            )
-        }
-    }
-}
 
 // ====================================================================
 // 快捷键栏（Termux ExtraKeys 原版双排布局）

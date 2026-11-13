@@ -60,6 +60,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -129,6 +130,10 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     // v5.0：X11 组仅在 X11 屏显示（原 X11GlassFab 功能全部并入本球）
     val inX11 = ShellController.screen == ShellController.Screen.X11
+    // v6.2：终端组仅在终端屏显示 —— 原终端独立玻璃悬浮球（GlassFab）
+    // 的全部功能并入本球（用户：“终端界面的悬浮球没有集中到虚拟手柄
+    // 悬浮球里，要和 x11 那样多排集合进去”）
+    val inTerminal = ShellController.screen == ShellController.Screen.TERMINAL
 
     var expanded by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
@@ -147,8 +152,10 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
     val baseX by rememberUpdatedState(GamepadController.ballPosX)
     val baseY by rememberUpdatedState(GamepadController.ballPosY)
 
-    val ballSize = 54.dp
-    val menuWidth = 232.dp
+    // v6.2（用户：“悬浮球以及调出的菜单也太大了，全都降低50%”）：
+    // 球体 54→28dp；菜单宽 232→190dp + 全部改紧凑多排网格芯片
+    val ballSize = 28.dp
+    val menuWidth = 190.dp
 
     // 按压反馈
     val pressScale by animateFloatAsState(
@@ -209,7 +216,7 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
             return pts.any { (x, y) -> GamepadController.isOverPadElement(x, y) }
         }
 
-        val menuHpx = menuHeightEstimate(density, inX11)
+        val menuHpx = menuHeightEstimate(density, inX11 || inTerminal)
         val menuPad = with(density) { 10.dp.toPx() }
         val screenWpxTotal = with(density) { maxWidth.toPx() }
         val screenHpxTotal = with(density) { maxHeight.toPx() }
@@ -291,11 +298,11 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                 Column(
                     modifier = Modifier
                         .heightIn(max = menuMaxHeightDp)
-                        .shadow(10.dp, RoundedCornerShape(20.dp))
-                        .clip(RoundedCornerShape(20.dp))
+                        .shadow(6.dp, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xF2162434))
                         .verticalScroll(rememberScrollState())
-                        .padding(vertical = 6.dp)
+                        .padding(vertical = 4.dp)
                         // 菜单登记：X11 触摸剥离 + 触控板直通（见类 KDoc）
                         .onGloballyPositioned {
                             val b = it.boundsInWindowCompat()
@@ -303,83 +310,148 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                             TrackpadRouter.registerPassthrough("gpBall", b)
                         }
                 ) {
-                // ---- 标题头（v3.4.6）：名称 + 组件数，一眼可辨 ----
+                // ---- 标题头：名称 + 组件数（v6.2 紧凑化） ----
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         "虚拟手柄",
                         color = Color(0xFFEAF6FF),
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(Modifier.weight(1f))
                     Text(
                         "${GamepadController.elements.size} 组件",
                         color = Color(0x99B8C7D9),
-                        fontSize = 11.sp
+                        fontSize = 9.5.sp
                     )
                 }
                 BallMenuSectionDivider()
 
-                // v5.0：智能开关 —— 总开关关着则“开启手柄”（开总开关 +
-                // 显示），开着则切显示/收起（GamepadOverlay 已尊重 visible）。
-                // 修复：旧版只切 visible 但渲染层从不消费 → 按了没反应。
-                BallMenuItem(
-                    BallIconKind.GAMEPAD,
-                    when {
-                        !gamepadEnabled -> "开启手柄"
-                        GamepadController.visible -> "收起手柄"
-                        else -> "显示手柄"
-                    }
-                ) {
-                    if (!gamepadEnabled) {
-                        // v6.0：visible 与总开关同步落盘 —— 全局加载只发生一次，
-                        // 此处不持久化的话下次启动仍是旧 padVisible
-                        GamepadController.visible = true
-                        persistConfig()
-                        scope.launch { app.settingsStore.setGamepadEnabled(true) }
-                    } else {
-                        GamepadController.releaseAllKeys()
-                        GamepadController.visible = !GamepadController.visible
-                        persistConfig()
-                    }
-                    expanded = false
-                }
-                BallMenuItem(BallIconKind.SETTINGS, "手柄设置") {
-                    GamepadController.releaseAllKeys()
-                    GamepadController.settingsOpen = true
-                    expanded = false
-                }
-                BallMenuItem(BallIconKind.EDIT, "编辑布局") {
-                    GamepadController.releaseAllKeys()
-                    GamepadController.editMode = !GamepadController.editMode
-                    if (!GamepadController.editMode) GamepadController.selectElement(null)
-                    expanded = false
-                }
-                BallMenuSectionDivider()
+                // ---- v6.2：主功能组改紧凑三列网格芯片（用户："虚拟手柄
+                //      的菜单也和 x11 那样"——与 X11 快捷组同款多排集合） ----
+                BallChipGrid(
+                    listOf(
+                        BallChipItem(BallIconKind.GAMEPAD, when {
+                            !gamepadEnabled -> "开启手柄"
+                            GamepadController.visible -> "收起手柄"
+                            else -> "显示手柄"
+                        }) {
+                            if (!gamepadEnabled) {
+                                // v6.0：visible 与总开关同步落盘 —— 全局加载只发生一次，
+                                // 此处不持久化的话下次启动仍是旧 padVisible
+                                GamepadController.visible = true
+                                persistConfig()
+                                scope.launch { app.settingsStore.setGamepadEnabled(true) }
+                            } else {
+                                GamepadController.releaseAllKeys()
+                                GamepadController.visible = !GamepadController.visible
+                                persistConfig()
+                            }
+                            expanded = false
+                        },
+                        BallChipItem(BallIconKind.SETTINGS, "手柄设置") {
+                            GamepadController.releaseAllKeys()
+                            GamepadController.settingsOpen = true
+                            expanded = false
+                        },
+                        BallChipItem(BallIconKind.EDIT, "编辑布局") {
+                            GamepadController.releaseAllKeys()
+                            GamepadController.editMode = !GamepadController.editMode
+                            if (!GamepadController.editMode) GamepadController.selectElement(null)
+                            expanded = false
+                        },
+                        // v3.4.6：配置文件（主菜单位置 —— 先读取，再编辑）
+                        BallChipItem(BallIconKind.SAVE, "保存配置") {
+                            GamepadController.releaseAllKeys()
+                            profileIo.saveProfile()
+                            expanded = false
+                        },
+                        BallChipItem(BallIconKind.FOLDER, "读取配置") {
+                            GamepadController.releaseAllKeys()
+                            profileIo.loadProfile()
+                            expanded = false
+                        },
+                        BallChipItem(BallIconKind.CLOSE, "关闭手柄", danger = true) {
+                            GamepadController.releaseAllKeys()
+                            GamepadController.editMode = false
+                            expanded = false
+                            scope.launch { app.settingsStore.setGamepadEnabled(false) }
+                        }
+                    )
+                )
 
-                // ---- v3.4.6：配置文件（主菜单位置 —— 先读取，再编辑） ----
-                BallMenuItem(BallIconKind.SAVE, "保存配置", hint = ".vgp") {
-                    GamepadController.releaseAllKeys()
-                    profileIo.saveProfile()
-                    expanded = false
-                }
-                BallMenuItem(BallIconKind.FOLDER, "读取配置", hint = ".vgp") {
-                    GamepadController.releaseAllKeys()
-                    profileIo.loadProfile()
-                    expanded = false
-                }
-                BallMenuSectionDivider()
-
-                BallMenuItem(BallIconKind.CLOSE, "关闭手柄", danger = true) {
-                    GamepadController.releaseAllKeys()
-                    GamepadController.editMode = false
-                    expanded = false
-                    scope.launch { app.settingsStore.setGamepadEnabled(false) }
+                // =====================================================
+                // v6.2：终端快捷组（用户："终端界面的悬浮球没有集中到虚拟
+                // 手柄悬浮球里，要和 x11 那样多排集合进去"）—— 原终端
+                // 玻璃悬浮球（GlassFab）的全部功能并入本球，仅在终端屏
+                // 显示；会话相关动作经 TerminalQuickBus 投递。
+                // =====================================================
+                if (inTerminal) {
+                    BallMenuSectionDivider()
+                    Text(
+                        "终端快捷",
+                        color = Color(0x80B8C7D9),
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                    )
+                    BallChipGrid(
+                        listOf(
+                            BallChipItem(BallIconKind.ADD, "新会话",
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.newSession != null) {
+                                com.linbox.apps.terminal.TerminalQuickBus.newSession?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.KEYBOARD, "键盘",
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.toggleKeyboard != null) {
+                                com.linbox.apps.terminal.TerminalQuickBus.toggleKeyboard?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.PASTE, "粘贴",
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.paste != null) {
+                                com.linbox.apps.terminal.TerminalQuickBus.paste?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.FONT_MINUS, "字号－",
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.fontDecrease != null) {
+                                com.linbox.apps.terminal.TerminalQuickBus.fontDecrease?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.FONT_PLUS, "字号＋",
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.fontIncrease != null) {
+                                com.linbox.apps.terminal.TerminalQuickBus.fontIncrease?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(
+                                BallIconKind.SYMBOL, "符号层",
+                                active = com.linbox.apps.terminal.TerminalQuickBus.symbolLayerActive,
+                                enabled = com.linbox.apps.terminal.TerminalQuickBus.toggleSymbolLayer != null
+                            ) {
+                                com.linbox.apps.terminal.TerminalQuickBus.toggleSymbolLayer?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.X11, "X11 桌面") {
+                                ShellController.showX11()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.DISPLAY, "DAC 显示") {
+                                ShellController.showDac()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.GEAR, "设置") {
+                                ShellController.showSettings()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.HOME, "回主页") {
+                                ShellController.showHome()
+                                expanded = false
+                            }
+                        )
+                    )
                 }
 
                 // =====================================================
@@ -392,109 +464,73 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                     Text(
                         "X11 快捷",
                         color = Color(0x80B8C7D9),
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
                     )
-                    // v6.0：X11 组改紧凑双列芯片网格（旧版 7 行大菜单在横屏
-                    // 直接超出屏幕，"看不全也无法交互"的主因之一）
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        X11QuickChip(
-                            icon = BallIconKind.KEYBOARD, label = "键盘",
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            val imm = context.getSystemService(
-                                android.content.Context.INPUT_METHOD_SERVICE
-                            ) as android.view.inputmethod.InputMethodManager
-                            @Suppress("DEPRECATION")
-                            imm.toggleSoftInput(
-                                android.view.inputmethod.InputMethodManager.SHOW_FORCED, 0
-                            )
-                            expanded = false
-                        }
-                        X11QuickChip(
-                            icon = BallIconKind.TOUCH,
-                            label = when (touchModeState) { 1 -> "触控板"; 3 -> "直触"; else -> "模拟" },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            val lp = com.termux.x11.LoriePreferences.prefs
-                            if (lp != null) {
-                                val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
-                                touchModeState = next
-                                lp.touchMode.put(next.toString())
-                                com.linbox.apps.x11.SmartTouchBridge.applyTouchPrefs()
+                    BallChipGrid(
+                        listOf(
+                            BallChipItem(BallIconKind.KEYBOARD, "键盘") {
+                                val imm = context.getSystemService(
+                                    android.content.Context.INPUT_METHOD_SERVICE
+                                ) as android.view.inputmethod.InputMethodManager
+                                @Suppress("DEPRECATION")
+                                imm.toggleSoftInput(
+                                    android.view.inputmethod.InputMethodManager.SHOW_FORCED, 0
+                                )
+                                expanded = false
+                            },
+                            BallChipItem(
+                                icon = BallIconKind.TOUCH,
+                                label = when (touchModeState) { 1 -> "触控板"; 3 -> "直触"; else -> "模拟" }
+                            ) {
+                                val lp = com.termux.x11.LoriePreferences.prefs
+                                if (lp != null) {
+                                    val next = when (touchModeState) { 1 -> 3; 3 -> 2; else -> 1 }
+                                    touchModeState = next
+                                    lp.touchMode.put(next.toString())
+                                    com.linbox.apps.x11.SmartTouchBridge.applyTouchPrefs()
+                                }
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.CYCLE, "切窗") {
+                                com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
+                                expanded = false
+                            },
+                            BallChipItem(
+                                BallIconKind.FULLSCREEN,
+                                if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏"
+                            ) {
+                                val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
+                                com.linbox.apps.x11.X11UiPrefs.fullscreen = v
+                                com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.FSGAME, "游戏全屏") {
+                                com.termux.x11.X11InputHub.sendAltEnter()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.GEAR, "X11 设置") {
+                                com.linbox.apps.x11.X11SettingsBridge.requestShow()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.HOME, "回主页") {
+                                ShellController.showHome()
+                                expanded = false
                             }
-                            expanded = false
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        X11QuickChip(
-                            icon = BallIconKind.CYCLE, label = "切窗",
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            com.linbox.apps.x11.X11WindowOps.cycleTopWindow()
-                            expanded = false
-                        }
-                        X11QuickChip(
-                            icon = BallIconKind.FULLSCREEN,
-                            label = if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏",
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
-                            com.linbox.apps.x11.X11UiPrefs.fullscreen = v
-                            com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
-                            expanded = false
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        X11QuickChip(
-                            icon = BallIconKind.FSGAME, label = "游戏全屏",
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            com.termux.x11.X11InputHub.sendAltEnter()
-                            expanded = false
-                        }
-                        X11QuickChip(
-                            icon = BallIconKind.GEAR, label = "X11 设置",
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            com.linbox.apps.x11.X11SettingsBridge.requestShow()
-                            expanded = false
-                        }
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    BallMenuItem(BallIconKind.HOME, "回主页", compact = true) {
-                        ShellController.showHome()
-                        expanded = false
-                    }
+                        )
+                    )
                 }
                 }
             }
         }
 
-        // ===== 悬浮球本体 =====
+        // ===== 悬浮球本体（v6.2：28dp，矢量手柄图标替代 emoji） =====
         Box(
             modifier = Modifier
                 .offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }
                 .size(ballSize)
                 .scale(pressScale)
-                .shadow(8.dp, CircleShape)
+                .shadow(4.dp, CircleShape)
                 // 炫彩半透明：径向渐变球体 + 旋转扫光
                 .clip(CircleShape)
                 .drawBehind {
@@ -561,18 +597,16 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                "🎮",
-                fontSize = 22.sp,
-                color = Color.White
-            )
+            // v6.2：emoji 22sp → 矢量手柄图标 16dp（随球体缩小 50%，
+            // 任何字体下渲染一致）
+            BallMenuIcon(BallIconKind.GAMEPAD, Color(0xFFEAF6FF))
         }
 
         // ===== v3.4.6：.vgp 保存/读取结果气泡（挂在球旁，2.4s 自动消失；
         // 纯展示层 —— 无 pointerInput，不拦截底层触摸） =====
         val ioMsg = profileIo.message.value
         if (ioMsg != null) {
-            val toastHalfW = with(density) { 130.dp.toPx() }
+            val toastHalfW = with(density) { 105.dp.toPx() }
             val toastX = (pos.x + ballPx / 2f - toastHalfW)
                 .coerceIn(0f, (screenWpxTotal - toastHalfW * 2f).coerceAtLeast(0f))
             val toastBelowY = pos.y + ballPx + 8f
@@ -589,7 +623,7 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                     ioMsg,
                     Modifier
                         .offset { IntOffset(toastX.roundToInt(), toastY.roundToInt()) }
-                        .width(260.dp)
+                        .width(210.dp)
                 )
             }
         }
@@ -609,141 +643,130 @@ private fun BallMenuSectionDivider() {
 }
 
 /**
- * v6.0：X11 快捷芯片（菜单 X11 组的紧凑双列网格单元）。
- * 图标圆底 + 短标签纵向排布，按压缩放反馈，≥44dp 触摸目标。
+ * v6.2：菜单网格芯片项（icon + label + 可选点亮/危险/可用态）。
+ */
+private class BallChipItem(
+    val icon: BallIconKind,
+    val label: String,
+    val active: Boolean = false,
+    val danger: Boolean = false,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit
+)
+
+/**
+ * v6.2：三列多排紧凑芯片网格（用户："要和 x11 那样多排集合进去"）。
+ * 主功能组 / 终端快捷组 / X11 快捷组共用同一网格形态。
+ */
+@Composable
+private fun BallChipGrid(items: List<BallChipItem>) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        items.chunked(3).forEach { rowItems ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                rowItems.forEach { item ->
+                    X11QuickChip(
+                        icon = item.icon,
+                        label = item.label,
+                        active = item.active,
+                        danger = item.danger,
+                        enabled = item.enabled,
+                        modifier = Modifier.weight(1f)
+                    ) { item.onClick() }
+                }
+                // 补齐占位（3 列对齐）
+                repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+/**
+ * v6.2 紧凑网格芯片（原 X11 快捷芯片缩小 50%：图标圆底 32→22dp、
+ * 内边距 8→5dp、字号 10.5→9sp）；新增点亮（active）/ 危险（danger）/ 禁用
+ * （enabled，终端会话不在场时置灰）三态。
  */
 @Composable
 private fun X11QuickChip(
     icon: BallIconKind,
     label: String,
     modifier: Modifier = Modifier,
+    active: Boolean = false,
+    danger: Boolean = false,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     var pressed by remember { mutableStateOf(false) }
-    val tint = icon.tint(false)
+    val tint = icon.tint(danger)
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.9f else 1f,
-        animationSpec = tween(110), label = "x11Chip"
+        animationSpec = tween(110), label = "ballChip"
     )
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = modifier
             .scale(scale)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (pressed) Color(0x1FFFFFFF) else Color(0x14FFFFFF))
-            .pointerInput(Unit) {
+            .clip(RoundedCornerShape(11.dp))
+            .background(
+                when {
+                    !enabled -> Color(0x0AFFFFFF)
+                    pressed -> Color(0x1FFFFFFF)
+                    active -> Color(0x2E2DD4BF)
+                    else -> Color(0x14FFFFFF)
+                }
+            )
+            .pointerInput(enabled) {
                 detectTapGestures(
                     onPress = {
                         pressed = true
                         try { awaitRelease() } finally { pressed = false }
                     },
-                    onTap = { onClick() }
+                    onTap = { if (enabled) onClick() }
                 )
             }
-            .padding(vertical = 8.dp)
+            .padding(vertical = 5.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(22.dp)
                 .clip(CircleShape)
-                .background(tint.copy(alpha = 0.16f)),
+                .background(
+                    when {
+                        !enabled -> Color(0x12FFFFFF)
+                        else -> tint.copy(alpha = 0.16f)
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
-            BallMenuIcon(icon, tint)
+            BallMenuIcon(icon, if (enabled) tint else Color(0x66B8C7D9))
         }
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(2.dp))
         Text(
             label,
-            color = Color(0xFFDCE8F5),
-            fontSize = 10.5.sp,
+            color = when {
+                !enabled -> Color(0x59B8C7D9)
+                danger -> Color(0xFFFFB4B4)
+                else -> Color(0xFFDCE8F5)
+            },
+            fontSize = 9.sp,
             maxLines = 1
         )
     }
 }
 
-/**
- * 菜单项行（v3.4.6 重制）：≥50dp 触摸目标 + 彩色圆底矢量图标 + 标题 +
- * 可选 .vgp 后缀提示 + 按压反馈。图标全部 Canvas 自绘（[BallMenuIcon]）
- * —— 不用 emoji / 文本字符，任何字体下渲染一致。
- */
-@Composable
-private fun BallMenuItem(
-    icon: BallIconKind,
-    label: String,
-    hint: String? = null,
-    danger: Boolean = false,
-    compact: Boolean = false,
-    onClick: () -> Unit
-) {
-    var pressed by remember { mutableStateOf(false) }
-    val tint = icon.tint(danger)
-    val badgeBg by animateColorAsState(
-        targetValue = if (pressed) tint.copy(alpha = 0.38f) else tint.copy(alpha = 0.16f),
-        animationSpec = tween(120), label = "gpBadge"
-    )
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .padding(horizontal = 10.dp, vertical = if (compact) 1.dp else 3.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                when {
-                    pressed -> Color(0x1FFFFFFF)
-                    danger -> Color(0x14FF6B6B)
-                    else -> Color.Transparent
-                }
-            )
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        pressed = true
-                        try { awaitRelease() } finally { pressed = false }
-                    },
-                    onTap = { onClick() }
-                )
-            }
-            .padding(
-                horizontal = 10.dp,
-                vertical = if (compact) 4.dp else 8.dp
-            ),
-        // 触摸目标保障：图标圆底 36dp + 行内边距 → 行高 ≥52dp（compact ≈44dp）
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(badgeBg),
-            contentAlignment = Alignment.Center
-        ) {
-            BallMenuIcon(icon, tint)
-        }
-        Text(
-            label,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (danger) Color(0xFFFFB4B4) else Color(0xFFF2F6FF)
-        )
-        if (hint != null) {
-            Spacer(Modifier.weight(1f))
-            Text(
-                hint,
-                fontSize = 11.sp,
-                color = Color(0x80B8C7D9)
-            )
-        }
-    }
-}
-
-/** 菜单图标类型（v3.4.6；v5.0 增 X11 组七枚）。 */
+/** 菜单图标类型（v3.4.6；v5.0 增 X11 组七枚；v6.2 增终端组七枚）。 */
 private enum class BallIconKind {
     GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE,
-    KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME
+    KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME,
+    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY
 }
 
-/** 图标配色（危险项统一红系）。 */
+/** 图标配色（危险项统一红系；v6.2 增终端组七枚）。 */
 private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF8A80) else when (this) {
     BallIconKind.GAMEPAD -> Color(0xFF2DD4BF)
     BallIconKind.SETTINGS -> Color(0xFF9AD8F5)
@@ -758,15 +781,22 @@ private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF
     BallIconKind.FULLSCREEN -> Color(0xFF6BD4FF)
     BallIconKind.GEAR -> Color(0xFFB8C7D9)
     BallIconKind.HOME -> Color(0xFFF2A6C4)
+    BallIconKind.ADD -> Color(0xFF7CE87C)
+    BallIconKind.PASTE -> Color(0xFFFFD479)
+    BallIconKind.FONT_MINUS -> Color(0xFF9AD8F5)
+    BallIconKind.FONT_PLUS -> Color(0xFF9AD8F5)
+    BallIconKind.SYMBOL -> Color(0xFFC7A6FF)
+    BallIconKind.X11 -> Color(0xFF6BD4FF)
+    BallIconKind.DISPLAY -> Color(0xFF7FE8DC)
 }
 
 /**
- * 22dp 线性图标（1.8dp 圆头笔画，Canvas 自绘 —— 零字体字形依赖）：
- * 手柄 / 齿轮 / 铅笔 / 软盘 / 文件夹 / 关闭叉。
+ * 线性图标（1.8 单位圆头笔画，Canvas 自绘 —— 零字体字形依赖；
+ * v6.2 默认 16dp —— 随菜单/球体整体缩小 50%）。
  */
 @Composable
-private fun BallMenuIcon(kind: BallIconKind, tint: Color) {
-    Canvas(modifier = Modifier.size(22.dp)) {
+private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) {
+    Canvas(modifier = Modifier.size(iconSize)) {
         val u = size.width / 22f
         val s = Stroke(width = 1.8f * u, cap = StrokeCap.Round)
         when (kind) {
@@ -932,20 +962,98 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color) {
                 drawLine(tint, Offset(9.8f * u, 12.4f * u), Offset(12.2f * u, 12.4f * u), s.width)
                 drawLine(tint, Offset(12.2f * u, 12.4f * u), Offset(12.2f * u, 16.4f * u), s.width)
             }
+            // ---- v6.2 终端组七枚 ----
+            // 新会话：圆 + 中央十字加号
+            BallIconKind.ADD -> {
+                drawCircle(color = tint, radius = 7.4f * u, center = Offset(11f * u, 11f * u), style = s)
+                drawLine(tint, Offset(11f * u, 7.6f * u), Offset(11f * u, 14.4f * u), s.width)
+                drawLine(tint, Offset(7.6f * u, 11f * u), Offset(14.4f * u, 11f * u), s.width)
+            }
+            // 粘贴：剪贴板（板体 + 顶部夹扣）
+            BallIconKind.PASTE -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(5.2f * u, 5.6f * u),
+                    size = Size(11.6f * u, 12.4f * u),
+                    cornerRadius = CornerRadius(1.4f * u, 1.4f * u),
+                    style = s
+                )
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(8.4f * u, 3.8f * u),
+                    size = Size(5.2f * u, 3.2f * u),
+                    cornerRadius = CornerRadius(1.0f * u, 1.0f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(8.2f * u, 12.2f * u), Offset(13.8f * u, 12.2f * u), s.width)
+                drawLine(tint, Offset(8.2f * u, 14.6f * u), Offset(13.8f * u, 14.6f * u), s.width)
+            }
+            // 字号－：字母 A + 底部减号
+            BallIconKind.FONT_MINUS -> {
+                drawLine(tint, Offset(6.0f * u, 13.2f * u), Offset(10.0f * u, 5.2f * u), s.width)
+                drawLine(tint, Offset(10.0f * u, 5.2f * u), Offset(14.0f * u, 13.2f * u), s.width)
+                drawLine(tint, Offset(7.6f * u, 10.2f * u), Offset(12.4f * u, 10.2f * u), s.width)
+                drawLine(tint, Offset(5.6f * u, 16.8f * u), Offset(16.4f * u, 16.8f * u), s.width)
+            }
+            // 字号＋：字母 A + 底部加号
+            BallIconKind.FONT_PLUS -> {
+                drawLine(tint, Offset(5.4f * u, 11.6f * u), Offset(9.0f * u, 4.6f * u), s.width)
+                drawLine(tint, Offset(9.0f * u, 4.6f * u), Offset(12.6f * u, 11.6f * u), s.width)
+                drawLine(tint, Offset(6.8f * u, 9.0f * u), Offset(11.2f * u, 9.0f * u), s.width)
+                drawLine(tint, Offset(13.4f * u, 14.6f * u), Offset(18.2f * u, 14.6f * u), s.width)
+                drawLine(tint, Offset(15.8f * u, 13.0f * u), Offset(15.8f * u, 16.2f * u), s.width)
+            }
+            // 符号层：并排两符号（◆ + ＃）
+            BallIconKind.SYMBOL -> {
+                drawLine(tint, Offset(4.4f * u, 7.4f * u), Offset(10.4f * u, 7.4f * u), s.width)
+                drawLine(tint, Offset(5.6f * u, 4.4f * u), Offset(5.6f * u, 10.4f * u), s.width)
+                drawLine(tint, Offset(9.2f * u, 4.4f * u), Offset(9.2f * u, 10.4f * u), s.width)
+                drawLine(tint, Offset(13.2f * u, 13.4f * u), Offset(18.0f * u, 13.4f * u), s.width)
+                drawLine(tint, Offset(13.2f * u, 16.6f * u), Offset(18.0f * u, 16.6f * u), s.width)
+                drawLine(tint, Offset(14.2f * u, 11.4f * u), Offset(14.2f * u, 18.6f * u), s.width)
+                drawLine(tint, Offset(17.0f * u, 11.4f * u), Offset(17.0f * u, 18.6f * u), s.width)
+            }
+            // X11 桌面：斜杠 + 字符 X 形（终端窗口风）
+            BallIconKind.X11 -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3.6f * u, 4.6f * u),
+                    size = Size(14.8f * u, 12.8f * u),
+                    cornerRadius = CornerRadius(1.6f * u, 1.6f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(3.6f * u, 8.0f * u), Offset(18.4f * u, 8.0f * u), s.width)
+                drawLine(tint, Offset(8.0f * u, 10.4f * u), Offset(14.0f * u, 16.0f * u), s.width)
+                drawLine(tint, Offset(14.0f * u, 10.4f * u), Offset(8.0f * u, 16.0f * u), s.width)
+            }
+            // DAC 显示：显示器（屏幕 + 底座）
+            BallIconKind.DISPLAY -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3.4f * u, 4.6f * u),
+                    size = Size(15.2f * u, 10.4f * u),
+                    cornerRadius = CornerRadius(1.6f * u, 1.6f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(8.4f * u, 15.0f * u), Offset(13.6f * u, 15.0f * u), s.width)
+                drawLine(tint, Offset(11f * u, 15.0f * u), Offset(11f * u, 17.4f * u), s.width)
+                drawLine(tint, Offset(7.2f * u, 17.4f * u), Offset(14.8f * u, 17.4f * u), s.width)
+            }
         }
     }
 }
 
 /**
- * 菜单高度估算（v6.0 紧凑化后）：
- * 基础组 = 标题头 34 + 6 项×52 + 3 分隔线 + 边距 ≈ 360dp；
- * X11 组 = 网格 3 行×58 + 回主页行 44 + 标签 + 分隔 ≈ +250dp。
+ * 菜单高度估算（v6.2 紧凑化后）：
+ * 基础组 = 标题头 24 + 主功能网格 2 行×44 + 分隔 ≈ 150dp；
+ * X11 组 = 标签 + 3 行×44 + 分隔 ≈ +160dp；
+ * 终端组 = 标签 + 4 行×44 + 分隔 ≈ +205dp（三组不同屏，互斥）。
  * 仅用于"菜单向上/向下弹"的启发式选择与碰撞检测 —— 菜单本体
  * heightIn(max=屏高-16) 可滚动，横屏矮屏下也完整可见（v6.0 修复）。
  */
 private fun menuHeightEstimate(
     density: androidx.compose.ui.unit.Density,
-    withX11Group: Boolean = false
+    withExtraGroup: Boolean = false
 ): Float = with(density) {
-    (if (withX11Group) 620.dp else 370.dp).toPx()
+    (if (withExtraGroup) 370.dp else 150.dp).toPx()
 }

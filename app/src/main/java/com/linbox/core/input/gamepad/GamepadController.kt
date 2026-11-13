@@ -195,46 +195,48 @@ object GamepadController {
     // 预设布局
     // ============================================================
 
-    /** 经典手柄布局（v2.15.3 新默认）：左摇杆=WASD + 左十字键=方向键 +
-     *  右六键 JKLUIO + Start≡=Tab。按钮表面直接显示映射按键名 */
+    /** 经典手柄布局（v2.15.3 新默认；v6.2 尺寸整体缩小 50% ——
+     *  用户：“虚拟手柄按键默认太大了…全都降低50%”）：左摇杆=WASD +
+     *  左十字键=方向键 + 右六键 JKLUIO + Start≡=Tab。
+     *  按钮表面直接显示映射按键名；已存用户布局不受影响（仅默认值）。 */
     fun classicLayout(): List<PadElement> = listOf(
         PadElement(type = ElementType.JOYSTICK, label = "摇杆", dirMode = DirMode.WASD,
-            posX = 0.16f, posY = 0.72f, sizeDp = 150f),
+            posX = 0.16f, posY = 0.72f, sizeDp = 76f),
         PadElement(type = ElementType.DPAD, label = "十字键", dirMode = DirMode.ARROWS,
-            posX = 0.38f, posY = 0.72f, sizeDp = 120f),
+            posX = 0.38f, posY = 0.72f, sizeDp = 60f),
         PadElement(type = ElementType.BUTTON, label = "A",
             action = PadAction.key(KeyEvent.KEYCODE_J, "J"),
-            posX = 0.84f, posY = 0.70f, sizeDp = 62f),
+            posX = 0.84f, posY = 0.70f, sizeDp = 32f),
         PadElement(type = ElementType.BUTTON, label = "B",
             action = PadAction.key(KeyEvent.KEYCODE_K, "K"),
-            posX = 0.74f, posY = 0.78f, sizeDp = 62f),
+            posX = 0.76f, posY = 0.80f, sizeDp = 32f),
         PadElement(type = ElementType.BUTTON, label = "X",
             action = PadAction.key(KeyEvent.KEYCODE_L, "L"),
-            posX = 0.74f, posY = 0.60f, sizeDp = 62f),
+            posX = 0.76f, posY = 0.58f, sizeDp = 32f),
         PadElement(type = ElementType.BUTTON, label = "Y",
             action = PadAction.key(KeyEvent.KEYCODE_U, "U"),
-            posX = 0.64f, posY = 0.68f, sizeDp = 62f),
+            posX = 0.66f, posY = 0.66f, sizeDp = 32f),
         PadElement(type = ElementType.BUTTON, label = "L1",
             action = PadAction.key(KeyEvent.KEYCODE_I, "I"),
-            posX = 0.12f, posY = 0.42f, sizeDp = 56f),
+            posX = 0.12f, posY = 0.42f, sizeDp = 28f),
         PadElement(type = ElementType.BUTTON, label = "R1",
             action = PadAction.key(KeyEvent.KEYCODE_O, "O"),
-            posX = 0.88f, posY = 0.42f, sizeDp = 56f),
+            posX = 0.88f, posY = 0.42f, sizeDp = 28f),
         PadElement(type = ElementType.BUTTON, label = "≡",
             action = PadAction.key(KeyEvent.KEYCODE_TAB, "Tab"),
-            posX = 0.50f, posY = 0.82f, sizeDp = 48f)
+            posX = 0.50f, posY = 0.84f, sizeDp = 26f)
     )
 
-    /** 简单布局：仅左十字键（方向键） + 右 J/K 两键 */
+    /** 简单布局：仅左十字键（方向键） + 右 J/K 两键（v6.2 同步缩小 50%）。 */
     fun simpleLayout(): List<PadElement> = listOf(
         PadElement(type = ElementType.DPAD, label = "十字键", dirMode = DirMode.ARROWS,
-            posX = 0.18f, posY = 0.72f, sizeDp = 140f),
+            posX = 0.18f, posY = 0.72f, sizeDp = 70f),
         PadElement(type = ElementType.BUTTON, label = "A",
             action = PadAction.key(KeyEvent.KEYCODE_J, "J"),
-            posX = 0.82f, posY = 0.70f, sizeDp = 70f),
+            posX = 0.82f, posY = 0.70f, sizeDp = 36f),
         PadElement(type = ElementType.BUTTON, label = "B",
             action = PadAction.key(KeyEvent.KEYCODE_K, "K"),
-            posX = 0.70f, posY = 0.78f, sizeDp = 70f)
+            posX = 0.70f, posY = 0.80f, sizeDp = 36f)
     )
 
     // ============================================================

@@ -979,15 +979,32 @@ internal fun FilePickListenerEffect(targetApp: String, onPick: (String) -> Unit)
     }
 }
 // ===========================================================================
-// 容器编辑页（winlator 同款表单：新建 / 编辑共用）
+// 容器编辑页（v6.2 五选项卡完整配置：新建 / 编辑共用）
 // ===========================================================================
 
 /**
- * winlator 风格容器编辑页：
- * - 新建：名称 + 常用配置（Wine 版本 / 屏幕尺寸 / 显示模式 / 后端 /
- *   预设 / 图形驱动…），底部「创建容器」大按钮；
- * - 编辑：同表单回填现值，底部「保存修改」；另提供 启动 / 安装前缀 /
- *   更多动作；
+ * winlator 风格容器编辑页（v6.2 完整配置重制）：
+ *
+ * 用户诉求："容器创建和编辑缺少太多的配置和启动参数，包括 dxvk 等都是
+ * 读取 opt 里的东西进行选择的，启动参数也缺少很多，容器设置缺少的更多"
+ * —— v6.0 精简表单丢失了 wineguanli.py 参考实现的绝大部分配置项。
+ *
+ * v6.2 结构：直接复用 ContainerScreens.kt 的 wineguanli 五选项卡
+ * （经过长期实测的完整实现，一字不丢）：
+ *  - 📋 基本设置：架构 / Wine 版本 / 分辨率（预设 + 自定义）/ 语言 /
+ *    帧数限制 / locale.conf / 独立窗口 / 默认 exe / 高级启动选项
+ *    （强制DX11、OpenGL、Unity、F5任务栏、FEX、wowbox64、关闭服务、
+ *    调试）+ 自定义启动参数（uargs）
+ *  - 🎮 图形驱动：Vulkan 驱动（Turnip/Wrapper/专有包/系统专有 + 版本）、
+ *    Zink(/opt/zink)、DXVK(/opt/dxvk1 + APK 内置)、WineD3D(/opt/vkord3d)、
+ *    FEXCore(/opt/fexcore) —— 全部扫描 /opt 选择，➕ 安装 zip/tar
+ *  - 🖥️ CPU 核心：主核心勾选（PRIMARY_CORES）
+ *  - 📚 函数库：dsound/dshow DLL 加载序、DPI、Windows 版本、立即应用
+ *  - 🔧 更多配置：更多设置对话框（环境变量 / 高级功能 / Direct3D /
+ *    LinBox 原生）+ MANGOHUD 配置 + 当前配置状态
+ *
+ * - 新建：名称输入 + 五选项卡默认值，底部「创建容器」（创建即构建前缀）；
+ * - 编辑：同表单回填现值，底部「保存修改」；顶栏快捷运行钮；
  * - 保存 = ContainerManager.create/update（container.conf 与终端 CLI 同源）。
  */
 @Composable
@@ -1009,60 +1026,23 @@ private fun ContainerEditorScreen() {
         loading = false
     }
 
-    // ---- 表单状态（回填现值） ----
+    // ---- 工作配置（单一数据源：完整 ContainerData，选项卡 onChange 即拷贝） ----
+    var edit by remember(original) {
+        mutableStateOf(original ?: ContainerData(name = ""))
+    }
     var name by remember(original) { mutableStateOf(original?.name ?: "") }
-    var wine by remember(original) { mutableStateOf(original?.wine ?: "") }
-    var screen by remember(original) { mutableStateOf(original?.screen ?: "native") }
-    var dmode by remember(original) { mutableStateOf(original?.dmode ?: DisplayMode.OFF) }
-    var backend by remember(original) { mutableStateOf(original?.backend ?: ContainerBackend.AUTO) }
-    var preset by remember(original) { mutableStateOf(original?.preset ?: Box64Preset.PERFORMANCE) }
-    var gallium by remember(original) { mutableStateOf(original?.gallium ?: GalliumDriver.AUTO.id) }
-    var dxvk by remember(original) { mutableStateOf(original?.dxvk ?: ContainerData.DXVK_AUTO) }
-    var lang by remember(original) { mutableStateOf(original?.lang ?: ContainerLangs.DEFAULT) }
-    var frame by remember(original) { mutableStateOf(original?.frame ?: "0") }
-    var winver by remember(original) { mutableStateOf(original?.winver ?: WindowsVersions.DEFAULT_ID) }
-    var audio by remember(original) { mutableStateOf(original?.audio ?: com.linbox.apps.containers.ContainerAudio.PULSE) }
-    var cores by remember(original) { mutableStateOf(original?.cores ?: "") }
-    var dpi by remember(original) { mutableStateOf(original?.dpi ?: ContainerData.DPI_DEFAULT) }
-    var exe by remember(original) { mutableStateOf(original?.exe ?: "") }
-    var uargs by remember(original) { mutableStateOf(original?.uargs ?: "") }
-    var env by remember(original) { mutableStateOf(original?.env ?: "") }
-    var flags by remember(original) { mutableStateOf(original?.flagSet ?: emptySet()) }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
 
-    // exe 选择回投
-    FilePickListenerEffect(targetApp = "container_editor") { path ->
-        if (path.endsWith(".exe", true) || path.endsWith(".bat", true) ||
-            path.endsWith(".msi", true) || path.endsWith(".cmd", true)
-        ) exe = path
-    }
+    // ---- 弹窗（更多设置 / MANGOHUD）----
+    var moreFor by remember { mutableStateOf<ContainerData?>(null) }
+    var mangoFor by remember { mutableStateOf<ContainerData?>(null) }
 
     fun buildData(): ContainerData? {
         val n = name.trim()
         if (n.isEmpty()) { error = "请输入容器名称"; return null }
         if (n.contains('/') || n.contains('\\')) { error = "名称不能包含 / 或 \\"; return null }
-        val base = original ?: ContainerData(name = n)
-        return base.copy(
-            name = n,
-            wine = wine,
-            screen = screen,
-            dmode = dmode,
-            backend = backend,
-            preset = preset,
-            gallium = gallium,
-            dxvk = dxvk,
-            lang = lang,
-            frame = frame,
-            winver = winver,
-            audio = audio,
-            cores = cores,
-            dpi = dpi,
-            exe = exe,
-            uargs = uargs,
-            env = env,
-            flags = ContainerFlags.serialize(flags)
-        )
+        return edit.copy(name = n)
     }
 
     fun save() {
@@ -1082,8 +1062,11 @@ private fun ContainerEditorScreen() {
                     if (isNew) {
                         // 新建后立即构建前缀（winlator 行为：创建即 wineboot）
                         WineSessionLauncher.initializePrefix(context, toSave)
+                        ContainerUiState.openList()
+                    } else {
+                        // 保存后工作副本与磁盘同步（继续编辑不再基于旧值）
+                        original = toSave
                     }
-                    ContainerUiState.openList()
                 }
             }
         }
@@ -1126,7 +1109,7 @@ private fun ContainerEditorScreen() {
                         fontSize = 20.sp, fontWeight = FontWeight.Bold
                     )
                     Text(
-                        if (isNew) "Wine 容器 · 创建后自动构建前缀"
+                        if (isNew) "Wine 容器 · 完整配置（/opt 驱动 / 启动参数）"
                         else original?.name ?: "",
                         color = LinShellTheme.textSecondary, fontSize = 11.sp
                     )
@@ -1143,10 +1126,13 @@ private fun ContainerEditorScreen() {
                                 if (data.exe.isNotBlank()) {
                                     cs.launch(Dispatchers.IO) {
                                         val err = WineSessionLauncher.runExe(context, data, data.exe)
-                                        withContext(Dispatchers.Main) { err?.let { toast(context, it) } }
+                                        withContext(Dispatchers.Main) {
+                                            err?.let { toast(context, it) }
+                                                ?: toast(context, "已在容器「${data.name}」中启动")
+                                        }
                                     }
                                 } else {
-                                    toast(context, "先在下方设置默认程序（exe）")
+                                    toast(context, "先在「基本设置」里设置默认程序（exe）")
                                 }
                             },
                         contentAlignment = Alignment.Center
@@ -1157,184 +1143,116 @@ private fun ContainerEditorScreen() {
                 }
             }
 
-            // ===== 表单 =====
+            // ===== 名称（新建时可编辑；编辑时名称在标题/基本设置展示） =====
+            if (isNew && !loading) {
+                EditorTextField(
+                    "容器名称", name, { name = it; error = null },
+                    "如 Fallout3",
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+
+            // ===== 五选项卡（wineguanli.py 完整配置） =====
             if (loading) {
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = LinShellTheme.blue)
                 }
             } else {
-                Column(
+                var tab by remember { mutableIntStateOf(0) }
+                val tabs = listOf("📋 基本", "🎮 图形驱动", "🖥️ CPU", "📚 函数库", "🔧 更多")
+
+                // winlator 风格分段选择
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(LinShellTheme.card)
+                        .padding(3.dp)
                 ) {
-                    EditorSection("基本信息") {
-                        EditorTextField("容器名称", name, { name = it; error = null }, "如 Fallout3")
-                        EditorDropdown(
-                            "Wine 版本",
-                            selected = wine.ifBlank { "默认（/usr/opt/wine）" },
-                            options = listOf("默认（/usr/opt/wine）") + wines.map { it.displayLabel },
-                            onSelect = { label ->
-                                wine = wines.firstOrNull { it.displayLabel == label }?.name ?: ""
-                            }
-                        )
-                        if (wines.isEmpty()) {
-                            EditorNote("未发现已安装 wine —— 可在「高级设置 → Wine 安装」先装")
+                    tabs.forEachIndexed { i, label ->
+                        val on = tab == i
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(
+                                    if (on) LinShellTheme.blue.copy(alpha = 0.85f)
+                                    else Color.Transparent
+                                )
+                                .clickable { tab = i }
+                                .padding(vertical = 7.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                label,
+                                color = if (on) Color.White else LinShellTheme.textSecondary,
+                                fontSize = 10.5.sp, maxLines = 1,
+                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal
+                            )
                         }
-                        EditorDropdown(
-                            "屏幕尺寸",
-                            selected = if (screen == "native") "跟随窗口（全屏）" else screen,
-                            options = listOf("跟随窗口（全屏）") +
-                                ContainerData.SCREEN_CHOICES.filter { it != "native" },
-                            onSelect = {
-                                screen = if (it == "跟随窗口（全屏）") "native" else it
-                            }
-                        )
-                        EditorDropdown(
-                            "显示模式",
-                            selected = dmode.label,
-                            options = DisplayMode.entries.map { it.label },
-                            onSelect = { dmode = DisplayMode.entries.first { m -> m.label == it } }
-                        )
                     }
+                }
 
-                    EditorSection("兼容性") {
-                        EditorDropdown(
-                            "CPU 后端",
-                            selected = backend.label,
-                            options = ContainerBackend.entries.map { it.label },
-                            onSelect = { backend = ContainerBackend.entries.first { b -> b.label == it } },
-                            note = backend.desc
-                        )
-                        EditorDropdown(
-                            "Box64 预设",
-                            selected = preset.label,
-                            options = Box64Preset.entries.map { it.label },
-                            onSelect = { preset = Box64Preset.entries.first { p -> p.label == it } },
-                            note = preset.desc
-                        )
-                        EditorDropdown(
-                            "Windows 版本",
-                            selected = WindowsVersions.fromId(winver).label,
-                            options = WindowsVersions.ALL.map { it.label },
-                            onSelect = { winver = WindowsVersions.ALL.first { v -> v.label == it }.id }
-                        )
-                        EditorDropdown(
-                            "语言",
-                            selected = ContainerLangs.displayOf(lang),
-                            options = ContainerLangs.DISPLAY,
-                            onSelect = { lang = ContainerLangs.valueOf(it) }
-                        )
-                    }
-
-                    EditorSection("图形") {
-                        EditorDropdown(
-                            "渲染器",
-                            selected = GalliumDriver.fromId(gallium).label,
-                            options = GalliumDriver.entries.map { it.label },
-                            onSelect = { gallium = GalliumDriver.entries.first { g -> g.label == it }.id }
-                        )
-                        EditorDropdown(
-                            "DXVK",
-                            selected = if (dxvk == ContainerData.DXVK_OFF) "关闭" else "开启（自动注入）",
-                            options = listOf("开启（自动注入）", "关闭"),
-                            onSelect = {
-                                dxvk = if (it == "关闭") ContainerData.DXVK_OFF else ContainerData.DXVK_AUTO
-                            },
-                            note = "开启 = 前缀构建时自动解压 assets 内置 DXVK 到 C:\\windows"
-                        )
-                        EditorDropdown(
-                            "帧数限制",
-                            selected = if (frame == "0") "不限制" else "$frame fps",
-                            options = listOf("不限制", "60 fps", "120 fps"),
-                            onSelect = { frame = when (it) { "60 fps" -> "60"; "120 fps" -> "120"; else -> "0" } }
-                        )
-                    }
-
-                    EditorSection("声音") {
-                        EditorDropdown(
-                            "音频",
-                            selected = audio.label,
-                            options = com.linbox.apps.containers.ContainerAudio.entries.map { it.label },
-                            onSelect = { audio = com.linbox.apps.containers.ContainerAudio.entries.first { a -> a.label == it } }
-                        )
-                    }
-
-                    EditorSection("高级") {
-                        EditorTextField("CPU 核心（如 0-3，空 = 全核心）", cores, { cores = it }, "0-3")
-                        EditorDropdown(
-                            "DPI 缩放",
-                            selected = if (dpi == "96") "默认 96" else dpi,
-                            options = listOf("默认 96", "120", "144", "168", "192"),
-                            onSelect = { dpi = if (it == "默认 96") "96" else it }
-                        )
-                        // 默认程序
-                        Column {
-                            EditorTextField("默认程序（exe 路径）", exe, { exe = it },
-                                "/storage/emulated/0/Download/game/game.exe")
-                            Spacer(Modifier.height(6.dp))
-                            OutlinedButton(onClick = {
-                                ShellController.showFiles(pickMode = "exe", targetApp = "container_editor")
-                            }) { Text("浏览选择程序", fontSize = 12.sp) }
-                        }
-                        EditorTextField("启动参数（追加在程序后）", uargs, { uargs = it }, "-windowed")
-                        EditorTextField(
-                            "环境变量（K=V 空格分隔）", env, { env = it },
-                            "MESA_GL_VERSION_OVERRIDE=4.6"
-                        )
-                        // 高级启动开关
-                        Text(
-                            "启动开关",
-                            color = LinShellTheme.textSecondary,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                        FlagFlow(
-                            all = listOf(
-                                ContainerFlags.INDEPENDENT to "独立窗口",
-                                ContainerFlags.OPENGL to "OpenGL 修复",
-                                ContainerFlags.UNITY to "Unity 修复",
-                                ContainerFlags.DX11 to "强制 DX11",
-                                ContainerFlags.F5TASK to "F5 任务栏",
-                                ContainerFlags.CLOSESERVICE to "关闭服务",
-                                ContainerFlags.DEBUG to "调试输出"
-                            ),
-                            selected = flags,
-                            onToggle = { f, on ->
-                                flags = if (on) flags + f else flags - f
-                            }
-                        )
-                    }
-
-                    if (!isNew) {
-                        EditorSection("更多动作") {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = {
-                                    val data = buildData() ?: return@OutlinedButton
+                // 选项卡沿用的 gdp/gsp 缩放（1:1，与高级设置页同款）
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.linbox.apps.containers.LocalGuanliScale provides 1f,
+                    com.linbox.apps.containers.LocalGuanliFontScale provides 1f
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        when (tab) {
+                            0 -> com.linbox.apps.containers.BasicSettingsTab(
+                                edit = edit,
+                                wines = wines,
+                                onChange = { edit = it; error = null }
+                            )
+                            1 -> com.linbox.apps.containers.GraphicsDriverTab(
+                                edit = edit,
+                                onChange = { edit = it; error = null }
+                            )
+                            2 -> com.linbox.apps.containers.CpuCoresTab(
+                                edit = edit,
+                                onChange = { edit = it; error = null }
+                            )
+                            3 -> com.linbox.apps.containers.LibraryTab(
+                                edit = edit,
+                                onChange = { edit = it; error = null },
+                                onApplyNow = {
+                                    val data = buildData() ?: edit
                                     cs.launch(Dispatchers.IO) {
-                                        val err = WineSessionLauncher.initializePrefix(context, data)
+                                        val err = runCatching {
+                                            com.linbox.apps.containers.launcher.WineLibrary.applyNow(data)
+                                        }.getOrElse { "应用异常：${it.message}" }
                                         withContext(Dispatchers.Main) {
-                                            toast(context, err ?: "前缀构建已开始")
+                                            toast(context, err ?: "函数库设置已应用到注册表")
                                         }
                                     }
-                                }, modifier = Modifier.weight(1f)) {
-                                    Text("安装/重建前缀", fontSize = 12.sp)
                                 }
-                                OutlinedButton(onClick = {
-                                    ContainerUiState.openAdvanced()
-                                }, modifier = Modifier.weight(1f)) {
-                                    Text("高级设置", fontSize = 12.sp)
-                                }
-                            }
+                            )
+                            4 -> com.linbox.apps.containers.MoreConfigTab(
+                                edit = edit,
+                                onOpenMore = {
+                                    if (isNew) {
+                                        toast(context, "先保存容器，再配置更多设置（更多设置直接写盘）")
+                                    } else {
+                                        moreFor = buildData() ?: edit
+                                    }
+                                },
+                                onOpenMango = { mangoFor = buildData() ?: edit }
+                            )
                         }
-                    }
 
-                    if (error != null) {
-                        Text(error ?: "", color = Color(0xFFFF8A80), fontSize = 12.sp)
+                        if (error != null) {
+                            Text(error ?: "", color = Color(0xFFFF8A80), fontSize = 12.sp)
+                        }
+                        Spacer(Modifier.height(84.dp))
                     }
-                    Spacer(Modifier.height(84.dp))
                 }
             }
         }
@@ -1372,14 +1290,57 @@ private fun ContainerEditorScreen() {
             }
         }
     }
+
+    // ---- 更多设置（环境变量 / 高级功能 / Direct3D / LinBox 原生）----
+    moreFor?.let { c ->
+        com.linbox.apps.containers.MoreSettingsDialog(
+            container = c,
+            onDismiss = { moreFor = null },
+            onSaved = {
+                moreFor = null
+                // 更多设置对话框自行写盘 —— 工作副本从磁盘刷新，保持一致
+                cs.launch(Dispatchers.IO) {
+                    val fresh = ContainerManager.get(c.name)
+                    if (fresh != null) {
+                        withContext(Dispatchers.Main) {
+                            original = fresh
+                            edit = fresh
+                        }
+                    }
+                }
+            },
+            onOpenMango = { moreFor = null; mangoFor = c }
+        )
+    }
+
+    // ---- MANGOHUD 配置 ----
+    mangoFor?.let { c ->
+        com.linbox.apps.containers.MangoHudConfigDialog(
+            container = c,
+            onDismiss = { mangoFor = null },
+            onSaved = {
+                mangoFor = null
+                // MANGOHUD 配置写 mangohud 字段 —— 同步进工作副本
+                cs.launch(Dispatchers.IO) {
+                    val fresh = ContainerManager.get(c.name)
+                    if (fresh != null) {
+                        withContext(Dispatchers.Main) { edit = fresh }
+                    } else {
+                        withContext(Dispatchers.Main) { edit = c }
+                    }
+                }
+            }
+        )
+    }
 }
 
 // ===========================================================================
 // 编辑页组件（winlator 表单风格）
 // ===========================================================================
 
+/** v6.2 改 internal：游戏快捷方式编辑页（GameLibraryScreen）同款表单组件复用。 */
 @Composable
-private fun EditorSection(title: String, content: @Composable () -> Unit) {
+internal fun EditorSection(title: String, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1399,13 +1360,14 @@ private fun EditorSection(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun EditorTextField(
+internal fun EditorTextField(
     label: String,
     value: String,
     onChange: (String) -> Unit,
-    placeholder: String = ""
+    placeholder: String = "",
+    modifier: Modifier = Modifier
 ) {
-    Column {
+    Column(modifier = modifier) {
         Text(label, color = LinShellTheme.textSecondary, fontSize = 12.sp)
         Spacer(Modifier.height(4.dp))
         OutlinedTextField(
@@ -1422,7 +1384,7 @@ private fun EditorTextField(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditorDropdown(
+internal fun EditorDropdown(
     label: String,
     selected: String,
     options: List<String>,
@@ -1472,13 +1434,13 @@ private fun EditorDropdown(
 }
 
 @Composable
-private fun EditorNote(text: String) {
+internal fun EditorNote(text: String) {
     Text(text, color = LinShellTheme.textSecondary, fontSize = 10.sp, lineHeight = 13.sp)
 }
 
 /** 启动开关流式多选芯片。 */
 @Composable
-private fun FlagFlow(
+internal fun FlagFlow(
     all: List<Pair<String, String>>,
     selected: Set<String>,
     onToggle: (String, Boolean) -> Unit

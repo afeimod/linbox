@@ -1083,7 +1083,7 @@ private fun RightConfigPanel(
 // ===========================================================================
 
 @Composable
-private fun BasicSettingsTab(
+internal fun BasicSettingsTab(
     edit: ContainerData,
     wines: List<WineInstall>,
     onChange: (ContainerData) -> Unit
@@ -1367,7 +1367,7 @@ private fun applyResolution(
 // ===========================================================================
 
 @Composable
-private fun GraphicsDriverTab(
+internal fun GraphicsDriverTab(
     edit: ContainerData,
     onChange: (ContainerData) -> Unit
 ) {
@@ -1859,7 +1859,7 @@ private fun DriverCombo(
 // ===========================================================================
 
 @Composable
-private fun CpuCoresTab(
+internal fun CpuCoresTab(
     edit: ContainerData,
     onChange: (ContainerData) -> Unit
 ) {
@@ -1907,7 +1907,7 @@ private fun CpuCoresTab(
 // ===========================================================================
 
 @Composable
-private fun LibraryTab(
+internal fun LibraryTab(
     edit: ContainerData,
     onChange: (ContainerData) -> Unit,
     onApplyNow: () -> Unit
@@ -2012,7 +2012,7 @@ private fun LibraryTab(
 // ===========================================================================
 
 @Composable
-private fun MoreConfigTab(
+internal fun MoreConfigTab(
     edit: ContainerData,
     onOpenMore: () -> Unit,
     onOpenMango: () -> Unit
@@ -3098,7 +3098,7 @@ internal fun MangoHudTab(
 // ===========================================================================
 
 @Composable
-private fun MoreSettingsDialog(
+internal fun MoreSettingsDialog(
     container: ContainerData,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,
@@ -3737,7 +3737,7 @@ private fun NativeTab(
 // ===========================================================================
 
 @Composable
-private fun MangoHudConfigDialog(
+internal fun MangoHudConfigDialog(
     container: ContainerData,
     onDismiss: () -> Unit,
     onSaved: () -> Unit
