@@ -257,7 +257,7 @@ private fun GamepadElementHost(
         // 编辑模式删除角标（v6.2：随元素尺寸缩放 —— 默认按键缩小 50% 后
         // 固定 24dp 角标会盖住整个按钮，改为 14-22dp 自适应）
         if (editMode) {
-            val badgeSize = (element.sizeDp.value * 0.42f).coerceIn(14f, 22f).dp
+            val badgeSize = (element.sizeDp * 0.42f).coerceIn(14f, 22f).dp
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
