@@ -2,6 +2,7 @@ package com.linbox.apps.x11
 
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -15,22 +16,48 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
@@ -38,20 +65,27 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.linbox.apps.containers.launcher.RootfsLauncher
 import com.linbox.core.theme.LocalWinTheme
 import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.input.gamepad.GamepadOverlayContent
 import com.linbox.core.shell.ShellController
 import com.linbox.LinBoxApp
+import com.linbox.shellui.prefixStageOf
 import com.termux.x11.LoriePreferences
+import com.linbox.core.input.VirtualKeyboardController
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
 import com.termux.x11.LorieView
 import com.termux.x11.Prefs
 import com.termux.x11.X11InputHub
 import com.termux.x11.input.InputStub
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 private const val TAG_X11 = "X11Surface"
 
@@ -79,7 +113,7 @@ private const val TAG_X11 = "X11Surface"
  *   点按直注 X。
  */
 @Composable
-fun X11Screen() {
+fun X11DisplayLayer() {
     val context = LocalContext.current
     val connState by X11WindowController.state.collectAsState()
     var lorieViewRef by remember { mutableStateOf<LorieView?>(null) }
@@ -89,8 +123,40 @@ fun X11Screen() {
     // 供全屏/方向/亮屏/刘海/附加键盘栏驱动副作用
     LaunchedEffect(prefs) { prefs?.let { X11UiPrefs.initIfNeed(it) } }
 
-    // 真全屏：画面独占（悬浮球/键行隐藏，返回键退出）；悬浮球与设置面板驱动
-    val trueFs = X11UiPrefs.fullscreen
+    // ===== v6.5：X11 全局显示层（取代原 X11 全屏页）=====
+    // 会话进行中，画面以两种形态显示在所有界面（主页/游戏库/容器/终端…）
+    // 的前方：
+    // - 全屏形态：进入 X11 页（ShellController.Screen.X11）或浮窗"全屏"
+    //   按钮一键全屏（localFullscreen，返回键恢复小窗）；
+    // - 小窗形态：可自由拖动/八向缩放的浮窗（AnWind 同款），窗口大小按
+    //   会话分辨率自适应，浮窗外触摸全部穿透 —— 底层界面照常操作。
+    // 小窗开关关闭时维持旧行为：会话广播自动跳转 X11 全屏页。
+    val onX11Page = ShellController.screen == ShellController.Screen.X11
+    val floatEnabled = X11FloatWindow.enabled
+    val sessionActive = connState != X11WindowController.State.Idle
+    if (!onX11Page && !(floatEnabled && sessionActive)) {
+        // 层退场：清全局感知标志（全局手柄层恢复渲染 / PerfGovernor 恢复刷新）
+        SideEffect {
+            X11DisplayState.layerActive = false
+            X11DisplayState.fullscreenActive = false
+        }
+        return
+    }
+
+    // 浮窗"全屏"按钮的一键全屏（返回键恢复小窗；进入 X11 页时自动复位）
+    var localFullscreen by remember { mutableStateOf(false) }
+    LaunchedEffect(onX11Page) { if (onX11Page) localFullscreen = false }
+    val fullscreenLayout = onX11Page || localFullscreen
+    val windowLayout = !fullscreenLayout
+
+    // 全局感知标志同步（GamepadOverlay 让位 / PerfGovernor 静止主界面刷新）
+    SideEffect {
+        X11DisplayState.layerActive = true
+        X11DisplayState.fullscreenActive = fullscreenLayout
+    }
+
+    // 真全屏：画面独占（悬浮球/键行隐藏，返回键退出）；仅全屏形态下生效
+    val trueFs = fullscreenLayout && X11UiPrefs.fullscreen
     fun setFullscreen(v: Boolean) {
         X11UiPrefs.fullscreen = v
         prefs?.fullscreen?.put(v)
@@ -102,6 +168,70 @@ fun X11Screen() {
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
     // 面板关闭时机：把不可观察偏好同步进触摸桥（首选扫描码）
     val settingsShowing by X11SettingsBridge.show.collectAsState()
+
+    // ===== 小窗模式状态（持久化在 linbox_x11_float；Prefs.java 为脚本
+    //      生成物不能手改，故独立存本应用私有 prefs）=====
+    LaunchedEffect(Unit) { X11FloatWindow.initIfNeed(context) }
+    val density = LocalDensity.current
+    val floatWin = windowLayout
+
+    // 分流根容器引用（帧同步用；factory 创建后写入）
+    var lorieRootRef by remember { mutableStateOf<X11TouchSplitLayout?>(null) }
+
+    // 小窗几何自适应：画面区尺寸就绪/旋转/开启时钳入画面区（首次给居中 72% 默认窗）
+    LaunchedEffect(floatWin, areaSize) {
+        if (floatWin && areaSize != IntSize.Zero) {
+            X11FloatWindow.ensureFrame(
+                areaSize.width, areaSize.height,
+                with(density) { X11FloatChrome.MIN_W.roundToPx() },
+                with(density) { X11FloatChrome.MIN_H.roundToPx() }
+            )
+        }
+    }
+
+    // ===== v6.5：小窗按分辨率自适应（AnWind 语义）=====
+    // 会话分辨率握手（glibc-runner -d / 手动固定 exact）变化时，窗口外框
+    // 按该分辨率的宽高比缩放到工作区 88% 预算内并居中 —— 窗口大小随
+    // 分辨率调整，画面不变形；用户手动缩放后保持，直到下一次分辨率变化。
+    val resState by X11ResolutionLink.state.collectAsState()
+    LaunchedEffect(resState.mode, resState.exact, windowLayout, areaSize) {
+        if (!windowLayout || areaSize == IntSize.Zero) return@LaunchedEffect
+        if (resState.mode != "exact" || resState.exact.isEmpty()) return@LaunchedEffect
+        val m = Regex("(\\d{2,5})x(\\d{2,5})").find(resState.exact) ?: return@LaunchedEffect
+        X11FloatWindow.fitToResolution(
+            context,
+            m.groupValues[1].toInt(), m.groupValues[2].toInt(),
+            areaSize.width, areaSize.height,
+            with(density) { X11FloatChrome.MIN_W.roundToPx() },
+            with(density) { X11FloatChrome.MIN_H.roundToPx() }
+        )
+    }
+
+    // 小窗帧 → View 层 LorieView 内容帧同步（外框去标题栏/快捷条/边框；
+    // 关闭时清空回铺满）。key 含 lorieRootRef：factory 创建根容器（晚于
+    // 首次组合）后也要重启同步；v6.5 快捷条显隐即时重排窗内画面。
+    LaunchedEffect(
+        lorieRootRef, floatWin, X11FloatWindow.x, X11FloatWindow.y,
+        X11FloatWindow.w, X11FloatWindow.h, X11FloatWindow.maximized,
+        X11FloatWindow.quickBarShown, areaSize
+    ) {
+        val root = lorieRootRef ?: return@LaunchedEffect
+        if (!floatWin || areaSize == IntSize.Zero) {
+            root.lorieFrame = null
+            return@LaunchedEffect
+        }
+        val f = X11FloatWindow.effectiveFrame(areaSize.width, areaSize.height)
+        val bd = with(density) { 1.dp.roundToPx() }
+        val topPx = with(density) {
+            (X11FloatChrome.TITLE_H +
+                (if (X11FloatWindow.quickBarShown) X11FloatChrome.QUICKBAR_H else 0.dp)
+            ).roundToPx()
+        }
+        root.lorieFrame = Rect(
+            f.left + bd, f.top + topPx + bd,
+            f.right - bd, f.bottom - bd
+        )
+    }
 
     // 智能鼠标桥与手柄层（随 LorieView 实例创建，见 factory）
     var touchBridge by remember { mutableStateOf<SmartTouchBridge?>(null) }
@@ -133,47 +263,65 @@ fun X11Screen() {
     // 跳转；重新进入时 factory 重建 LorieView 并自动重连。
     // v2.22.5 fix15：会话结束语义保持与旧版"关闭 X11 窗口"一致 ——
     // 退出时终止 wine 会话（用户反馈"关闭 x11 窗口没有关闭 wine"）。
-    // v6.4：小窗模式（悬浮球「小窗口」→ X11MiniWindow）下离开本页
-    // 不断会话 —— wine 存活、fit 客户端继续、迷你浮窗重连续上画面，
-    // 悬浮球 X11 快捷组随会话常驻。
     DisposableEffect(Unit) {
         onDispose {
-            val mini = X11MiniWindow.isActive
+            X11Session.killWine()
+            X11FitClient.stop()
             lorieViewRef = null
+            X11ResolutionLink.attachView(null)
+            // 触摸桥注册一并注销（防泄漏 + 防设置面板下发到已分离视图）
+            SmartTouchBridge.activeBridge = null
             // v2.31：桥分离时清理悬挂冲刷与受跟踪指针（防迟到事件误发）
             touchBridge?.onDetached()
             // v2.32：手柄 Compose 宿主组合显式销毁（AndroidView 内嵌
             // ComposeView 的组合不随 View detach 自动释放，防泄漏）
             gamepadHostRef?.disposeComposition()
             gamepadHostRef = null
-            if (mini) {
-                // v6.4：画面迁迷你浮窗 —— 全局桥/输入位/分辨率位已由
-                // X11MiniWindow 接管（勿清空）；仅断开本页渲染连接
-                //（不抑制会话），随即由迷你浮窗重连续上。
-                X11WindowController.detachView(userClosed = false)
-                X11MiniWindow.connect()
-            } else {
-                X11Session.killWine()
-                X11FitClient.stop()
-                X11ResolutionLink.attachView(null)
-                // 触摸桥注册一并注销（防泄漏 + 防设置面板下发到已分离视图）
-                SmartTouchBridge.activeBridge = null
-                // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
-                X11InputHub.get(context).setActiveLorieView(null)
-                X11WindowController.detachView(userClosed = true)
-            }
+            // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
+            X11InputHub.get(context).setActiveLorieView(null)
+            X11WindowController.detachView(userClosed = true)
         }
     }
 
-    // 返回键：真全屏时先退全屏；否则回终端主页
+    // 返回键：真全屏时先退全屏；全屏形态下回主页（X11 页）或恢复小窗
+    //（浮窗一键全屏）；小窗形态不拦截 —— 返回键交给底层页面。
     BackHandler(enabled = trueFs) { setFullscreen(false) }
-    BackHandler(enabled = !trueFs) { ShellController.showHome() }
+    BackHandler(enabled = !trueFs && fullscreenLayout) {
+        if (onX11Page) ShellController.showHome() else localFullscreen = false
+    }
 
     // ------------------------------------------------------------------
     // v2.25 窗口效果（termux-x11 keepScreenOn / forceOrientation / hideCutout）
     // 均应用在宿主 Activity 窗口上，离开 X11 界面时统一还原全局设置。
+    // v6.5：方向 / 刘海仅【全屏形态】生效 —— 浮窗是叠在当前界面上的
+    // 附属窗口，不应劫持宿主的方向与刘海（底层页面按应用全局设置显示）。
+    // keepScreenOn 随会话保持（X11 运行中亮屏合理）。
     // ------------------------------------------------------------------
     val activity = context as? android.app.Activity
+
+    // 按应用全局设置还原方向/刘海（DataStore 异步读，主线程落窗）
+    fun restoreGlobalDisplay() {
+        app.applicationScope.launch {
+            val restoreCutout = app.settingsStore.useCutout.first()
+            val restoreOri = app.settingsStore.displayOrientation.first()
+            withContext(Dispatchers.Main) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val win = activity?.window
+                    win?.attributes = win?.attributes?.apply {
+                        layoutInDisplayCutoutMode = if (restoreCutout)
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                        else
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
+                }
+                activity?.requestedOrientation = when (restoreOri) {
+                    "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                }
+            }
+        }
+    }
 
     // 保持亮屏
     DisposableEffect(X11UiPrefs.keepScreenOn) {
@@ -184,8 +332,12 @@ fun X11Screen() {
         onDispose { win?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
 
-    // 屏幕方向（面板切换即时生效）
-    LaunchedEffect(X11UiPrefs.orientation) {
+    // 屏幕方向（面板切换即时生效；v6.5 仅全屏形态，浮窗交还底层页面）
+    LaunchedEffect(X11UiPrefs.orientation, fullscreenLayout) {
+        if (!fullscreenLayout) {
+            restoreGlobalDisplay()
+            return@LaunchedEffect
+        }
         activity?.requestedOrientation = when (X11UiPrefs.orientation) {
             "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -193,8 +345,9 @@ fun X11Screen() {
         }
     }
 
-    // 刘海区：进入时应用；开关切换时重新应用（Keyed 重启，无竞态）
-    DisposableEffect(Unit) {
+    // 刘海区：进入时应用；开关切换时重新应用（Keyed 重启，无竞态）；
+    // v6.5 仅全屏形态生效（浮窗形态还原全局设置）
+    DisposableEffect(fullscreenLayout) {
         fun applyCutout(occupy: Boolean) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val win = activity?.window ?: return
@@ -206,33 +359,16 @@ fun X11Screen() {
                 }
             }
         }
-        applyCutout(X11UiPrefs.hideCutout)
-        onDispose {
-            // 离开 X11：按应用全局设置还原（DataStore 异步读，主线程落窗）
-            app.applicationScope.launch {
-                val restoreCutout = app.settingsStore.useCutout.first()
-                val restoreOri = app.settingsStore.displayOrientation.first()
-                withContext(Dispatchers.Main) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        val win = activity?.window
-                        win?.attributes = win?.attributes?.apply {
-                            layoutInDisplayCutoutMode = if (restoreCutout)
-                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                            else
-                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                        }
-                    }
-                    activity?.requestedOrientation = when (restoreOri) {
-                        "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                        "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                        else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
-                    }
-                }
-            }
+        if (fullscreenLayout) {
+            applyCutout(X11UiPrefs.hideCutout)
+        } else {
+            restoreGlobalDisplay()
         }
+        onDispose { }
     }
     // 刘海开关变化（设置面板切换后）重新应用
-    LaunchedEffect(X11UiPrefs.hideCutout) {
+    LaunchedEffect(X11UiPrefs.hideCutout, fullscreenLayout) {
+        if (!fullscreenLayout) return@LaunchedEffect
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val win = activity?.window ?: return@LaunchedEffect
             win.attributes = win.attributes.apply {
@@ -257,7 +393,10 @@ fun X11Screen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            // v6.5：浮窗形态作为全局显示层挂在所有界面前方 —— 根容器必须
+            // 全透明，让底层的页面对象透出（浮窗本体只有 chrome 边框 +
+            // View 层 LorieView 帧在窗内）；全屏形态仍纯黑（对比度优先）
+            .background(if (floatWin) Color.Transparent else Color.Black)
     ) {
         // ===== 画面区（悬浮球 / 附加键盘栏 / 等待页全部悬浮其上） =====
         Box(
@@ -266,13 +405,13 @@ fun X11Screen() {
                 .weight(1f)
                 .onGloballyPositioned { areaSize = it.size }
         ) {
+            // v6.4 的“小窗桌面背景层”已随 v6.5 移除：窗口外触摸不再被消费，
+            // 经 View 层分类（画面外不入流）→ dispatchTouchEvent 返回 false
+            // → Compose 命中测试继续下沉 → 底层页面照常操作（用户：
+            // “显示在主界面和其他界面前方，但是不遮挡他们操作”）
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    // v6.4：进入全屏页时若迷你浮窗还在（通知入口/悬浮球
-                    // 「恢复全屏」之外的直接跳页）→ 先退场，画面交还本页 ——
-                    // 必须在 connectLorieView 之前完成（先释放连接再重建）。
-                    if (X11MiniWindow.isActive) X11MiniWindow.dismissToPage()
                     // 根容器：v2.32 起为触摸分流容器（X11TouchSplitLayout）——
                     // 手柄显示时逐指分流：手柄指针 → 手柄宿主（gamepadHost），
                     // 屏幕指针 → LorieView 直达桥，与按下顺序无关（View 层
@@ -296,6 +435,7 @@ fun X11Screen() {
                     // 十字键/按钮/工具条的事件经 split 子事件直达此树，不受
                     // Compose 主树命中竞争影响。嵌入 ComposeView 需显式挂
                     // lifecycle/registry owner（Activity 同时实现两者）。
+                    // v6.4：小窗模式下仍铺满全屏 —— 手柄按钮不应被窗口裁切。
                     val gamepadHost = ComposeView(ctx).apply {
                         setViewTreeLifecycleOwner(lifecycleOwner)
                         (lifecycleOwner as? SavedStateRegistryOwner)?.let {
@@ -319,10 +459,25 @@ fun X11Screen() {
 
                     // 分流接线：屏幕子事件直达 LorieView（桥），手柄命中区
                     // 判定复用 GamepadController（元素 ∪ 工具条，窗口坐标）
-                    root.screenRouter = { ev -> lv.dispatchTouchEvent(ev) }
+                    // v6.4：LorieView 动态布局（小窗帧/非拉伸居中）后不在
+                    // (0,0) —— 直投前把根容器坐标换算成 lv 本地坐标，投完
+                    // 还原（同一事件对象可能还要给手柄宿主继续用）
+                    root.lorieChild = lv
+                    root.screenRouter = { ev ->
+                        val ox = lv.left
+                        val oy = lv.top
+                        if (ox == 0 && oy == 0) lv.dispatchTouchEvent(ev)
+                        else {
+                            ev.offsetLocation(-ox.toFloat(), -oy.toFloat())
+                            val r = lv.dispatchTouchEvent(ev)
+                            ev.offsetLocation(ox.toFloat(), oy.toFloat())
+                            r
+                        }
+                    }
                     root.padHitTest = { x, y -> GamepadController.isOverPadUi(x, y) }
                     root.padHost = gamepadHost
                     root.padSplitActive = false // update 块按手柄开关驱动
+                    lorieRootRef = root
 
                     val bridge = SmartTouchBridge(ctx, lv)
                     // v2.25：同步"首选扫描码"偏好（设置面板切换后面板关闭时机再同步）
@@ -394,9 +549,45 @@ fun X11Screen() {
                 }
             )
 
-            // ===== 等待页（未连接时覆盖） =====
-            if (connState != X11WindowController.State.Connected) {
+            // ===== 等待页（未连接时覆盖；v6.5 仅全屏形态 —— 浮窗形态下
+            //      全屏等待页会盖住底层页面，连接等待改为窗内提示） =====
+            if (fullscreenLayout && connState != X11WindowController.State.Connected) {
                 WaitingPanel(connState)
+            }
+
+            // ===== v6.4：前缀构建进度悬浮卡（用户："容器创建时构建前缀的
+            //      进度条没有显示在 x11 界面"）—— 前缀构建期间用户往往已
+            //      被拉进 X11 页看 wine 桌面，壳层页的进度卡/日志窗全被
+            //      全屏画面盖住。此处按 RootfsLauncher.prefixBuildFlow 驱动：
+            //      可拖动、日志可显隐、可收起为小徽标，不拦截 X11 操作。 =====
+            if (!trueFs) {
+                X11PrefixBuildOverlay(
+                    areaW = areaSize.width,
+                    areaH = areaSize.height
+                )
+            }
+
+            // ===== v6.5：小窗模式窗口 chrome（标题栏拖动 / 双击最大化 /
+            //      边缘八向缩放 / 快捷配置条 / 全屏恢复 / 关闭结束会话；
+            //      画面本体是 View 层 LorieView 动态布局帧，chrome 只画
+            //      边框与标题栏，内容区透出画面；未连接时窗内显示连接提示，
+            //      窗口出现即可拖到顺手位置等画面亮起） =====
+            if (floatWin) {
+                X11FloatWindowChrome(
+                    areaW = areaSize.width,
+                    areaH = areaSize.height,
+                    connected = connState == X11WindowController.State.Connected,
+                    onExit = {
+                        // v6.5：✕ = 结束本次会话（与 AnWind 关窗一致）——
+                        // closeSession 状态归 Idle → 显示层退场（onDispose
+                        // 终止 wine 会话 + detachView 抑制本会话重播）
+                        X11WindowController.closeSession()
+                    },
+                    onFullscreen = {
+                        // v6.5：全屏按钮恢复全屏（返回键恢复小窗）
+                        localFullscreen = true
+                    }
+                )
             }
 
             // ===== v2.25 附加键盘栏（showAdditionalKbd；连接后显示，真全屏时隐藏，
@@ -423,8 +614,9 @@ fun X11Screen() {
         }
     }
 
-    // v6.4：X11 设置面板上移到 LinBoxShell 全局层（用户："回主页后悬浮球
-    // 里就丢失了 x11 的设置"）—— 会话存活期间任意页面均可从悬浮球打开。
+    // v6.6：X11SettingsDialog 移至 LinBoxShell 全局层 —— 会话存活期间
+    //（全屏页 / 浮窗小窗 / 后台运行）任意页面均可经悬浮球 / 常驻通知
+    // 打开设置；显示层内部不再调用，防双重弹窗。
 }
 
 @Composable
@@ -1578,6 +1770,21 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
     /** 分流激活（手柄开关；X11Screen 的 AndroidView.update 块驱动） */
     var padSplitActive: Boolean = false
 
+    /** v6.4：LorieView 子视图引用（动态布局/分流坐标换算用；factory 接线） */
+    var lorieChild: View? = null
+
+    /**
+     * v6.4 小窗模式：LorieView 内容帧（px，相对本容器；null = 非小窗布局）。
+     * 非空时 LorieView 被测量并布局到帧内（exact 分辨率下按宽高比适配
+     * 尺寸居中于帧）；置空后回到铺满（拉伸）或居中（非拉伸）布局。
+     */
+    var lorieFrame: Rect? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            requestLayout()
+        }
+
     /** 屏幕指针路由：→ LorieView.dispatchTouchEvent（→ SmartTouchBridge.onTouch） */
     var screenRouter: ((MotionEvent) -> Boolean)? = null
 
@@ -1606,6 +1813,79 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
                 winOffX = loc[0].toFloat()
                 winOffY = loc[1].toFloat()
             }
+        }
+    }
+
+    /**
+     * v6.4（用户：“x11界面取消拉伸全屏时横屏画面却跑到左方了，应该居中
+     * 才对，竖屏在上方不用动”）：显示层拉伸状态 —— 与 LorieView.onMeasure
+     * 同源判定（stretch 开或 native/scaled = surface 跟视图 = 铺满）。
+     */
+    private fun isStretchActive(): Boolean {
+        val prefs = LoriePreferences.prefs ?: return true
+        return prefs.displayStretch.get() ||
+            "native" == prefs.displayResolutionMode.get() ||
+            "scaled" == prefs.displayResolutionMode.get()
+    }
+
+    /**
+     * v6.4：LorieView 动态布局 —— super（FrameLayout FILL 默认分支锚定左上）
+     * 之后按模式重摆：
+     * - 小窗帧（lorieFrame 非空）：测量到帧尺寸，布局进帧（exact 模式下
+     *   LorieView 自测的宽高比适配尺寸居中于帧）；
+     * - 拉伸铺满：占满整个容器（v2.22.5 fix12 语义保留）；
+     * - 非拉伸（exact/custom 固定分辨率）：横屏两轴居中 / 竖屏水平居中+
+     *   顶部对齐（用户指定：竖屏在上方不用动）。
+     */
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        val lv = lorieChild ?: return
+        val pw = width - paddingLeft - paddingRight
+        val ph = height - paddingTop - paddingBottom
+        if (pw <= 0 || ph <= 0) return
+
+        val f = lorieFrame
+        if (f != null) {
+            // ---- 小窗：内容帧 ----
+            val fx = f.left.coerceIn(paddingLeft, right - left)
+            val fy = f.top.coerceIn(paddingTop, bottom - top)
+            val fw = f.width().coerceAtMost(pw)
+            val fh = f.height().coerceAtMost(ph)
+            lv.measure(
+                View.MeasureSpec.makeMeasureSpec(fw, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(fh, View.MeasureSpec.EXACTLY)
+            )
+            val w = lv.measuredWidth.coerceAtMost(fw)
+            val h = lv.measuredHeight.coerceAtMost(fh)
+            val x = fx + (fw - w) / 2
+            val y = fy + (fh - h) / 2
+            lv.layout(x, y, x + w, y + h)
+            return
+        }
+
+        if (isStretchActive()) {
+            // ---- 拉伸铺满（fix12：画面铺满容器无黑边） ----
+            if (lv.measuredWidth != pw || lv.measuredHeight != ph) {
+                lv.measure(
+                    View.MeasureSpec.makeMeasureSpec(pw, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(ph, View.MeasureSpec.EXACTLY)
+                )
+            }
+            lv.layout(paddingLeft, paddingTop, paddingLeft + pw, paddingTop + ph)
+        } else {
+            // ---- 非拉伸：宽高比适配尺寸重摆（v6.4 居中修正） ----
+            if (lv.measuredWidth > pw || lv.measuredHeight > ph) {
+                // 旋转/分辨率切换后的陈旧测量 —— 按新容器尺寸重测
+                lv.measure(
+                    View.MeasureSpec.makeMeasureSpec(pw, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(ph, View.MeasureSpec.EXACTLY)
+                )
+            }
+            val w = lv.measuredWidth.coerceAtMost(pw)
+            val h = lv.measuredHeight.coerceAtMost(ph)
+            val x = paddingLeft + (pw - w) / 2
+            val y = if (pw > ph) paddingTop + (ph - h) / 2 else paddingTop
+            lv.layout(x, y, x + w, y + h)
         }
     }
 
@@ -1715,14 +1995,28 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
         }
     }
 
-    /** 新指针分类入流：落点在手柄 UI 内（含容器→窗口偏移）= 手柄流 */
+    /** 新指针分类入流：落点在手柄 UI 内（含容器→窗口偏移）= 手柄流；
+     *  v6.4：LorieView 未铺满容器（小窗帧 / 非拉伸宽高比适配）时，
+     *  画面外落点不入任何流 —— 点"桌面"/黑边不注入 X。 */
     private fun classify(event: MotionEvent, idx: Int, hitTest: (Float, Float) -> Boolean) {
         val id = event.getPointerId(idx)
         if (hitTest(event.getX(idx) + winOffX, event.getY(idx) + winOffY)) {
             padIds.add(id)
-        } else {
-            screenIds.add(id)
+            return
         }
+        val lv = lorieChild
+        if (lv != null &&
+            (lv.left > 0 || lv.top > 0 || lv.right < width || lv.bottom < height)
+        ) {
+            // lv 未铺满：以 lv 实际边界判定（瞬态布局期 lv 尺寸过期时
+            // 边界宽松 —— 宁可注入不吞，避免误杀有效触点）
+            val x = event.getX(idx)
+            val y = event.getY(idx)
+            if (x < lv.left || x > lv.right || y < lv.top || y > lv.bottom) {
+                return // 画面外 —— 不入流（交正常分发兜底）
+            }
+        }
+        screenIds.add(id)
     }
 
     private fun removePointer(id: Int) {
@@ -1792,5 +2086,766 @@ internal class X11TouchSplitLayout @JvmOverloads constructor(
             event.xPrecision, event.yPrecision, event.deviceId, event.edgeFlags,
             event.source, event.flags
         )
+    }
+}
+
+// =============================================================================
+// v6.4：X11 小窗模式（自由窗口）—— 状态 / 窗口 chrome / 八向缩放
+//（用户："x11界面加入小窗设置，实现x11可以自由拖动的类似windows窗口那种，
+//  可以参考 AnWind 的实现"）
+// =============================================================================
+
+/** 小窗 chrome 常量。 */
+private object X11FloatChrome {
+    /** 标题栏高度。 */
+    val TITLE_H = 34.dp
+    /** v6.5：快捷配置条高度（AnWind ControlBar 对齐物）。 */
+    val QUICKBAR_H = 34.dp
+    /** 窗口圆角。 */
+    val RADIUS = 10.dp
+    /** 最小窗口尺寸（含标题栏）。 */
+    val MIN_W = 240.dp
+    val MIN_H = 190.dp
+}
+
+/**
+ * 小窗模式全局状态（v6.4）。
+ *
+ * 帧坐标语义：**窗口外框**（px，含标题栏），原点 = X11 画面区左上。
+ * LorieView 的内容帧由 X11Screen 换算（外框去标题栏/边框）后写入
+ * [X11TouchSplitLayout.lorieFrame]。
+ *
+ * 持久化：`linbox_x11_float` SharedPreferences（开关 + 帧几何 + 最大化）。
+ * Prefs.java 是脚本生成物不能手改，故独立存本应用私有 prefs。
+ */
+object X11FloatWindow {
+    /** 小窗模式开关（false = 画面铺满整屏的既有行为）。 */
+    var enabled by mutableStateOf(false)
+
+    /** 窗口外框（px，含标题栏）：左上角 + 尺寸。 */
+    var x by mutableIntStateOf(0)
+    var y by mutableIntStateOf(0)
+    var w by mutableIntStateOf(0)
+    var h by mutableIntStateOf(0)
+
+    /** 最大化（占满画面区，标题栏保留）。 */
+    var maximized by mutableStateOf(false)
+
+    /** 最大化前的外框（还原用）。 */
+    private var restoreX = 0
+    private var restoreY = 0
+    private var restoreW = 0
+    private var restoreH = 0
+
+    private const val PREFS_NAME = "linbox_x11_float"
+    private var initialized = false
+
+    fun initIfNeed(context: Context) {
+        if (initialized) return
+        initialized = true
+        val sp = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        enabled = sp.getBoolean("enabled", false)
+        x = sp.getInt("x", 0)
+        y = sp.getInt("y", 0)
+        w = sp.getInt("w", 0)
+        h = sp.getInt("h", 0)
+        maximized = sp.getBoolean("maximized", false)
+        quickBarShown = sp.getBoolean("quickBar", true)
+    }
+
+    private fun persist(context: Context) {
+        val sp = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        sp.edit()
+            .putBoolean("enabled", enabled)
+            .putInt("x", x).putInt("y", y).putInt("w", w).putInt("h", h)
+            .putBoolean("maximized", maximized)
+            .putBoolean("quickBar", quickBarShown)
+            .apply()
+    }
+
+    fun setEnabled(context: Context, v: Boolean) {
+        enabled = v
+        persist(context)
+    }
+
+    fun setMaximized(context: Context, v: Boolean) {
+        if (v && !maximized) {
+            restoreX = x; restoreY = y; restoreW = w; restoreH = h
+        }
+        maximized = v
+        if (!v && restoreW > 0) {
+            x = restoreX; y = restoreY; w = restoreW; h = restoreH
+        }
+        persist(context)
+    }
+
+    /** 提交窗口外框（px）。 */
+    fun setFrame(context: Context, nx: Int, ny: Int, nw: Int, nh: Int) {
+        x = nx; y = ny; w = nw; h = nh
+        persist(context)
+    }
+
+    /** 首次开启 / 画面区尺寸就绪 / 旋转后：外框钳制进画面区；无几何时给居中 72% 默认窗。 */
+    fun ensureFrame(areaW: Int, areaH: Int, minWpx: Int, minHpx: Int) {
+        if (areaW <= 0 || areaH <= 0) return
+        if (w <= 0 || h <= 0) {
+            w = (areaW * 0.72f).toInt().coerceIn(minWpx, areaW)
+            h = (areaH * 0.72f).toInt().coerceIn(minHpx, areaH)
+            x = (areaW - w) / 2
+            y = (areaH - h) / 2
+            return
+        }
+        w = w.coerceIn(minWpx, areaW)
+        h = h.coerceIn(minHpx, areaH)
+        x = x.coerceIn(0, (areaW - w).coerceAtLeast(0))
+        y = y.coerceIn(0, (areaH - h).coerceAtLeast(0))
+    }
+
+    /**
+     * v6.5：窗口按会话分辨率自适应（AnWind 语义，用户："根据分辨率调整
+     * 窗口大小，就像anwind那种"）。
+     *
+     * 会话分辨率握手（glibc-runner -d / 手动固定 exact）到达时调用：外框
+     * 按该分辨率的宽高比缩放到工作区 88% 预算内并居中 —— 窗口大小随
+     * 分辨率调整，画面不变形。用户手动缩放后保持（宽高比未变的手重排
+     * 跳过），直到下一次分辨率比例变化才重新适配。
+     */
+    fun fitToResolution(
+        context: Context, resW: Int, resH: Int,
+        areaW: Int, areaH: Int, minWpx: Int, minHpx: Int
+    ) {
+        if (resW <= 0 || resH <= 0 || areaW <= 0 || areaH <= 0) return
+        if (maximized) return
+        // 已有几何且宽高比基本一致（<2% 偏差）= 用户已按此比例布局，保持
+        if (w > 0 && h > 0) {
+            val cur = w.toFloat() / h
+            val want = resW.toFloat() / resH
+            if (kotlin.math.abs(cur - want) / want < 0.02f) return
+        }
+        // 88% 工作区预算内按分辨率宽高比适配
+        val budgetW = (areaW * 0.88f).toInt()
+        val budgetH = (areaH * 0.88f).toInt()
+        var nw = budgetW
+        var nh = (nw.toFloat() * resH / resW).toInt()
+        if (nh > budgetH) {
+            nh = budgetH
+            nw = (nh.toFloat() * resW / resH).toInt()
+        }
+        w = nw.coerceIn(minWpx, areaW)
+        h = nh.coerceIn(minHpx, areaH)
+        x = (areaW - w) / 2
+        y = (areaH - h) / 2
+        persist(context)
+    }
+
+    /** v6.5：快捷配置条显示状态（快捷配置随帧一起持久化）。 */
+    var quickBarShown by mutableStateOf(true)
+
+    /** 快捷配置条显隐切换。 */
+    fun toggleQuickBar(context: Context) {
+        quickBarShown = !quickBarShown
+        persist(context)
+    }
+
+    /** 当前生效外框（最大化 = 满幅）。 */
+    fun effectiveFrame(areaW: Int, areaH: Int): Rect =
+        if (maximized) Rect(0, 0, areaW, areaH)
+        else Rect(x, y, x + w, y + h)
+}
+
+/** 八向缩放边。 */
+private enum class ResizeEdge(val l: Boolean, val r: Boolean, val t: Boolean, val b: Boolean) {
+    L(l = true,  r = false, t = false, b = false),
+    R(l = false, r = true,  t = false, b = false),
+    T(l = false, r = false, t = true,  b = false),
+    B(l = false, r = false, t = false, b = true),
+    LT(l = true,  r = false, t = true,  b = false),
+    RT(l = false, r = true,  t = true,  b = false),
+    LB(l = true,  r = false, t = false, b = true),
+    RB(l = false, r = true,  t = false, b = true)
+}
+
+/**
+ * 小窗模式窗口 chrome：标题栏（拖动移动 / 双击最大化 / 最大化还原 /
+ * 全屏恢复 / ✕ 关闭）+ v6.5 快捷配置条（AnWind ControlBar 对齐：
+ * 跟随窗口 / 固定分辨率 + 分辨率输入应用 + X 指示 + 切窗 / 键盘 /
+ * 游戏全屏）+ 边缘八向缩放手柄。内容区为透明洞 —— 画面本体是 View 层
+ * LorieView 动态布局帧（X11TouchSplitLayout.lorieFrame），chrome 只画
+ * 边框与标题栏；未连接时窗内显示连接提示。
+ *
+ * 交互对齐 AnWind WindowChrome：移动实时跟手（仅位置变化，无 surface 重建）；
+ * 缩放手势期间 chrome 实时预览，松手一次性提交（避免 surface 逐帧重建）。
+ */
+@Composable
+private fun X11FloatWindowChrome(
+    areaW: Int,
+    areaH: Int,
+    connected: Boolean,
+    onExit: () -> Unit,
+    onFullscreen: () -> Unit
+) {
+    if (areaW <= 0 || areaH <= 0) return
+    val theme = LocalWinTheme.current
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val minWpx = with(density) { X11FloatChrome.MIN_W.roundToPx() }
+    val minHpx = with(density) { X11FloatChrome.MIN_H.roundToPx() }
+
+    // 缩放手势的实时帧（px；null = 非缩放中，渲染已提交帧）
+    var liveResize by remember { mutableStateOf<Rect?>(null) }
+
+    fun committedFrame(): Rect = X11FloatWindow.effectiveFrame(areaW, areaH)
+    fun currentFrame(): Rect = liveResize ?: committedFrame()
+
+    fun applyResize(edge: ResizeEdge, dx: Float, dy: Float) {
+        val base = liveResize ?: committedFrame()
+        var l = base.left
+        var t = base.top
+        var r = base.right
+        var b = base.bottom
+        if (edge.l) l = (l + dx.roundToInt()).coerceIn(0, (r - minWpx).coerceAtLeast(0))
+        if (edge.r) r = (r + dx.roundToInt()).coerceIn((l + minWpx).coerceAtMost(areaW), areaW)
+        if (edge.t) t = (t + dy.roundToInt()).coerceIn(0, (b - minHpx).coerceAtLeast(0))
+        if (edge.b) b = (b + dy.roundToInt()).coerceIn((t + minHpx).coerceAtMost(areaH), areaH)
+        liveResize = Rect(l, t, r, b)
+    }
+
+    fun commitResize() {
+        val f = liveResize ?: return
+        X11FloatWindow.setFrame(context, f.left, f.top, f.width(), f.height())
+        liveResize = null
+    }
+
+    Box(
+        modifier = Modifier
+            .offset { val f = currentFrame(); IntOffset(f.left, f.top) }
+            .layout { m, ctr ->
+                val f = currentFrame()
+                val w = f.width().coerceIn(1, ctr.maxWidth)
+                val h = f.height().coerceIn(1, ctr.maxHeight)
+                val p = m.measure(Constraints.fixed(w, h))
+                layout(w, h) { p.place(0, 0) }
+            }
+            .border(1.5.dp, theme.windowBorderColor, RoundedCornerShape(X11FloatChrome.RADIUS))
+            .clip(RoundedCornerShape(X11FloatChrome.RADIUS))
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            // ---- 标题栏 ----
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(X11FloatChrome.TITLE_H)
+                    .background(theme.windowTitleBarColor)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, amt ->
+                            change.consume()
+                            if (!X11FloatWindow.maximized && liveResize == null) {
+                                val nx = (X11FloatWindow.x + amt.x.roundToInt())
+                                    .coerceIn(0, (areaW - X11FloatWindow.w).coerceAtLeast(0))
+                                val ny = (X11FloatWindow.y + amt.y.roundToInt())
+                                    .coerceIn(0, (areaH - X11FloatWindow.h).coerceAtLeast(0))
+                                X11FloatWindow.setFrame(context, nx, ny, X11FloatWindow.w, X11FloatWindow.h)
+                            }
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                X11FloatWindow.setMaximized(context, !X11FloatWindow.maximized)
+                            }
+                        )
+                    }
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    "X11 桌面",
+                    color = theme.windowTitleBarTextColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
+                )
+                // v6.5：快捷配置条收起 / 展开（AnWind 标题栏工具条开关同款）
+                Text(
+                    if (X11FloatWindow.quickBarShown) "▴" else "▾",
+                    color = theme.windowTitleBarTextColor,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { X11FloatWindow.toggleQuickBar(context) }
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
+                )
+                // 全屏（v6.5：点击全屏按钮恢复全屏，返回键恢复小窗）
+                Text(
+                    "全屏",
+                    color = theme.windowTitleBarTextColor,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onFullscreen() }
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
+                )
+                // 最大化 / 还原
+                Text(
+                    if (X11FloatWindow.maximized) "还原" else "最大化",
+                    color = theme.windowTitleBarTextColor,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { X11FloatWindow.setMaximized(context, !X11FloatWindow.maximized) }
+                        .padding(horizontal = 7.dp, vertical = 5.dp)
+                )
+                // 关闭（结束会话）
+                Text(
+                    "✕",
+                    color = theme.windowTitleBarTextColor,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onExit() }
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                )
+            }
+            // ---- v6.5 快捷配置条（AnWind ControlBar 对齐；可收起） ----
+            if (X11FloatWindow.quickBarShown) {
+                X11QuickConfigBar()
+            }
+            // ---- 内容区：透明洞（View 层 LorieView 在此透出） ----
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                if (!connected) {
+                    // 未连接：窗内等待提示（窗口出现即可拖到顺手位置等画面亮起）
+                    Text(
+                        "X 服务连接中…",
+                        color = theme.windowTitleBarTextColor,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(Color(0x66000000), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
+        // ---- 八向缩放手柄（最大化时隐藏） ----
+        if (!X11FloatWindow.maximized) {
+            ResizeEdge.values().forEach { edge ->
+                X11ResizeHandle(
+                    edge = edge,
+                    onDragStart = { liveResize = committedFrame() },
+                    onDrag = { dx, dy -> applyResize(edge, dx, dy) },
+                    onDragEnd = { commitResize() },
+                    onDragCancel = { liveResize = null }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * v6.5：小窗快捷配置条 —— AnWind X11 ControlBar 对齐（用户："还有相关
+ * 快捷配置，anwind都有参考"）：
+ * - 分辨率模式：跟随窗口（native）/ 固定分辨率（exact）即时切换；
+ * - exact 模式：WxH 输入 + 应用（160x120 下限，与 AnWind 同款校验）；
+ * - X 指示：当前 X 屏幕分辨率来源（跟随/固定/缩放；游戏握手 = 品牌色）；
+ * - 切窗：无 WM 的 X 屏上多 wine 窗口轮转置前（XRaiseWindow）；
+ * - 键盘：壳层虚拟键盘开关；
+ * - 游戏全屏：Alt+Enter —— 窗口化游戏一键切换 wine/DXVK 全屏。
+ * 分辨率切换经 X11ResolutionLink（内部 pokeActiveView → regenerate）。
+ */
+@Composable
+private fun X11QuickConfigBar() {
+    val theme = LocalWinTheme.current
+    val prefs = remember { LoriePreferences.prefs }
+    val resState by X11ResolutionLink.state.collectAsState()
+
+    val modeNative = resState.mode != "exact" && resState.mode != "scaled"
+    // 本地选择态：点「固定分辨率」先展开输入框，点「应用」才真正切换
+    //（resState 变化时复位 —— 与 AnWind ControlBar 同款交互）
+    var nativeSel by remember(resState.mode) { mutableStateOf(modeNative) }
+    var resText by remember(resState.mode) {
+        mutableStateOf(
+            if (resState.mode == "exact" && resState.exact.isNotEmpty()) resState.exact
+            else prefs?.displayResolutionExact?.get() ?: "1280x720"
+        )
+    }
+    var resError by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(X11FloatChrome.QUICKBAR_H)
+            .background(theme.windowTitleBarColor.copy(alpha = 0.86f))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        QcTextButton(
+            text = "跟随窗口",
+            active = modeNative,
+            onClick = {
+                nativeSel = true
+                prefs?.displayResolutionMode?.put("native")
+                X11ResolutionLink.setNative()
+            }
+        )
+        QcTextButton(
+            text = "固定分辨率",
+            active = !nativeSel,
+            onClick = { nativeSel = false }
+        )
+        if (!nativeSel) {
+            QcResInput(
+                value = resText,
+                isError = resError,
+                onValueChange = { resText = it; resError = false }
+            )
+            QcTextButton(
+                text = "应用",
+                active = false,
+                onClick = {
+                    val m = Regex("(\\d{2,5})x(\\d{2,5})").find(resText.trim())
+                    val (w, h) = m?.destructured ?: run { resError = true; return@QcTextButton }
+                    if (w.toInt() < 160 || h.toInt() < 120) { resError = true; return@QcTextButton }
+                    nativeSel = false
+                    prefs?.displayResolutionExact?.put("${w}x${h}")
+                    X11ResolutionLink.setExact(w.toInt(), h.toInt())
+                }
+            )
+        }
+        // X 分辨率来源指示（glibc-runner -d 握手状态一目了然）
+        Text(
+            text = when {
+                resState.mode == "exact" -> "X:${resState.exact}"
+                resState.mode == "scaled" -> "X:缩放"
+                else -> "X:跟随窗口"
+            },
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            color = if (resState.fromGame) theme.accentColor else theme.windowTitleBarTextColor
+        )
+        QcTextButton(
+            text = "切窗",
+            active = false,
+            onClick = { X11WindowOps.cycleTopWindow() }
+        )
+        QcTextButton(
+            text = "键盘",
+            active = VirtualKeyboardController.visible,
+            onClick = { VirtualKeyboardController.toggle() }
+        )
+        QcTextButton(
+            text = "游戏全屏",
+            active = false,
+            onClick = { com.termux.x11.X11InputHub.sendAltEnter() }
+        )
+    }
+}
+
+/** 快捷条文本按钮（紧凑，选中 = 品牌色）。 */
+@Composable
+private fun QcTextButton(text: String, active: Boolean, onClick: () -> Unit) {
+    val theme = LocalWinTheme.current
+    Text(
+        text,
+        color = if (active) theme.accentColor else theme.windowTitleBarTextColor,
+        fontSize = 10.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 5.dp)
+    )
+}
+
+/** 快捷条分辨率输入框（紧凑等宽，WxH）。 */
+@Composable
+private fun QcResInput(
+    value: String,
+    isError: Boolean,
+    onValueChange: (String) -> Unit
+) {
+    val theme = LocalWinTheme.current
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = theme.windowTitleBarTextColor
+        ),
+        cursorBrush = androidx.compose.ui.graphics.Brush.verticalGradient(
+            listOf(theme.accentColor, theme.accentColor)
+        ),
+        modifier = Modifier
+            .width(84.dp)
+            .background(Color(0x33000000), RoundedCornerShape(6.dp))
+            .border(
+                1.dp,
+                if (isError) Color(0xFFFF5A5A) else Color(0x22FFFFFF),
+                RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 5.dp)
+    )
+}
+
+/** 单个缩放手柄（不可见触控条/角块，命中即拖）。 */
+@Composable
+private fun BoxScope.X11ResizeHandle(
+    edge: ResizeEdge,
+    onDragStart: () -> Unit,
+    onDrag: (Float, Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit
+) {
+    val strip = 14.dp
+    val corner = 22.dp
+    val mod = when (edge) {
+        ResizeEdge.L  -> Modifier.align(Alignment.CenterStart).fillMaxHeight().width(strip)
+        ResizeEdge.R  -> Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(strip)
+        ResizeEdge.T  -> Modifier.align(Alignment.TopCenter).fillMaxWidth().height(strip)
+        ResizeEdge.B  -> Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(strip)
+        ResizeEdge.LT -> Modifier.align(Alignment.TopStart).size(corner)
+        ResizeEdge.RT -> Modifier.align(Alignment.TopEnd).size(corner)
+        ResizeEdge.LB -> Modifier.align(Alignment.BottomStart).size(corner)
+        ResizeEdge.RB -> Modifier.align(Alignment.BottomEnd).size(corner)
+    }
+    Box(
+        mod.pointerInput(edge) {
+            detectDragGestures(
+                onDragStart = { onDragStart() },
+                onDragEnd = { onDragEnd() },
+                onDragCancel = { onDragCancel() }
+            ) { change, amt ->
+                change.consume()
+                onDrag(amt.x, amt.y)
+            }
+        }
+    )
+}
+
+// =============================================================================
+// v6.4：前缀构建进度悬浮卡（X11 界面内）
+//（用户："容器创建时构建前缀的进度条没有显示在x11界面，应该显示在x11界面，
+//  并支持拖动，支持日志显示和隐藏，不妨碍x11的操作"）
+// =============================================================================
+
+/**
+ * 前缀构建进度悬浮卡：
+ * - 数据源与壳层 PrefixBuildCard 同源（RootfsLauncher.prefixBuildFlow +
+ *   prefixLogOf 600ms 轮询 + 关键词阶段推断）；
+ * - 可拖动（标题行 / 收起徽标拖动，钳制在画面区内）；
+ * - 日志默认隐藏，"显示日志 ▾" 展开（等宽字体，最高 180dp 可滚动）；
+ * - 可收起为小徽标（点徽标展开），不拦截 X11 其余区域操作；
+ * - 构建结束（flow → null）自动消失；真全屏时不显示。
+ */
+@Composable
+private fun X11PrefixBuildOverlay(areaW: Int, areaH: Int) {
+    val building by RootfsLauncher.prefixBuildFlow.collectAsState()
+    val name = building ?: return
+    if (areaW <= 0 || areaH <= 0) return
+    val theme = LocalWinTheme.current
+    val density = LocalDensity.current
+
+    val log by produceState(RootfsLauncher.prefixLogOf(name), name) {
+        while (true) {
+            delay(600)
+            value = RootfsLauncher.prefixLogOf(name)
+        }
+    }
+    val elapsed by produceState(0L, name) {
+        val start = System.currentTimeMillis()
+        while (true) {
+            delay(1000)
+            value = (System.currentTimeMillis() - start) / 1000
+        }
+    }
+    val stage = remember(log) { prefixStageOf(log) }
+
+    // 悬浮位置（px；Int.MIN_VALUE = 首帧前，按 10dp 边距落左上角）
+    var ox by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    var oy by remember { mutableIntStateOf(Int.MIN_VALUE) }
+    var mySize by remember { mutableStateOf(IntSize.Zero) }
+    var expanded by remember { mutableStateOf(true) }
+    var logOpen by remember { mutableStateOf(false) }
+
+    fun moveBy(dx: Float, dy: Float) {
+        val nx = if (ox == Int.MIN_VALUE) 0 else ox + dx.roundToInt()
+        val ny = if (oy == Int.MIN_VALUE) 0 else oy + dy.roundToInt()
+        ox = nx.coerceIn(0, (areaW - mySize.width).coerceAtLeast(0))
+        oy = ny.coerceIn(0, (areaH - mySize.height).coerceAtLeast(0))
+    }
+
+    val margin = with(density) { 10.dp.roundToPx() }
+
+    if (expanded) {
+        Column(
+            modifier = Modifier
+                .offset {
+                    if (ox == Int.MIN_VALUE) IntOffset(margin, margin) else IntOffset(ox, oy)
+                }
+                .onGloballyPositioned {
+                    mySize = it.size
+                    if (ox == Int.MIN_VALUE) { ox = margin; oy = margin }
+                }
+                .width(286.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(theme.windowBackgroundColor.copy(alpha = 0.96f))
+                .border(1.dp, theme.windowBorderColor, RoundedCornerShape(14.dp))
+        ) {
+            // ---- 标题行（拖动区 + 开关） ----
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(theme.windowTitleBarColor)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, amt ->
+                            change.consume()
+                            moveBy(amt.x, amt.y)
+                        }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = theme.accentColor
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "正在构建前缀 · $name",
+                        color = theme.windowTitleBarTextColor,
+                        fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "$stage · ${elapsed / 60}:${"%02d".format(elapsed % 60)}",
+                        color = theme.windowTitleBarTextColor.copy(alpha = 0.75f),
+                        fontSize = 9.sp
+                    )
+                }
+                Text(
+                    if (logOpen) "隐藏日志 ▴" else "显示日志 ▾",
+                    color = theme.accentColor, fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { logOpen = !logOpen }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "收起",
+                    color = theme.windowTitleBarTextColor, fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { expanded = false }
+                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                )
+            }
+
+            // ---- 流动进度条 ----
+            val transition = rememberInfiniteTransition(label = "x11prefix")
+            val shift by transition.animateFloat(
+                initialValue = 0f, targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    tween(1200, easing = LinearEasing), RepeatMode.Restart
+                ),
+                label = "shift"
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(theme.windowTitleBarTextColor.copy(alpha = 0.14f))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(
+                            fraction = 0.34f + 0.10f * kotlin.math.sin(
+                                shift * Math.PI.toFloat() * 2
+                            ).coerceAtLeast(0f)
+                        )
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(theme.accentColor, theme.accentColor.copy(alpha = 0.55f))
+                            )
+                        )
+                )
+            }
+
+            // ---- 日志（默认隐藏） ----
+            AnimatedVisibility(
+                visible = logOpen,
+                enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(160)) + fadeOut(tween(160))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp)
+                        .padding(bottom = 8.dp)
+                        .heightIn(max = 180.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (theme.isDark) Color(0xE6050810) else Color(0xFFF2F4F8))
+                        .verticalScroll(rememberScrollState())
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        log.takeLast(16000),
+                        fontSize = 9.sp,
+                        lineHeight = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (theme.isDark) Color(0xCC8FA3B8) else Color(0xFF3A4450)
+                    )
+                }
+            }
+        }
+    } else {
+        // ---- 收起徽标（拖动 + 点按展开） ----
+        Row(
+            modifier = Modifier
+                .offset {
+                    if (ox == Int.MIN_VALUE) IntOffset(margin, margin) else IntOffset(ox, oy)
+                }
+                .onGloballyPositioned {
+                    mySize = it.size
+                    if (ox == Int.MIN_VALUE) { ox = margin; oy = margin }
+                }
+                .clip(RoundedCornerShape(999.dp))
+                .background(theme.windowBackgroundColor.copy(alpha = 0.95f))
+                .border(1.dp, theme.windowBorderColor, RoundedCornerShape(999.dp))
+                .pointerInput(Unit) {
+                    detectDragGestures { change, amt ->
+                        change.consume()
+                        moveBy(amt.x, amt.y)
+                    }
+                }
+                .clickable { expanded = true }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(11.dp),
+                strokeWidth = 1.6.dp,
+                color = theme.accentColor
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "前缀 $stage",
+                color = theme.windowTitleBarTextColor,
+                fontSize = 10.sp, maxLines = 1
+            )
+        }
     }
 }

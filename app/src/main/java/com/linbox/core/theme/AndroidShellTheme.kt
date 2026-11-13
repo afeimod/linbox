@@ -5,6 +5,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -43,14 +44,23 @@ val LocalBaseDensity = staticCompositionLocalOf<Density?> { null }
  *
  * - [dark]：true = 暗色（全壳层暗色玻璃），false = 亮色（全壳层浅色玻璃）；
  * - [customBgPath]：自定义背景图绝对路径（空串 = 未启用）。启用时各页面
- *   的背景色/渐变自动降为半透明蒙版，背景图透出 —— 亮色蒙白、暗色蒙深，
- *   文字对比度由对应色板的字色保证；
- * - [bgVersion]：背景图内容版本号（每次更换 +1，驱动重新解码）。
+ *   背景全透明（v6.5 全层穿透），背景图从最底层透出；
+ * - [bgVersion]：背景图内容版本号（每次更换 +1，驱动重新解码）；
+ * - [bgLuminance]：v6.5 背景图平均亮度（0..1；-1 = 无背景图/未算出）。
+ *   解码后由 LinBoxShell 采样写入（16x16 缩略图加权平均），驱动字体
+ *   自动高亮 —— 背景亮 → 深色字，背景暗 → 白字，全部界面即时重组。
  */
 object ShellThemeState {
     var dark by mutableStateOf(true)
     var customBgPath by mutableStateOf("")
     var bgVersion by mutableIntStateOf(0)
+
+    /** v6.5：背景图平均亮度（-1 = 未启用）。 */
+    var bgLuminance by mutableFloatStateOf(-1f)
+
+    /** v6.5：背景图是否偏亮（亮度阈值 0.58 —— 字体自动高亮判定）。 */
+    val bgBright: Boolean
+        get() = bgLuminance >= 0f && bgLuminance > 0.58f
 }
 
 /**
@@ -71,11 +81,7 @@ object LinShellTheme {
     private val lightBg = Color(0xFFF2F5FC)
     private val lightBgDeep = Color(0xFFE4EBFA)
 
-    /**
-     * v6.4（用户：“这些地方都没有正常透明化显示背景图片，效果应该是
-     * 高级页这样”）：自定义背景启用时页面底**全透明** —— 背景图直接
-     * 成为页面底（与高级页实测效果一致）；未启用时保持纯色底。
-     */
+    /** 页面背景（纯色；v6.5 自定义背景启用时完全透明 —— 背景全层穿透）。 */
     val bg: Color
         get() = when {
             ShellThemeState.customBgPath.isNotBlank() -> Color.Transparent
@@ -83,7 +89,7 @@ object LinShellTheme {
             else -> lightBg
         }
 
-    /** 页面背景渐变底端（自定义背景启用时同样全透明）。 */
+    /** 页面背景渐变底端（同上，穿透时透明）。 */
     val bgDeep: Color
         get() = when {
             ShellThemeState.customBgPath.isNotBlank() -> Color.Transparent
@@ -91,44 +97,60 @@ object LinShellTheme {
             else -> lightBgDeep
         }
 
-    /**
-     * 玻璃卡底（半透明）。
-     * v6.4：自定义背景启用时改为深色玻璃（约 70% 不透明度）—— 设置页
-     * 列表行/容器编辑表单等从旧的不透明白板变为透光玻璃，背景图透出，
-     * 文字仍可读（暗色白字 / 亮色深字由字色保证）。
-     */
+    /** 玻璃卡底（半透明；背景图上按亮度自适应：亮图白玻璃 / 暗图深玻璃）。 */
     val card: Color
-        get() = if (ShellThemeState.dark) Color(0x0FFFFFFF) else Color(0xB8FFFFFF)
+        get() = when {
+            ShellThemeState.customBgPath.isNotBlank() ->
+                if (ShellThemeState.bgBright) Color(0x5AFFFFFF) else Color(0x42101828)
+            ShellThemeState.dark -> Color(0x0FFFFFFF)
+            else -> Color(0xB8FFFFFF)
+        }
 
-    /** 玻璃卡描边。 */
+    /** 玻璃卡描边（背景图上自适应）。 */
     val cardBorder: Color
-        get() = if (ShellThemeState.dark) Color(0x1FFFFFFF) else Color(0x331C2340)
+        get() = when {
+            ShellThemeState.customBgPath.isNotBlank() ->
+                if (ShellThemeState.bgBright) Color(0x66FFFFFF) else Color(0x3D10E0FF)
+            ShellThemeState.dark -> Color(0x1FFFFFFF)
+            else -> Color(0x331C2340)
+        }
 
-    /**
-     * 高一级 surface（列表行 / 表单区 / 弹窗底）。
-     * v6.4：自定义背景启用时降为半透玻璃（暗色 70% / 亮色 90%）——
-     * 设置页、容器列表、编辑表单的行卡片透出背景图（旧版不透明
-     * 全遮 = “没有正常透明化”的直接根因）；未启用时保持不透明。
-     */
+    /** 高一级 surface（弹窗 / 窗口底，接近不透明 —— 内容可读性优先，
+     *  背景图上仅留 ~8% 透出）。 */
     val surface: Color
         get() = when {
             ShellThemeState.customBgPath.isNotBlank() ->
-                if (ShellThemeState.dark) Color(0xB31A2236) else Color(0xE6F7F9FE)
+                if (ShellThemeState.bgBright) Color(0xEFF5F8FE) else Color(0xEF12182B)
             ShellThemeState.dark -> Color(0xFF161D33)
             else -> Color(0xFFF7F9FE)
         }
 
     /** surface 描边。 */
     val surfaceBorder: Color
-        get() = if (ShellThemeState.dark) Color(0x24FFFFFF) else Color(0x241C2340)
+        get() = when {
+            ShellThemeState.customBgPath.isNotBlank() ->
+                if (ShellThemeState.bgBright) Color(0x331C2340) else Color(0x2EFFFFFF)
+            ShellThemeState.dark -> Color(0x24FFFFFF)
+            else -> Color(0x241C2340)
+        }
 
-    /** 主文本（暗色 = 白 / 亮色 = 深藏青）。 */
+    /** 主文本（v6.5 字体自动高亮：暗色/暗图 = 白，亮色/亮图 = 深藏青）。 */
     val textPrimary: Color
-        get() = if (ShellThemeState.dark) Color.White else Color(0xFF1C2340)
+        get() = when {
+            ShellThemeState.customBgPath.isNotBlank() ->
+                if (ShellThemeState.bgBright) Color(0xFF16203C) else Color.White
+            ShellThemeState.dark -> Color.White
+            else -> Color(0xFF1C2340)
+        }
 
-    /** 次级文本。 */
+    /** 次级文本（同步自适应）。 */
     val textSecondary: Color
-        get() = if (ShellThemeState.dark) Color(0x99FFFFFF) else Color(0xFF5A6480)
+        get() = when {
+            ShellThemeState.customBgPath.isNotBlank() ->
+                if (ShellThemeState.bgBright) Color(0xFF44506E) else Color(0xB3FFFFFF)
+            ShellThemeState.dark -> Color(0x99FFFFFF)
+            else -> Color(0xFF5A6480)
+        }
 
     /** 品牌蓝（按钮 / 选中态 / 强调）。 */
     val blue = Color(0xFF4E7CFF)

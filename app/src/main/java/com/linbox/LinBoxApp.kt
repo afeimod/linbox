@@ -82,24 +82,6 @@ class LinBoxApp : Application() {
         super.onCreate()
         instance = this
 
-        // v6.4：前台 Activity 跟踪（X11MiniWindow 迷你浮窗需要 decorView
-        // 宿主；与 DacApp 内部回调同款方案，提升为全局能力）。
-        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
-            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}
-            override fun onActivityStarted(activity: android.app.Activity) {}
-            override fun onActivityResumed(activity: android.app.Activity) {
-                topActivity = activity
-            }
-            override fun onActivityPaused(activity: android.app.Activity) {
-                if (topActivity === activity) topActivity = null
-            }
-            override fun onActivityStopped(activity: android.app.Activity) {}
-            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) {}
-            override fun onActivityDestroyed(activity: android.app.Activity) {
-                if (topActivity === activity) topActivity = null
-            }
-        })
-
         // v3.0 原生启动链配套（AnWind 移植）：清扫上次进程死亡遗留的
         // wine 孤儿树（wineserver / wine-preloader / 各 .exe / box64-wine）。
         // 残留的 wineserver 会让新 wine 客户端连上旧会话 ——
@@ -178,10 +160,6 @@ class LinBoxApp : Application() {
 
     companion object {
         lateinit var instance: LinBoxApp
-            private set
-
-        /** v6.4：当前前台 Activity（迷你浮窗挂 decorView 用；无前台时 null）。 */
-        @Volatile var topActivity: android.app.Activity? = null
             private set
 
         fun get(): LinBoxApp = instance

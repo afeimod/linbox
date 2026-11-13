@@ -129,14 +129,17 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
 
     // v5.0：手柄总开关（球菜单“开启手柄”需感知当前态）
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
-    // v6.4（用户：“x11小窗口开启时回主页后悬浮球里就丢失了x11的设置了，
+    // v6.6（用户：“x11小窗口开启时回主页后悬浮球里就丢失了x11的设置了，
     // 只要有x11运行就应该保持x11设置存在”）：X11 组不再只看当前页 ——
-    // X11 会话存活（全屏页 / 小窗模式）即常驻，设置随时可进。
+    // X11 会话存活（全屏页 / X11FloatWindow 浮窗 / 后台运行）即常驻，
+    // 设置随时可进（X11SettingsDialog 已挂 LinBoxShell 全局层）。
     val screenIsX11 = ShellController.screen == ShellController.Screen.X11
-    val x11SessionAlive by com.linbox.apps.x11.X11WindowController.sessionActive.collectAsState()
-    val inX11 = screenIsX11 || x11SessionAlive
-    // v6.4：小窗模式（画面在迷你浮窗）—— 决定「小窗口/恢复全屏」芯片文案
-    val x11MiniActive by com.linbox.apps.x11.X11MiniWindow.active
+    val x11ConnState by com.linbox.apps.x11.X11WindowController.state.collectAsState()
+    val x11Alive = x11ConnState != com.linbox.apps.x11.X11WindowController.State.Idle
+    val inX11 = screenIsX11 || x11Alive
+    // v6.6：浮窗形态（X11FloatWindow 全局显示层正在其他页面前方显示）
+    val x11Floating = !screenIsX11 && x11Alive &&
+        com.linbox.apps.x11.X11FloatWindow.enabled
     // v6.2：终端组仅在终端屏显示 —— 原终端独立玻璃悬浮球（GlassFab）
     // 的全部功能并入本球（用户：“终端界面的悬浮球没有集中到虚拟手柄
     // 悬浮球里，要和 x11 那样多排集合进去”）
@@ -464,7 +467,8 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                 // =====================================================
                 // v5.0：X11 组（用户：“把 x11 设置的悬浮球功能放在虚拟手柄
                 // 悬浮球里” —— 原 X11GlassFab 的全部功能并入本球；
-                // v6.4：会话存活即常驻（含小窗模式），不再限定 X11 屏）。
+                // v6.6：会话存活即常驻（含浮窗小窗/后台运行），
+                // 不再限定 X11 屏）。
                 // =====================================================
                 if (inX11) {
                     BallMenuSectionDivider()
@@ -506,15 +510,13 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                             BallChipItem(
                                 BallIconKind.FULLSCREEN,
                                 when {
-                                    // v6.4：非 X11 页（小窗/后台会话）→ 跳全屏页；
-                                    // 小窗模式先拆浮窗再进页
+                                    // v6.6：非 X11 页（浮窗/后台会话）→ 跳全屏页
                                     !screenIsX11 -> "进全屏"
                                     com.linbox.apps.x11.X11UiPrefs.fullscreen -> "退出全屏"
                                     else -> "全屏"
                                 }
                             ) {
                                 when {
-                                    x11MiniActive -> com.linbox.apps.x11.X11MiniWindow.restore()
                                     !screenIsX11 -> ShellController.showX11()
                                     else -> {
                                         val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
@@ -524,17 +526,21 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                                 }
                                 expanded = false
                             },
-                            // v6.4：小窗口模式（AnWind 式浮窗）：X11 画面迁迷你
-                            // 悬浮窗（不挡后面界面操作），回主页会话不断
+                            // v6.6：小窗口（AnWind 式浮窗，X11FloatWindow 全局
+                            // 显示层）：X11 画面悬浮在所有界面前方，窗口外
+                            // 触摸穿透；再点恢复全屏页
                             BallChipItem(
                                 BallIconKind.PIP,
-                                if (x11MiniActive) "恢复全屏" else "小窗口",
-                                enabled = screenIsX11 || x11MiniActive
+                                if (x11Floating) "恢复全屏" else "小窗口",
+                                enabled = x11Alive
                             ) {
-                                if (x11MiniActive) {
-                                    com.linbox.apps.x11.X11MiniWindow.restore()
-                                } else if (screenIsX11) {
-                                    com.linbox.apps.x11.X11MiniWindow.enable()
+                                if (x11Floating) {
+                                    ShellController.showX11()
+                                } else {
+                                    com.linbox.apps.x11.X11FloatWindow.setEnabled(
+                                        context.applicationContext, true
+                                    )
+                                    if (screenIsX11) ShellController.showHome()
                                 }
                                 expanded = false
                             },
@@ -1073,7 +1079,7 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) 
                 drawLine(tint, Offset(11f * u, 15.0f * u), Offset(11f * u, 17.4f * u), s.width)
                 drawLine(tint, Offset(7.2f * u, 17.4f * u), Offset(14.8f * u, 17.4f * u), s.width)
             }
-            // v6.4 小窗口：大窗 + 右下角悬浮小窗（画中画）
+            // v6.6 小窗口：大窗 + 右下角悬浮小窗（画中画）
             BallIconKind.PIP -> {
                 drawRoundRect(
                     color = tint,

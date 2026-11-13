@@ -8,12 +8,33 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.linbox.core.shell.ShellController
 import com.termux.x11.ICmdEntryInterface
 import com.termux.x11.LoriePreferences
 import com.termux.x11.LorieView
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * v6.5：X11 全局显示层状态（供壳层其它覆盖层感知，避免循环依赖）。
+ *
+ * - [layerActive]：X11DisplayLayer 正在组合（全屏页或小窗浮窗任一形态）。
+ *   全局手柄覆盖层（GamepadOverlay）据此让位 —— 小窗模式下 X11 画面
+ *   不占整屏，但手柄仍由 X11TouchSplitLayout 内的 Compose 宿主全屏
+ *   渲染（View 层分流），全局层必须退场防双渲染。
+ * - [fullscreenActive]：当前处于全屏形态（X11 页或浮窗一键全屏）。
+ *   PerfGovernor 据此静止主界面周期刷新（把大核让给 wine/box64）。
+ */
+object X11DisplayState {
+    /** X11 显示层正在组合（全屏或小窗）。 */
+    var layerActive by mutableStateOf(false)
+
+    /** X11 显示层处于全屏形态（游戏会话独占，主界面刷新静止）。 */
+    var fullscreenActive by mutableStateOf(false)
+}
 
 /**
  * v2.22.2 fix9.6：X11 显示端连接中枢。
@@ -30,14 +51,6 @@ import kotlinx.coroutines.flow.StateFlow
  * 4. 会话抑制：用户主动退出 X11 界面后，同一 X server 进程的后续
  *    重播不再自动跳转（以 binder 身份区分会话）；新的 X server
  *    进程 = 新 binder = 新会话，重新自动跳转。
- *
- * v6.4（用户：“x11小窗口开启时回主页后悬浮球里就丢失了x11的设置了，
- * 只要有x11运行就应该保持x11设置存在”）：
- * - [sessionActive]：可观察的“X11 会话存活”标志 —— 悬浮球 X11 快捷组
- *   不再只看当前页是否是 X11，而是会话存活就常驻（全屏页 / 小窗模式均算）；
- * - [miniMode]：小窗模式标志 —— 开启期间广播重播不再拉人回全屏页，
- *   画面由 X11MiniWindow 的迷你浮窗承接（decorView 悬浮窗，不挡后面
- *   界面操作）；restore() 时置回 false 恢复自动跳转。
  *
  * 与 com.termux.x11.MainActivity（兼容用全屏 Activity）互不抢占：广播
  * 只在本对象与该 Activity 的动态接收器之间并行分发，谁先取用 fd 谁渲染。
@@ -59,17 +72,6 @@ object X11WindowController {
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
-
-    /** v6.4：X11 会话是否存活（悬浮球 X11 组常驻依据，可观察）。 */
-    private val _sessionActive = MutableStateFlow(false)
-    val sessionActive: StateFlow<Boolean> = _sessionActive
-
-    private val _miniMode = MutableStateFlow(false)
-
-    /** v6.4：小窗模式（画面由 X11MiniWindow 迷你浮窗承接，不自动跳全屏页）。 */
-    var miniMode: Boolean
-        get() = _miniMode.value
-        set(value) { _miniMode.value = value }
 
     @Volatile private var service: ICmdEntryInterface? = null
     /** 当前活跃 X server 会话（binder 身份，每进程唯一）。 */
@@ -103,29 +105,28 @@ object X11WindowController {
             return
         }
 
-        // v6.4：会话在手 → 存活标志点亮（悬浮球 X11 组常驻）。
-        _sessionActive.value = true
-
         // v2.22.4 fix11c：会话在手 → 前台常驻保活（App 进程不被冻结/杀，
         // X server 作为被绑定方优先级随之提升；会话结束后服务自停）。
         X11KeepAliveService.start(context.applicationContext)
 
         if (_state.value != State.Connected) _state.value = State.Waiting
 
-        // v6.4：小窗模式（画面在迷你浮窗）—— 广播重播不拉人回全屏页，
-        // 用户在其他界面自由操作，X11 设置仍可从悬浮球进入。
-        if (miniMode) return
-
-        if (isNewSession || _state.value == State.Waiting)
-            showX11Screen(context.applicationContext)
+        if (isNewSession || _state.value == State.Waiting) {
+            // v6.5 小窗模式：不跳页 —— 全局显示层（X11DisplayLayer，挂在
+            // LinBoxShell）随会话状态在当前界面前方亮出浮窗；用户可在
+            // 主页/游戏库等任意页面边看画面边操作底层界面（浮窗外触摸
+            // 全部穿透）。小窗关闭（默认）时才自动跳转 X11 全屏页。
+            X11FloatWindow.initIfNeed(context.applicationContext)
+            if (!X11FloatWindow.enabled) {
+                showX11Screen(context.applicationContext)
+            }
+        }
     }
 
     /** 主动入口（常驻服务通知按钮等）：跳转 X11 全屏界面。 */
     fun openWindow(context: Context) {
         // 主动打开时不设会话抑制 —— 用户明确想要进入界面。
         suppressedBinder = null
-        // v6.4：从通知/悬浮球主动进入全屏 = 退出小窗模式（画面迁回全屏页）。
-        miniMode = false
         showX11Screen(context.applicationContext)
     }
 
@@ -169,7 +170,6 @@ object X11WindowController {
                     sessionBinder = null
                     service = null
                 }
-                _sessionActive.value = false
                 _state.value = State.Idle
                 return
             }
@@ -199,38 +199,33 @@ object X11WindowController {
     }
 
     /**
+     * v6.5：用户关闭小窗 —— 终止显示（配合 X11Session.killWine 结束会话）。
+     *
+     * 断开渲染连接（X server 端 renderer client 释放，恢复每秒广播）、
+     * 抑制本会话自动弹窗、状态归 Idle（X11DisplayLayer 随之退场）。
+     */
+    fun closeSession() {
+        connectGeneration++
+        suppressedBinder = sessionBinder
+        if (LorieView.connected())
+            LorieView.connect(-1)
+        _state.value = State.Idle
+    }
+
+    /**
      * 视图分离/退出 X11 界面：断开渲染连接（X server 端 renderer client
      * 释放，恢复每秒广播以便下次快速重连）并使重试循环失效。
      * [userClosed]=true 时抑制当前会话的自动跳转。
-     *
-     * v6.4：[userClosed]=false 且会话仍在（小窗模式切换 / 迷你浮窗接管）
-     * 时保持 sessionActive=true —— 悬浮球 X11 快捷组持续可见，
-     * mini 浮窗随后经 connectLorieView 重新取 fd 续上画面。
      */
     fun detachView(userClosed: Boolean) {
         connectGeneration++
         if (userClosed) {
             suppressedBinder = sessionBinder
-            // 用户主动关闭全屏页且未开小窗 → 会话视为结束（X11 组退场）。
-            if (!miniMode) _sessionActive.value = false
-        } else {
-            // v6.4：会话延续（小窗接管 / 恢复全屏）—— 解除抑制让广播
-            // 重播正常流动（维持 sessionActive 刷新），且明确点亮存活标志
-            //（否则从“关闭后又重进”的抑制会话切小窗时，广播早退会把
-            // 悬浮球 X11 组意外熄灭）。
-            suppressedBinder = null
-            if (sessionBinder != null) _sessionActive.value = true
         }
         if (LorieView.connected())
             LorieView.connect(-1)
         if (_state.value != State.Idle)
             _state.value = if (sessionBinder != null) State.Waiting else State.Idle
-    }
-
-    /** v6.4：会话彻底结束（迷你浮窗关闭/会话死亡）时外部满血复位。 */
-    fun markSessionEnded() {
-        _sessionActive.value = false
-        miniMode = false
     }
 
     /** 当前是否有活跃会话（供等待页展示提示）。 */

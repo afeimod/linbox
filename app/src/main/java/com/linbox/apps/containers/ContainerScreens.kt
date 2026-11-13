@@ -181,11 +181,11 @@ private object GuanliColors {
     // 旧版是写死的暗色 —— 亮色主题下 info（60% 白）说明文字直接隐身、
     // toolbar/深色芯片在浅底上突兀，即“很多显示不出来”的直接根因。
     //
-    // v6.4（用户：“这些地方都没有正常透明化显示背景图片，效果应该是
+    // v6.6（用户：“这些地方都没有正常透明化显示背景图片，效果应该是
     // 高级页这样”）：自定义背景启用时 toolbar/panelBg/chipBg 全部降为
     // 半透玻璃 —— 容器列表/编辑表单的行与面板透出背景图（旧版不透明
     // 全遮 = “没有正常透明化”的直接根因）；未启用时保持不透明。
-    /** 自定义背景是否启用（v6.4 透明化并关）。 */
+    /** 自定义背景是否启用（v6.6 透明化开关）。 */
     private val bgOn: Boolean
         get() = com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()
     val toolbar: Color
@@ -225,7 +225,7 @@ private object GuanliColors {
     val listSel = Color(0x334E7CFF)        // 列表选中（蓝色 20%，亮暗通用）
     val rowAlt: Color
         get() = if (ShellThemeState.dark) Color(0x14FFFFFF) else Color(0x0A1C2340)
-    /** v6.3：中性芯片底（旧写死 0xFF243049 深藏青 —— 亮色主题下太突兀）；v6.4 背景启用时半透。 */
+    /** v6.3：中性芯片底（旧写死 0xFF243049 深藏青 —— 亮色主题下太突兀）；v6.6 背景启用时半透。 */
     val chipBg: Color
         get() = when {
             bgOn && ShellThemeState.dark -> Color(0xB3243049)
@@ -244,8 +244,8 @@ private object GuanliColors {
 
 @Composable
 private fun themeBg() = com.linbox.core.theme.LinShellTheme.bg
-// v6.4：themeCard = LinShellTheme.surface —— 自定义背景启用时已是半透玻璃
-//（AndroidShellTheme v6.4 透明化改造），容器编辑表单自动透出背景图。
+// v6.6：themeCard = LinShellTheme.surface —— 自定义背景启用时已是半透玻璃
+//（AndroidShellTheme v6.5 透明化改造），容器编辑表单自动透出背景图。
 @Composable
 private fun themeCard() = com.linbox.core.theme.LinShellTheme.surface
 @Composable
