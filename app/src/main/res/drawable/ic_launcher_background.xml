@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- v6.4 图标重制（用户："根据图一重新制作 app 图标，尽量用蓝色或者
+     其他，别太亮"）：哑光钢蓝对角渐变（左上亮 → 右下深），与
+     ic_launcher 方砖 / ic_launcher_foreground 同源同色。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <gradient android:angle="315" android:startColor="#222F45" android:endColor="#0B0F16" />
+    <gradient
+        android:angle="315"
+        android:startColor="#4A7AA2"
+        android:centerColor="#386084"
+        android:endColor="#244064" />
 </shape>

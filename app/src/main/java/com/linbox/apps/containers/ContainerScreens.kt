@@ -180,10 +180,28 @@ private object GuanliColors {
     // 跟随 ShellThemeState 亮/暗实时切换（LinShellTheme 同款模式）。
     // 旧版是写死的暗色 —— 亮色主题下 info（60% 白）说明文字直接隐身、
     // toolbar/深色芯片在浅底上突兀，即“很多显示不出来”的直接根因。
+    //
+    // v6.4（用户：“这些地方都没有正常透明化显示背景图片，效果应该是
+    // 高级页这样”）：自定义背景启用时 toolbar/panelBg/chipBg 全部降为
+    // 半透玻璃 —— 容器列表/编辑表单的行与面板透出背景图（旧版不透明
+    // 全遮 = “没有正常透明化”的直接根因）；未启用时保持不透明。
+    /** 自定义背景是否启用（v6.4 透明化并关）。 */
+    private val bgOn: Boolean
+        get() = com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank()
     val toolbar: Color
-        get() = if (ShellThemeState.dark) Color(0xFF161D33) else Color(0xFFE8EEFB)
+        get() = when {
+            bgOn && ShellThemeState.dark -> Color(0xB3161D33)
+            bgOn -> Color(0xE6E8EEFB)
+            ShellThemeState.dark -> Color(0xFF161D33)
+            else -> Color(0xFFE8EEFB)
+        }
     val toolbarHover: Color
-        get() = if (ShellThemeState.dark) Color(0xFF1F2841) else Color(0xFFD9E4F8)
+        get() = when {
+            bgOn && ShellThemeState.dark -> Color(0xBF1F2841)
+            bgOn -> Color(0xE6D9E4F8)
+            ShellThemeState.dark -> Color(0xFF1F2841)
+            else -> Color(0xFFD9E4F8)
+        }
     val accent: Color = Color(0xFF4E7CFF)         // 主蓝（LinShellTheme.blue，亮暗通用）
     val accentDark = Color(0xFF3D66E0)
     val accentPressed = Color(0xFF2F51B8)
@@ -198,13 +216,23 @@ private object GuanliColors {
     val info: Color
         get() = if (ShellThemeState.dark) Color(0x99FFFFFF) else Color(0xFF5A6480)
     val panelBg: Color
-        get() = if (ShellThemeState.dark) Color(0xFF0F1424) else Color(0xFFF2F5FC)
+        get() = when {
+            bgOn && ShellThemeState.dark -> Color(0x8C0F1424)
+            bgOn -> Color(0xB3F2F5FC)
+            ShellThemeState.dark -> Color(0xFF0F1424)
+            else -> Color(0xFFF2F5FC)
+        }
     val listSel = Color(0x334E7CFF)        // 列表选中（蓝色 20%，亮暗通用）
     val rowAlt: Color
         get() = if (ShellThemeState.dark) Color(0x14FFFFFF) else Color(0x0A1C2340)
-    /** v6.3：中性芯片底（旧写死 0xFF243049 深藏青 —— 亮色主题下太突兀）。 */
+    /** v6.3：中性芯片底（旧写死 0xFF243049 深藏青 —— 亮色主题下太突兀）；v6.4 背景启用时半透。 */
     val chipBg: Color
-        get() = if (ShellThemeState.dark) Color(0xFF243049) else Color(0xFFDFE8F8)
+        get() = when {
+            bgOn && ShellThemeState.dark -> Color(0xB3243049)
+            bgOn -> Color(0xE6DFE8F8)
+            ShellThemeState.dark -> Color(0xFF243049)
+            else -> Color(0xFFDFE8F8)
+        }
     /** v6.3：toolbar 底上的文字色（暗=白 / 亮=深藏青）。 */
     val onToolbar: Color
         get() = if (ShellThemeState.dark) Color.White else Color(0xFF1C2340)
@@ -216,6 +244,8 @@ private object GuanliColors {
 
 @Composable
 private fun themeBg() = com.linbox.core.theme.LinShellTheme.bg
+// v6.4：themeCard = LinShellTheme.surface —— 自定义背景启用时已是半透玻璃
+//（AndroidShellTheme v6.4 透明化改造），容器编辑表单自动透出背景图。
 @Composable
 private fun themeCard() = com.linbox.core.theme.LinShellTheme.surface
 @Composable

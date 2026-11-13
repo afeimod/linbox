@@ -256,6 +256,9 @@ private fun ContainerListScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(
+                // v6.4：底端色改随主题（自定义背景启用时 bg/bgDeep 全透明，
+                // 背景图透出 —— 旧写死 0xFF0B0F1C 不透明底是容器页“没有
+                // 正常透明化”的直接根因）
                 Brush.verticalGradient(listOf(LinShellTheme.bg, LinShellTheme.bgDeep))
             )
     ) {
@@ -639,14 +642,10 @@ private fun ContainerActionsSheet(
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    // v6.4（用户：“长按容器时调出的菜单没有根据主题来”）：底部弹层底色
-    // 原为写死深藏青（0xF2172030）—— 亮色主题下整张菜单仍是暗色，且
-    // 菜单项文字用主题色（亮色 = 深藏青）叠在深底上直接不可读。改为
-    // LinShellTheme.surface/scrim 动态取色，亮暗主题均与页面一致。
     Box(
         Modifier
             .fillMaxSize()
-            .background(LinShellTheme.scrim)
+            .background(Color(0x66000000))
             .clickable { onDismiss() }
     ) {
         Column(
@@ -655,8 +654,9 @@ private fun ContainerActionsSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 10.dp)
                 .clip(RoundedCornerShape(22.dp))
-                .background(LinShellTheme.surface.copy(alpha = 0.98f))
-                .border(1.dp, LinShellTheme.surfaceBorder, RoundedCornerShape(22.dp))
+                // v6.4：底部操作单 95% → 88% 半透（背景图隐约透出）
+                .background(Color(0xE0172030))
+                .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(22.dp))
                 .clickable(enabled = false) { /* 拦截穿透 */ }
                 .padding(vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -861,7 +861,8 @@ internal fun PrefixBuildCard(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF16233A))
+            // v6.4：进度卡改随主题 surface（自定义背景时半透玻璃）
+            .background(LinShellTheme.surface)
             .border(1.dp, LinShellTheme.blue.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
@@ -936,7 +937,8 @@ internal fun PrefixBuildCard(
                     .padding(top = 10.dp)
                     .heightIn(max = 220.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xE60D1420))
+                    // v6.4：日志面板 90% → 85% 半透
+                    .background(Color(0xD90D1420))
                     .verticalScroll(rememberScrollState())
                     .padding(10.dp)
             ) {
@@ -972,9 +974,6 @@ private fun inferPrefixStage(log: String): String {
     }
     return "准备环境"
 }
-
-// v6.4：X11 页前缀构建悬浮卡复用阶段推断（apps.x11 → shellui 跨包共享）
-internal fun prefixStageOf(log: String): String = inferPrefixStage(log)
 
 /** [com.linbox.apps.filemanager.FilePickBus] 的 Compose 封装：组合期内监听文件选择回投。 */
 @Composable

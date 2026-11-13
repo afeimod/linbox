@@ -88,12 +88,20 @@ class X11KeepAliveService : Service() {
         when (intent?.action) {
             ACTION_OPEN_SETTINGS -> {
                 bringAppToFront()
-                X11WindowController.openWindow(this)
-                X11SettingsBridge.requestShow()
+                // v6.4：小窗模式 —— 设置面板已在壳层全局渲染，原地弹出
+                //（不强制跳全屏页打断当前操作）；其余情况跳全屏页再弹。
+                if (X11WindowController.miniMode) {
+                    X11SettingsBridge.requestShow()
+                } else {
+                    X11WindowController.openWindow(this)
+                    X11SettingsBridge.requestShow()
+                }
             }
             ACTION_OPEN_WINDOW -> {
                 bringAppToFront()
-                X11WindowController.openWindow(this)
+                // v6.4：小窗模式 —— "回到 X11" 即恢复全屏（拆浮窗进页）。
+                if (X11WindowController.miniMode) X11MiniWindow.restore()
+                else X11WindowController.openWindow(this)
             }
         }
         return START_STICKY

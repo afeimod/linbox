@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -128,8 +129,14 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
 
     // v5.0：手柄总开关（球菜单“开启手柄”需感知当前态）
     val gamepadEnabled by app.settingsStore.gamepadEnabled.collectAsState(initial = false)
-    // v5.0：X11 组仅在 X11 屏显示（原 X11GlassFab 功能全部并入本球）
-    val inX11 = ShellController.screen == ShellController.Screen.X11
+    // v6.4（用户：“x11小窗口开启时回主页后悬浮球里就丢失了x11的设置了，
+    // 只要有x11运行就应该保持x11设置存在”）：X11 组不再只看当前页 ——
+    // X11 会话存活（全屏页 / 小窗模式）即常驻，设置随时可进。
+    val screenIsX11 = ShellController.screen == ShellController.Screen.X11
+    val x11SessionAlive by com.linbox.apps.x11.X11WindowController.sessionActive.collectAsState()
+    val inX11 = screenIsX11 || x11SessionAlive
+    // v6.4：小窗模式（画面在迷你浮窗）—— 决定「小窗口/恢复全屏」芯片文案
+    val x11MiniActive by com.linbox.apps.x11.X11MiniWindow.active
     // v6.2：终端组仅在终端屏显示 —— 原终端独立玻璃悬浮球（GlassFab）
     // 的全部功能并入本球（用户：“终端界面的悬浮球没有集中到虚拟手柄
     // 悬浮球里，要和 x11 那样多排集合进去”）
@@ -456,8 +463,8 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
 
                 // =====================================================
                 // v5.0：X11 组（用户：“把 x11 设置的悬浮球功能放在虚拟手柄
-                // 悬浮球里” —— 原 X11GlassFab 的全部功能并入本球，仅 X11
-                // 屏显示；修复双悬浮球并存不统一的问题）。
+                // 悬浮球里” —— 原 X11GlassFab 的全部功能并入本球；
+                // v6.4：会话存活即常驻（含小窗模式），不再限定 X11 屏）。
                 // =====================================================
                 if (inX11) {
                     BallMenuSectionDivider()
@@ -498,11 +505,37 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                             },
                             BallChipItem(
                                 BallIconKind.FULLSCREEN,
-                                if (com.linbox.apps.x11.X11UiPrefs.fullscreen) "退出全屏" else "全屏"
+                                when {
+                                    // v6.4：非 X11 页（小窗/后台会话）→ 跳全屏页；
+                                    // 小窗模式先拆浮窗再进页
+                                    !screenIsX11 -> "进全屏"
+                                    com.linbox.apps.x11.X11UiPrefs.fullscreen -> "退出全屏"
+                                    else -> "全屏"
+                                }
                             ) {
-                                val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
-                                com.linbox.apps.x11.X11UiPrefs.fullscreen = v
-                                com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
+                                when {
+                                    x11MiniActive -> com.linbox.apps.x11.X11MiniWindow.restore()
+                                    !screenIsX11 -> ShellController.showX11()
+                                    else -> {
+                                        val v = !com.linbox.apps.x11.X11UiPrefs.fullscreen
+                                        com.linbox.apps.x11.X11UiPrefs.fullscreen = v
+                                        com.termux.x11.LoriePreferences.prefs?.fullscreen?.put(v)
+                                    }
+                                }
+                                expanded = false
+                            },
+                            // v6.4：小窗口模式（AnWind 式浮窗）：X11 画面迁迷你
+                            // 悬浮窗（不挡后面界面操作），回主页会话不断
+                            BallChipItem(
+                                BallIconKind.PIP,
+                                if (x11MiniActive) "恢复全屏" else "小窗口",
+                                enabled = screenIsX11 || x11MiniActive
+                            ) {
+                                if (x11MiniActive) {
+                                    com.linbox.apps.x11.X11MiniWindow.restore()
+                                } else if (screenIsX11) {
+                                    com.linbox.apps.x11.X11MiniWindow.enable()
+                                }
                                 expanded = false
                             },
                             BallChipItem(BallIconKind.FSGAME, "游戏全屏") {
@@ -763,7 +796,7 @@ private fun X11QuickChip(
 private enum class BallIconKind {
     GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE,
     KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME,
-    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY
+    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY, PIP
 }
 
 /** 图标配色（危险项统一红系；v6.2 增终端组七枚）。 */
@@ -788,6 +821,7 @@ private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF
     BallIconKind.SYMBOL -> Color(0xFFC7A6FF)
     BallIconKind.X11 -> Color(0xFF6BD4FF)
     BallIconKind.DISPLAY -> Color(0xFF7FE8DC)
+    BallIconKind.PIP -> Color(0xFF8FB7FF)
 }
 
 /**
@@ -1038,6 +1072,23 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) 
                 drawLine(tint, Offset(8.4f * u, 15.0f * u), Offset(13.6f * u, 15.0f * u), s.width)
                 drawLine(tint, Offset(11f * u, 15.0f * u), Offset(11f * u, 17.4f * u), s.width)
                 drawLine(tint, Offset(7.2f * u, 17.4f * u), Offset(14.8f * u, 17.4f * u), s.width)
+            }
+            // v6.4 小窗口：大窗 + 右下角悬浮小窗（画中画）
+            BallIconKind.PIP -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(3.2f * u, 4.4f * u),
+                    size = Size(15.6f * u, 11.2f * u),
+                    cornerRadius = CornerRadius(1.8f * u, 1.8f * u),
+                    style = s
+                )
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(12.2f * u, 11.6f * u),
+                    size = Size(6.4f * u, 5.2f * u),
+                    cornerRadius = CornerRadius(1.2f * u, 1.2f * u),
+                    style = Fill
+                )
             }
         }
     }
