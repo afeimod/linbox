@@ -175,6 +175,10 @@ object X11WindowController {
             }
 
             try {
+                // v6.8（更新 X11 / libXlorie 对齐 winemu 新版）：直拉
+                // getXConnection —— 上游 MainActivity.tryConnect 同款
+                //（service 在手时直接取 fd，requestConnection 仅用于
+                // service 丢失时请求重播广播，与本流程无关）。
                 val pfd: ParcelFileDescriptor? = svc.xConnection
                 if (pfd == null) {
                     // X server 侧尚未就绪（例如刚启动）——稍后重试。

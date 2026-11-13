@@ -655,10 +655,11 @@ private fun ContainerActionsSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 10.dp)
                 .clip(RoundedCornerShape(22.dp))
-                // v6.7（用户："没有修复设置背景时的透明效果"）：长按操作
-                // 面板同步玻璃化（0.98 近不透明 → 0.86 半透），背景图从
-                // 面板下方透出；文字色随主题/背景亮度自适应仍可读。
-                .background(LinShellTheme.surface.copy(alpha = 0.86f))
+                // v6.8（用户："没有修复透明度…是所有菜单处都没有透明"）：
+                // 面板底色直接用 LinShellTheme.surface —— 自定义背景启用时
+                // 已是 80% 半透玻璃（v6.8 AndroidShellTheme 同步下调），背景
+                // 图明显透出；不再叠加 0.86 不透明度覆盖。
+                .background(LinShellTheme.surface)
                 .border(1.dp, LinShellTheme.cardBorder, RoundedCornerShape(22.dp))
                 .clickable(enabled = false) { /* 拦截穿透 */ }
                 .padding(vertical = 8.dp),
@@ -941,8 +942,12 @@ internal fun PrefixBuildCard(
                     .padding(top = 10.dp)
                     .heightIn(max = 220.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    // v6.6：日志面板 90% → 85% 半透（背景图隐约透出）
-                    .background(Color(0xD90D1420))
+                    // v6.8：日志面板同步半透（背景图隐约透出，与全局一致）
+                    .background(
+                        if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                            Color(0xB30D1420)
+                        else Color(0xD90D1420)
+                    )
                     .verticalScroll(rememberScrollState())
                     .padding(10.dp)
             ) {
@@ -1275,7 +1280,13 @@ private fun ContainerEditorScreen() {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color(0xE60D1420))
+                // v6.8：保存条随主题玻璃化 —— 自定义背景启用时用半透 surface
+                //（背景图透出，与页面/菜单一致）；无背景时保持原深色底。
+                .background(
+                    if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                        LinShellTheme.surface
+                    else Color(0xE60D1420)
+                )
                 .padding(horizontal = 16.dp, vertical = 10.dp)
         ) {
             Button(

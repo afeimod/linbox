@@ -156,7 +156,12 @@ fun GamepadSettingsWindow(modifier: Modifier = Modifier) {
                 }
                 .shadow(12.dp, RoundedCornerShape(16.dp))
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xF0162030))
+                // v6.8：自定义背景启用时半透玻璃（背景图透出，全局一致）
+                .background(
+                    if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                        Color(0xCC162030)
+                    else Color(0xF0162030)
+                )
                 .border(1.dp, Color(0x592DD4BF), RoundedCornerShape(16.dp))
         ) {
             GpSettingsHeader(
@@ -617,7 +622,12 @@ private fun ActionPickerSheet(
                 .fillMaxWidth()
                 .heightIn(max = 460.dp)
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xF0162030))
+                // v6.8：自定义背景启用时半透玻璃（背景图透出，全局一致）
+                .background(
+                    if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                        Color(0xCC162030)
+                    else Color(0xF0162030)
+                )
                 .border(1.dp, Color(0x592DD4BF), RoundedCornerShape(16.dp))
                 .clickable(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },

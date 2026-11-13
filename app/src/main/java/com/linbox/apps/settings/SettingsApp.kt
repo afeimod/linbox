@@ -54,8 +54,10 @@ import com.linbox.LinBoxApp
 import com.linbox.apps.terminal.TerminalKeepAliveService
 import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.shell.ShellController
+import com.linbox.core.shell.ShellController.Screen
 import com.linbox.core.theme.LinShellTheme
 import com.linbox.core.theme.LocalWinTheme
+import com.linbox.shellui.ShellBottomBar
 import com.linbox.util.L
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -115,7 +117,11 @@ private fun SettingsContent() {
     ) {
         when (route) {
             SettingsRoute.Keyboard -> {
-                KeyboardSettingsPage(onBack = { route = SettingsRoute.Home })
+                // v6.8：占满剩余高度（底部导航常驻后键盘子页内容不被
+                // 顶出屏幕；子页自身不带滚动 —— 嵌套滚动会崩）
+                Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    KeyboardSettingsPage(onBack = { route = SettingsRoute.Home })
+                }
             }
             SettingsRoute.Home -> {
                 // ===== 安卓 app bar =====
@@ -161,6 +167,11 @@ private fun SettingsContent() {
                 }
             }
         }
+
+        // ===== 底部导航（v6.8：用户“主页设置处点击后下方五个按钮就消失了，
+        //      不应该这样的” —— 设置是底部导航目的地，进入设置页后五个
+        //      按钮常驻（与主页/游戏库/高级页同款），不再消失） =====
+        ShellBottomBar(current = Screen.SETTINGS)
     }
 }
 

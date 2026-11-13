@@ -115,12 +115,20 @@ object LinShellTheme {
             else -> Color(0x331C2340)
         }
 
-    /** 高一级 surface（弹窗 / 窗口底，接近不透明 —— 内容可读性优先，
-     *  背景图上仅留 ~8% 透出）。 */
+    /**
+     * 高一级 surface（弹窗 / 窗口底 / 菜单）。
+     *
+     * v6.8（用户："包括长按容器调出菜单以及编辑容器和新建容器的所有
+     * 菜单处都没有透明，是所有"）：自定义背景启用时从 ~94% 不透明降为
+     * 80% 半透玻璃 —— 背景图从所有菜单（长按操作面板 / 容器编辑表单
+     * 分组卡 / M3 弹窗 / 浮动窗口）下方明显透出，与页面卡片同款玻璃
+     * 观感；文字色随主题/背景亮度自适应保证可读。未启用背景时保持
+     * 不透明。
+     */
     val surface: Color
         get() = when {
             ShellThemeState.customBgPath.isNotBlank() ->
-                if (ShellThemeState.bgBright) Color(0xEFF5F8FE) else Color(0xEF12182B)
+                if (ShellThemeState.bgBright) Color(0xD5F5F8FE) else Color(0xCC12182B)
             ShellThemeState.dark -> Color(0xFF161D33)
             else -> Color(0xFFF7F9FE)
         }
@@ -190,7 +198,19 @@ fun LinBoxMaterialTheme(content: @Composable () -> Unit) {
             onSurface = LinShellTheme.textPrimary,
             onSurfaceVariant = LinShellTheme.textSecondary,
             outline = LinShellTheme.textSecondary,
-            scrim = LinShellTheme.scrim
+            scrim = LinShellTheme.scrim,
+            // v6.8：M3 1.2+ 新增 surface 容器角色（AlertDialog 默认容器 =
+            // surfaceContainerHigh，DropdownMenu/ExposedDropdownMenu 用
+            // surfaceContainer 等）—— 全部同步 LinShellTheme.surface：
+            // 自定义背景启用时所有 M3 弹窗/菜单与手写菜单同款半透玻璃，
+            // 背景图全层透出（用户：“是所有菜单处都没有透明，是所有”）
+            surfaceDim = LinShellTheme.surface,
+            surfaceBright = LinShellTheme.surface,
+            surfaceContainerLowest = LinShellTheme.surface,
+            surfaceContainerLow = LinShellTheme.surface,
+            surfaceContainer = LinShellTheme.surface,
+            surfaceContainerHigh = LinShellTheme.surface,
+            surfaceContainerHighest = LinShellTheme.surface
         )
     } else {
         lightColorScheme(
@@ -203,7 +223,15 @@ fun LinBoxMaterialTheme(content: @Composable () -> Unit) {
             onSurface = LinShellTheme.textPrimary,
             onSurfaceVariant = LinShellTheme.textSecondary,
             outline = Color(0xFF8A93AC),
-            scrim = LinShellTheme.scrim
+            scrim = LinShellTheme.scrim,
+            // v6.8：同上 —— M3 容器角色全部同步（亮色）
+            surfaceDim = LinShellTheme.surface,
+            surfaceBright = LinShellTheme.surface,
+            surfaceContainerLowest = LinShellTheme.surface,
+            surfaceContainerLow = LinShellTheme.surface,
+            surfaceContainer = LinShellTheme.surface,
+            surfaceContainerHigh = LinShellTheme.surface,
+            surfaceContainerHighest = LinShellTheme.surface
         )
     }
     MaterialTheme(colorScheme = scheme) { content() }

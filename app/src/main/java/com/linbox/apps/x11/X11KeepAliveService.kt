@@ -65,15 +65,37 @@ class X11KeepAliveService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 会话存活巡检：X server binder 死亡（linbox-x11-stop/被杀）→ 自停。 */
+    /**
+     * 会话存活巡检：X server binder 死亡（linbox-x11-stop/被杀）→ 自停。
+     *
+     * v6.8（用户：“x11默认前台保护”）：双路判定，防误退 ——
+     * 1. 控制器 binder 存活（主判据，语义不变）；
+     * 2. binder 判死时兜底探测 X socket（X11Support.x11SocketReady）：
+     *    v6.5 浮窗架构下控制器状态机在会话期间可能短暂回到 Idle
+     *    （广播重播/状态重置），但 X server 进程与 socket 仍在 ——
+     *    只要 socket 还在监听就继续保活，前台保护不中断；
+     *    真正的会话结束（linbox-x11-stop/进程被杀）socket 一并消失，
+     *    巡检照常自停。探测在后台线程执行（本地 socket 试连不占主线程）。
+     */
     private val sessionPoll = object : Runnable {
         override fun run() {
-            if (!X11WindowController.isSessionAlive()) {
-                Log.i(TAG, "X 会话已结束，常驻服务自动退出")
-                stopSelf()
+            if (X11WindowController.isSessionAlive()) {
+                mainHandler.postDelayed(this, 5000)
                 return
             }
-            mainHandler.postDelayed(this, 5000)
+            // binder 判死 → socket 兜底（后台线程，避免主线程试连）
+            Thread {
+                val socketAlive = runCatching {
+                    com.linbox.apps.containers.launcher.X11Support.x11SocketReady()
+                }.getOrDefault(false)
+                if (socketAlive) {
+                    Log.i(TAG, "binder 已断但 X socket 仍在监听 —— 继续前台保护")
+                    mainHandler.postDelayed(this, 5000)
+                } else {
+                    Log.i(TAG, "X 会话已结束，常驻服务自动退出")
+                    stopSelf()
+                }
+            }.start()
         }
     }
 

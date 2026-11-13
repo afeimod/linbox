@@ -318,7 +318,13 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                         .heightIn(max = menuMaxHeightDp)
                         .shadow(6.dp, RoundedCornerShape(16.dp))
                         .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xF2162434))
+                        // v6.8：自定义背景启用时菜单半透玻璃（背景图透出，
+                        // 与全局所有菜单一致）；无背景时保持原深色底
+                        .background(
+                            if (com.linbox.core.theme.ShellThemeState.customBgPath.isNotBlank())
+                                Color(0xCC162434)
+                            else Color(0xF2162434)
+                        )
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 4.dp)
                         // 菜单登记：X11 触摸剥离 + 触控板直通（见类 KDoc）

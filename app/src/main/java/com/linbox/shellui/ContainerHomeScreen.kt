@@ -24,8 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -351,7 +349,8 @@ fun ContainerHomeScreen() {
                     }
                 }
 
-                // ===== 5. 游戏库预览（v6.0：游戏快捷方式横滑行，不是容器） =====
+                // ===== 5. 游戏库预览（v6.8 重排：一行三个占满往下排，
+                //      随主页 LazyColumn 垂直滑动） =====
                 item(key = "library-header") {
                     Row(
                         modifier = Modifier
@@ -405,24 +404,35 @@ fun ContainerHomeScreen() {
                         }
                     }
                 } else {
-                    item(key = "library-row") {
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(vertical = 4.dp)
-                        ) {
-                            items(shortcuts, key = { it.id }) { g ->
-                                ShortcutCoverCard(
-                                    shortcut = g,
-                                    running = RootfsLauncher.activeSessions.containsKey(g.containerName),
-                                    onRun = { runShortcutHome(g) },
-                                    onEdit = {
-                                        // 跳游戏库页打开编辑器（编辑器状态在
-                                        // GameLibraryUiState 单例，跨页存活）
-                                        ShellController.showLibrary()
-                                        GameLibraryUiState.openEdit(g)
-                                    },
-                                    onDelete = { deleteShortcut = g }
-                                )
+                    // v6.8（用户：“主页游戏库排列不对，应该一行三个占满往下排，
+                    // 支持滑动”）：横滑 LazyRow 改为 chunked(3) 网格行 ——
+                    // 每行三张封面卡 weight(1f) 均分占满整行，行随
+                    // LazyColumn 项向下追加，垂直滑动；末行不足三张时补
+                    // 空 Spacer 占位，保证每张卡宽度一致（不被拉宽变形）。
+                    shortcuts.chunked(3).forEachIndexed { rowIndex, rowGames ->
+                        item(key = "library-row-$rowIndex") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                rowGames.forEach { g ->
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        ShortcutCoverCard(
+                                            shortcut = g,
+                                            running = RootfsLauncher.activeSessions.containsKey(g.containerName),
+                                            onRun = { runShortcutHome(g) },
+                                            onEdit = {
+                                                // 跳游戏库页打开编辑器（编辑器状态在
+                                                // GameLibraryUiState 单例，跨页存活）
+                                                ShellController.showLibrary()
+                                                GameLibraryUiState.openEdit(g)
+                                            },
+                                            onDelete = { deleteShortcut = g }
+                                        )
+                                    }
+                                }
+                                // 末行补位：不足三张时用等宽空位填满，卡片宽度恒 1/3
+                                repeat(3 - rowGames.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
                     }
@@ -688,8 +698,10 @@ private fun CurrentContainerPreviewCard(
 }
 
 /**
- * 游戏快捷方式封面卡（主页横滑行，v6.0：游戏库 = 快捷方式不是容器）。
+ * 游戏快捷方式封面卡（主页网格，v6.0：游戏库 = 快捷方式不是容器）。
  *
+ * v6.8：宽度不再固定 118dp —— 卡片填满所在网格单元（一行三个均分），
+ * 封面图区自适应宽度（高度 84dp 保持比例观感）。
  * v6.4：长按弹上下文菜单（启动 / 编辑 / 删除 / 取消，与游戏库页同款
  * 交互）；专属配置角标与游戏库页一致。
  */
@@ -714,13 +726,14 @@ internal fun ShortcutCoverCard(
 
     Column(
         modifier = Modifier
-            .width(118.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true })
     ) {
         Box(
             modifier = Modifier
-                .size(width = 118.dp, height = 80.dp)
+                .fillMaxWidth()
+                .height(84.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .then(
                     if (cardBitmap != null) Modifier
