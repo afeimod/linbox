@@ -51,7 +51,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ComposeView
@@ -2489,7 +2488,12 @@ private fun Modifier.chromeButton(minWidth: Dp, onClick: () -> Unit): Modifier =
                 var alive = true
                 while (alive) {
                     val event = awaitPointerEvent()
-                    if (event.type == PointerEventType.Cancel) break
+                    // Compose 的 PointerEventType 并无 Cancel 常量（仅 Press/
+                    // Release/Move/Drag/Scroll/Enter/Exit）。系统取消
+                    // (ACTION_CANCEL)与父级手势抢占在 Compose 中都以"变更已被
+                    // 消费"的形式送达 —— 与官方 waitForUpOrCancellation 同款
+                    // 判据：任一变更已被消费即放弃本次手势等待，不触发点击。
+                    if (event.changes.any { it.isConsumed }) break
                     val c = event.changes.firstOrNull { it.id == pid } ?: continue
                     val dx = c.position.x - sx
                     val dy = c.position.y - sy
