@@ -936,6 +936,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var pressedLeft = false
     private var downX = 0f; private var downY = 0f
     private var downAt = 0L
+    // v6.10：DOWN 事件的 MotionEvent 时间戳（eventTime）—— 轻点/长按仲裁的
+    // 唯一权威时间轴（见 ACTION_UP 处理，不受主线程调度抖动影响）
+    private var downEventTime = 0L
     private var moved = false
     // v6.9：本手势长按是否已到点 —— 轻点/长按唯一分界（原 260ms 轻点窗 +
     // 400ms 长按之间存在 260~400ms 死区：既不轻点也不长按；更慢的轻点
@@ -956,7 +959,11 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var lastTapX = -1f; private var lastTapY = -1f
     private var lastTapAt = 0L
 
-    private val slopPx = (ViewConfiguration.get(context).scaledTouchSlop * 1.5f)
+    // v6.10（用户：“短按点击还是变成了长按”）：slop 回归上游 1.0 倍 ——
+    // TapGestureDetector 用 getScaledTouchSlop() 原值判轻点 candidacy，
+    // 此前 ×1.5 令略有漂移的轻点（正常按压手指抖动 10~40px）全部判
+    // moved=true → 模拟触摸“轻点无任何反应”、触控板“点了不动光标动”。
+    private val slopPx = ViewConfiguration.get(context).scaledTouchSlop
     private val dblTapMaxMs = 450L
     private val wheelStep = 40f
 
@@ -972,7 +979,11 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     // 手势结束/滑出 slop/落下第二指即解除定时，主线程专用。
     private val mainHandler = Handler(Looper.getMainLooper())
     private val longPressRunnable = Runnable { onLongPressFired() }
-    private val longPressTimeoutMs = ViewConfiguration.getLongPressTimeout().toLong()
+    // v6.10：长按阈值加 400ms 下限 —— 部分机型无障碍“触摸与按住延迟”设为
+    // “短”（~300ms）时 getLongPressTimeout() 偏短，正常速度的短按也会被
+    // 判成长按；wine 场景统一 400ms 下限（与事件时间轴仲裁共用同一常量）。
+    private val longPressTimeoutMs =
+        ViewConfiguration.getLongPressTimeout().coerceAtLeast(400L)
 
     /** 长按定时器是否挂着（DOWN 挂起，MOVE 出 slop / 多指 / UP / CANCEL 解除）。 */
     private fun armLongPress() {
@@ -1402,6 +1413,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         if (!LorieView.connected() || screenW <= 0 || screenH <= 0) return true
         // v2.33：首次输入前补发孤儿按钮释放（卡键自愈；未卡则被 dix 丢弃）
         healOrphanButtons()
+        // v6.10：注入/鼠标流直通（上游 TouchInputHandler 的 mHMListener 同款路由）。
+        // 壳层触控板（TrackpadController）注入的合成事件（pointerId>=99 /
+        // TOOL_TYPE_MOUSE）与真外接鼠标事件不进手势状态机，按“位置+按键”
+        // 1:1 直注 X —— 修复此前“壳层触控板注入流被二次当手势”的双层叠加
+        //（注入 DOWN+UP 被桥再判轻点/长按，拖拽注入被桥换成纯光标移动等）。
+        if (isMouseLikeEvent(event)) return onMousePassthrough(event)
         // v2.31：剥离手柄元素指针（手柄未显示时零开销直通）
         val ev = filterPadPointers(event) ?: return true
         try {
@@ -1414,6 +1431,66 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         } finally {
             if (ev !== event) ev.recycle()
         }
+    }
+
+    // ---- v6.10：鼠标/注入流直通 ----
+
+    /** 注入合成流（壳层触控板，指针 id ≥ 99）或鼠标事件（真外接鼠标）
+     *  判定 —— 与上游 TouchInputHandler.handleTouchEvent 的
+     *  TOOL_TYPE_MOUSE / SOURCE_MOUSE 分流同款。 */
+    private fun isMouseLikeEvent(e: MotionEvent): Boolean {
+        if ((e.source and android.view.InputDevice.SOURCE_MOUSE) ==
+            android.view.InputDevice.SOURCE_MOUSE
+        ) return true
+        if ((e.source and android.view.InputDevice.SOURCE_MOUSE_RELATIVE) ==
+            android.view.InputDevice.SOURCE_MOUSE_RELATIVE
+        ) return true
+        for (i in 0 until e.pointerCount) {
+            if (e.getPointerId(i) >= com.linbox.core.input.INJECTED_POINTER_ID) return true
+            if (e.getToolType(i) == MotionEvent.TOOL_TYPE_MOUSE) return true
+        }
+        return false
+    }
+
+    /** 直通流当前按着的键（0 = 无）；释放时按同键抬起。 */
+    private var hmPressedButton = 0
+
+    /** 鼠标/注入流 1:1 直注 X：DOWN=定位+按下，MOVE=定位，UP=释放。 */
+    private fun onMousePassthrough(event: MotionEvent): Boolean {
+        val p = toXpx(event.x, event.y)
+        val px = p[0]
+        val py = p[1]
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val btn = when {
+                    (event.buttonState and MotionEvent.BUTTON_SECONDARY) != 0 ->
+                        InputStub.BUTTON_RIGHT
+                    (event.buttonState and MotionEvent.BUTTON_TERTIARY) != 0 ->
+                        InputStub.BUTTON_MIDDLE
+                    else -> InputStub.BUTTON_LEFT
+                }
+                hmPressedButton = btn
+                diagDowns++
+                postSend {
+                    if (LorieView.connected())
+                        view.sendMouseEvent(px, py, btn, true, false)
+                }
+            }
+            MotionEvent.ACTION_MOVE -> postSend {
+                if (LorieView.connected())
+                    view.sendMouseEvent(px, py, InputStub.BUTTON_UNDEFINED, false, false)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val btn = if (hmPressedButton != 0) hmPressedButton else InputStub.BUTTON_LEFT
+                hmPressedButton = 0
+                diagUps++
+                postSend {
+                    if (LorieView.connected())
+                        view.sendMouseEvent(px, py, btn, false, false)
+                }
+            }
+        }
+        return true
     }
 
     /**
@@ -1444,6 +1521,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 downX = event.x; downY = event.y
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
+                downEventTime = event.eventTime
                 moved = false
                 longPressFired = false
                 diagDowns++
@@ -1555,19 +1633,29 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.33.1：冲刷异步化（FIFO 保证先于按钮释放写入 X）
                 diagUps++
                 disarmLongPress()
+                // v6.10（用户：“短按点击还是变成了长按”）：轻点/长按仲裁改用
+                // MotionEvent 事件时间轴（eventTime - DOWN 的 eventTime）——
+                // wine 打满 CPU 时主线程调度抖动可能令长按定时器先于排队的
+                // UP 触发（longPressFired 误置 + 左键已按下），墙钟判据不可靠。
+                // 真实按压时长 < 长按阈值 = 轻点：长按路径的“按下+释放”
+                // 本身就是一次完整单击（位置一致），无需也不得再补 tap 注入。
+                val tapDurMs = if (downEventTime > 0) event.eventTime - downEventTime else 0L
+                val tapLike = !moved && tapDurMs < longPressTimeoutMs
+                downEventTime = 0L
                 if (pressedLeft) {
                     postFlushMoves()
                     // 长按拖拽结束：当前指针位置抬键（relative 0,0，
-                    // 不回 warp —— 拖拽中游戏 warp 循环不受扰动）
+                    // 不回 warp —— 拖拽中游戏 warp 循环不受扰动）；
+                    // 若实为轻点（tapLike），“按下+释放”即完整单击
                     sendButton(InputStub.BUTTON_LEFT, false)
                     pressedLeft = false
                 } else if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
-                    // v6.9（用户："修复模拟触摸的方式无效果"）：轻点判定去掉 260ms
+                    // v6.9（用户：“修复模拟触摸的方式无效果”）：轻点判定去掉 260ms
                     // 时间窗 —— 未滑动且长按未到点 = 轻点（定位 + 点击）；长按到点 =
                     // 按住拖拽。原 260~400ms 死区令慢速轻点完全无响应，是"模拟
-                    // 触摸无效果"的根因。
-                    if (!moved && !longPressFired) {
+                    // 触摸无效果"的根因。v6.10：叠加事件时间轴仲裁（tapLike）。
+                    if (tapLike && !longPressFired) {
                         // v6.8 轻点（上游 onTap 语义）：光标绝对定位到指尖 +
                         // 左键点击 —— 单条消息先定位后按下/抬起（对齐上游
                         // moveCursorToScreenPoint → sendMouseClick）；双击
@@ -1599,6 +1687,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
                 dropPendingMoves()
                 disarmLongPress()
+                downEventTime = 0L
                 if (pressedLeft) {
                     // CANCEL：当前位置抬键（不 warp；tap 未发生不产生点击）
                     sendButton(InputStub.BUTTON_LEFT, false)
@@ -1784,6 +1873,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 downX = event.x; downY = event.y
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
+                downEventTime = event.eventTime
                 moved = false
                 longPressFired = false
                 diagDowns++
@@ -1888,6 +1978,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 diagUps++
                 disarmLongPress()
                 if (moved) postFlushMoves()
+                // v6.10（用户：“触摸板短按点击还是变成了长按”）：轻点/长按仲裁
+                // 改用 MotionEvent 事件时间轴 —— 主线程被 wine 打满时调度抖动会令
+                // 长按定时器先于排队的 UP 触发（longPressFired 误置、左键已按下），
+                // 短按被误判为长按。真实按压时长 < 长按阈值 = 轻点；长按路径已注入
+                // 的“按下+释放”即完整单击，不重复注入 tap。
+                val tapDurMs = if (downEventTime > 0) event.eventTime - downEventTime else 0L
+                val tapLike = !moved && tapDurMs < longPressTimeoutMs
+                downEventTime = 0L
                 // v6.8：长按拖拽结束（长按到点已按下左键）→ 释放
                 if (pressedLeft) {
                     sendButton(InputStub.BUTTON_LEFT, false)
@@ -1899,7 +1997,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                     // 未滑动且长按未到点 = 轻点左键单击（默认可用，无需任何设置）；
                     // 长按到点后 = 左键按住 + 相对拖拽。原 260ms 窗与 400ms 长按
                     // 之间的死区令稍慢的轻点落入"无响应/误长按"。
-                    if (!moved && !longPressFired) {
+                    // v6.10：叠加事件时间轴仲裁（tapLike，防调度抖动误判）。
+                    if (tapLike && !longPressFired) {
                         if (tapToMove) {
                             // 轻点拖拽：轻点=按下（随后移动即拖拽），再轻点=释放
                             if (padPressed) {
@@ -1923,6 +2022,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
                 dropPendingMoves()
                 disarmLongPress()
+                downEventTime = 0L
                 if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
                 if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
                 mode = Mode.IDLE

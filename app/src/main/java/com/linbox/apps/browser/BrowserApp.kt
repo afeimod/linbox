@@ -192,7 +192,9 @@ internal fun BrowserContent(scope: WindowContentScope) {
     }
 
     // 真全屏时的返回键 → 退出全屏恢复窗口
-    //（v2.16：双击页面退出已移除，改用左上角悬浮按钮，见下方 FullscreenExitButton）
+    //（v2.16：双击页面退出已移除；v6.10（用户：“浏览器原本有个退出全屏的
+    // 按钮可以去掉了，因为悬浮球有了”）：左上角 FullscreenExitButton 已移除，
+    // 退出全屏由悬浮球「浏览器快捷 → 全屏/退出全屏」或系统返回键完成）
     BackHandler(enabled = isFullscreen) {
         toggleFullscreen()
     }
@@ -334,8 +336,9 @@ internal fun BrowserContent(scope: WindowContentScope) {
 
             // ===== 内容区 =====
             // v2.16：移除旧版“双击页面退出全屏”手势（与网页游戏的双击操作冲突、
-            // 误触率高），退出全屏改用左上角悬浮按钮（见下方 FullscreenExitButton）
-            // 或系统返回键。
+            // 误触率高）；v6.10（用户：“浏览器原本有个退出全屏的按钮可以去掉了，
+            // 因为悬浮球有了”）：左上角 FullscreenExitButton 亦已移除 ——
+            // 退出全屏由悬浮球「浏览器快捷 → 全屏/退出全屏」或系统返回键完成。
             // v2.16.2：旧版"整页 graphicsLayer 透视旋转"已移除（3D 视角旋转
             // 重做为鼠标视角模式：拖动注入鼠标事件由游戏自身转视角，见
             // View3dController；v2.16.3 参照 GameBox 重做为模拟 Pointer Lock
@@ -412,20 +415,6 @@ internal fun BrowserContent(scope: WindowContentScope) {
                 )
             }
         } // end Column
-
-        // ===== v2.16：真全屏时的悬浮退出按钮（左上角小圆钮） =====
-        // 旧版“双击页面退出全屏”已移除（与网页游戏双击操作冲突），
-        // 改由本按钮或系统返回键退出全屏。
-        // 视频全屏（DecorView 覆盖层）期间本按钮被系统覆盖层遮挡，
-        // 此时用返回键退出视频全屏。
-        if (isFullscreen) {
-            FullscreenExitButton(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 10.dp, top = 10.dp),
-                onExit = { toggleFullscreen() }
-            )
-        }
     } // end Box (browser root)
 }
 
@@ -1133,32 +1122,6 @@ private fun View3dSettingsPanel(
                 "双指捏合缩放在本模式下仍可用（先抬手再捏合）。",
             color = theme.secondaryTextColor,
             fontSize = 10.sp
-        )
-    }
-}
-
-/**
- * v2.16：真全屏时的悬浮退出按钮（左上角小圆钮，半透明不遮挡页面主体）。
- * 取代旧版"双击页面退出全屏"手势 —— 双击与网页游戏操作冲突。
- */
-@Composable
-private fun FullscreenExitButton(
-    modifier: Modifier = Modifier,
-    onExit: () -> Unit
-) {
-    Box(
-        modifier = modifier
-            .size(30.dp)
-            .background(Color.Black.copy(alpha = 0.45f), CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.35f), CircleShape)
-            .clickable(onClick = onExit),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            Icons.Default.FullscreenExit,
-            contentDescription = "退出全屏",
-            tint = Color.White.copy(alpha = 0.92f),
-            modifier = Modifier.size(16.dp)
         )
     }
 }

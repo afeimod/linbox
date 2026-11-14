@@ -139,7 +139,12 @@ object TrackpadRouter {
 
     private val touchSlopPx: Float get() = 24f * density
     private val scrollSlopPx: Float get() = 16f * density
-    private val longPressMs = 320L
+    // v6.10（用户：“触摸板短按点击还是变成了长按”）：长按阈值从固定 320ms
+    // 改为系统长按超时（默认 400ms，且加 400ms 下限）—— 320~400ms 的
+    // “稍慢轻点”此前被直接判成长按拖拽，是短按变长按的另一处来源。
+    // 对齐 X11 SmartTouchBridge 的 longPressTimeoutMs，两处手感一致。
+    private val longPressMs: Long =
+        android.view.ViewConfiguration.getLongPressTimeout().coerceAtLeast(400L)
     private val twoFingerTapMs = 450L
 
     // ===== 入口（MainActivity.dispatchTouchEvent 调用） =====

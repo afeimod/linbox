@@ -218,34 +218,11 @@ object GuanliSupport {
         wineDir: File? = null,
         log: (String) -> Unit = {}
     ): String? = runCatching {
-        val root = WineEnvironment.optRoot(wineDir)
-            ?: run {
-                // 无 rootfs 侧生态：若任何 wine 槽位自带生态（本容器槽位已随
-                // wineDir 探测过），不新建 rootfs/opt/conf —— 防把探测序 #1
-                // 翻给自己、旁路该槽位生态；运行时激活链会对正确根写入。
-                if (ContainerManager.listWines().any { w ->
-                        WineEnvironment.optRoot(File(w.dir)) != null
-                    }
-                ) {
-                    log("path.conf 同步跳过：/opt 生态位于 wine 槽位内（非 rootfs/opt），运行时激活链写入正确根")
-                    return@runCatching null
-                }
-                File(ContainerManager.ROOTFS_ROOT, "opt")
-            }
-        val confDir = File(root, "conf")
-        if (!confDir.isDirectory) confDir.mkdirs()
-        val pathConf = File(confDir, "path.conf")
-        val lines = if (pathConf.isFile) pathConf.readLines() else emptyList()
-        val newLine = if (icdPath.isNullOrBlank()) {
-            "#export VK_ICD_FILENAMES=（v3.3.18 图形驱动页管理：当前未选驱动，Vulkan loader 默认搜索）"
-        } else {
-            "export VK_ICD_FILENAMES=$icdPath"
-        }
-        val vkLine = Regex("^\\s*#?\\s*export\\s+VK_ICD_FILENAMES\\s*=")
-        val idx = lines.indexOfFirst { vkLine.containsMatchIn(it) }
-        val out = if (idx >= 0) {
-            lines.toMutableList().also { it[idx] = newLine }
-        } else {
+        // VK_ICD_FILENAMES 行的改写规则（原位替换 / 无行则按锚点插入）
+        fun rewriteVk(lines: List<String>, newLine: String): List<String> {
+            val vkLine = Regex("^\\s*#?\\s*export\\s+VK_ICD_FILENAMES\\s*=")
+            val idx = lines.indexOfFirst { vkLine.containsMatchIn(it) }
+            if (idx >= 0) return lines.toMutableList().also { it[idx] = newLine }
             val mut = lines.toMutableList()
             // 插入锚点：优先 LIBGL_DRIVERS_PATH 行后（VK 行与驱动路径行
             // 相邻，归组最自然）；无则 #mesa 段标记后；再无则文末追加
@@ -263,8 +240,54 @@ object GuanliSupport {
                 mut.add("# Vulkan ICD（v3.3.18 图形驱动页管理）")
                 mut.add(newLine)
             }
-            mut
+            return mut
         }
+        val newLine = if (icdPath.isNullOrBlank()) {
+            "#export VK_ICD_FILENAMES=（v3.3.18 图形驱动页管理：当前未选驱动，Vulkan loader 默认搜索）"
+        } else {
+            "export VK_ICD_FILENAMES=$icdPath"
+        }
+        val root = WineEnvironment.optRoot(wineDir)
+            ?: run {
+                // 无 rootfs 侧生态：若任何 wine 槽位自带生态（本容器槽位已随
+                // wineDir 探测过），不新建 rootfs/opt/conf —— 防把探测序 #1
+                // 翻给自己、旁路该槽位生态；运行时激活链会对正确根写入。
+                // v6.10（用户：“turnip 驱动包选择时没有更改 path.conf”）
+                // 此前这里直接裸返回 —— 但 v3.3.40 起启动链 conf 只读 App
+                // 内部那份（ApkConfStore.mergedConfMap），裸跳过会令快照里
+                // VK_ICD_FILENAMES 一直是旧值。现补写 App 内部镜像（启动链
+                // 生效）；/opt 侧仍由运行时激活链写正确根。
+                if (ContainerManager.listWines().any { w ->
+                        WineEnvironment.optRoot(File(w.dir)) != null
+                    }
+                ) {
+                    log("path.conf 同步：/opt 生态位于 wine 槽位内 —— 补写 App 内部镜像（启动链 conf 源）")
+                    runCatching {
+                        com.linbox.apps.containers.launcher.ApkConfStore.ensure(null)
+                        val apkPath =
+                            com.linbox.apps.containers.launcher.ApkConfStore.confFile("path.conf")
+                        apkPath.parentFile?.mkdirs()
+                        val base = if (apkPath.isFile) apkPath.readLines() else emptyList()
+                        val out = rewriteVk(base, newLine)
+                        val outText = out.joinToString("\n") + "\n"
+                        if (base.joinToString("\n") + "\n" != outText) {
+                            val tmp = File(apkPath.parentFile, "path.conf.linbox-tmp")
+                            tmp.writeText(outText)
+                            if (!tmp.renameTo(apkPath)) {
+                                tmp.copyTo(apkPath, overwrite = true)
+                                tmp.delete()
+                            }
+                        }
+                    }
+                    return@runCatching null
+                }
+                File(ContainerManager.ROOTFS_ROOT, "opt")
+            }
+        val confDir = File(root, "conf")
+        if (!confDir.isDirectory) confDir.mkdirs()
+        val pathConf = File(confDir, "path.conf")
+        val lines = if (pathConf.isFile) pathConf.readLines() else emptyList()
+        val out = rewriteVk(lines, newLine)
         val outText = out.joinToString("\n") + "\n"
         // v3.3.40【性能】：内容无变化跳过写（旧版每次启动无条件重写
         // path.conf + 读回镜像 —— ICD 值稳定时纯写放大）。

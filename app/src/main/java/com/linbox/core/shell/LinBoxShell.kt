@@ -27,6 +27,7 @@ import com.linbox.core.input.gamepad.GamepadController
 import com.linbox.core.input.gamepad.GamepadFloatingBall
 import com.linbox.core.input.gamepad.GamepadOverlay
 import com.linbox.core.input.gamepad.GamepadSettingsWindow
+import com.linbox.core.media.RecordingBadgeOverlay
 import com.linbox.core.theme.LinBoxMaterialTheme
 import com.linbox.core.theme.ShellThemeState
 import com.linbox.core.window.WinDialogHost
@@ -245,6 +246,12 @@ fun LinBoxShell() {
             GamepadSettingsWindow()
             GamepadFloatingBall()
         }
+
+        // ===== 5.5 v6.10：录屏悬浮标（REC 计时 + ■ 停止；可拖动）=====
+        //（用户：“录屏没有出现悬浮标显示录屏时间和停止录屏的标志”）
+        // 秒数文本每秒变化 → 应用窗口持续出帧 → 静态界面下虚拟屏也不断
+        // 帧 —— 兼治“录屏 0 秒假视频”（AUTO_MIRROR 只在内容变化时推帧）。
+        RecordingBadgeOverlay()
 
         // ===== 6. 虚拟鼠标指针层（最顶层） =====
         MouseCursorOverlay()

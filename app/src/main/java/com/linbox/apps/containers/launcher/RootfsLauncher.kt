@@ -925,12 +925,19 @@ object RootfsLauncher {
                     }
                 }
                 when {
-                    act == null -> sink.stamp(
-                        if (slotName == WrapperDriverSupport.SYSTEM_SLOT)
-                            "⚠ 系统驱动档不可用：wrapper 栈未就位（内置资产安装失败？），回退 Mesa 内置 Turnip"
-                        else
-                            "⚠ Vulkan 驱动 $slotName 的 ICD 清单未就位（安装失败或包内无 libvulkan*.so），回退 Mesa 内置 Turnip"
-                    )
+                    act == null -> {
+                        sink.stamp(
+                            if (slotName == WrapperDriverSupport.SYSTEM_SLOT)
+                                "⚠ 系统驱动档不可用：wrapper 栈未就位（内置资产安装失败？），回退 Mesa 内置 Turnip"
+                            else
+                                "⚠ Vulkan 驱动 $slotName 的 ICD 清单未就位（安装失败或包内无 libvulkan*.so），回退 Mesa 内置 Turnip"
+                        )
+                        // v6.10（用户："turnip 驱动包选择时没有更改 path.conf"）：
+                        // act==null 分支此前只打日志不回写 —— path.conf 里残留
+                        // 旧驱动的悬空 ICD 路径，glibc/startwine 链路读到直接
+                        // Vulkan 不可用。与其他失败分支同款回退内置。
+                        fallbackStockConf()
+                    }
                     act.platform == WrapperDriverSupport.DriverPlatform.GLIBC -> {
                         sink.stamp("⚠ Vulkan 驱动 $slotName 是 glibc 构建（DT_NEEDED 含 libc.so.6），bionic 原生 wine 无法 dlopen —— 回退 Mesa 内置 Turnip")
                         sink.stamp("   出路：① 改装 bionic 构建的 turnip 驱动包（LinBox CI 产物 linbox-turnip-driver-*-bionic.tar.gz）② 或装含 libvulkan_wrapper.so 的 wrapper 栈包经 adrenotools 路由")

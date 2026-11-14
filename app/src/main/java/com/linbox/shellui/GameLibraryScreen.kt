@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -55,10 +56,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -1043,12 +1049,25 @@ private fun GameShortcutCard(
 
     // v6.3：长按上下文菜单（AnWind 桌面右键菜单同款交互 —— 用户：
     // "长按应该显示启动编辑删除等，点编辑再进编辑界面"）
+    // v6.10（用户："游戏库长按卡片菜单应该吸附在对应卡片旁边而不是
+    // 全居中显示"）：菜单改用 DropdownMenu 锚定在卡片自身，从卡片
+    // 右侧弹出（屏幕右半区的卡片改从左侧弹，避免被窗口边缘裁切）。
     var menuOpen by remember { mutableStateOf(false) }
+    // 卡片几何（窗口坐标 px）：宽度 + 右缘位置 —— 侧向弹出方位判定
+    var cardWidthPx by remember { mutableStateOf(0) }
+    var cardEndX by remember { mutableStateOf(0f) }
+    val cardDensity = LocalDensity.current
+    val rootView = LocalView.current
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .onGloballyPositioned { c ->
+                cardWidthPx = c.size.width
+                val p = c.positionInWindow()
+                cardEndX = p.x + c.size.width
+            }
             .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true })
     ) {
         Box(
@@ -1137,14 +1156,20 @@ private fun GameShortcutCard(
     }
 
     // ===== v6.3：长按上下文菜单（启动 / 编辑 / 删除 / 取消）=====
+    // v6.10：Popup(Alignment.Center) → DropdownMenu（锚定卡片，侧向吸附）。
+    // 宽度固定 196dp：右半区卡片可精确计算左弹偏移 -(196+4)dp，
+    // 上下方向由 DropdownMenu 自带边界翻转（卡片靠底时向上弹）。
     if (menuOpen) {
-        androidx.compose.ui.window.Popup(
-            alignment = Alignment.Center,
+        val menuW = 196.dp
+        val cardW = with(cardDensity) { cardWidthPx.toDp() }
+        // 卡片右缘超出窗口中线 → 从左侧弹出，否则从右侧弹出
+        val fromLeft = rootView.width > 0 && cardEndX > rootView.width * 0.55f
+        val menuOffset = if (fromLeft) DpOffset(-menuW - 4.dp, 0.dp)
+        else DpOffset(cardW + 4.dp, 0.dp)
+        DropdownMenu(
+            expanded = true,
             onDismissRequest = { menuOpen = false },
-            properties = androidx.compose.ui.window.PopupProperties(
-                focusable = true,
-                dismissOnClickOutside = true
-            )
+            offset = menuOffset
         ) {
             Column(
                 modifier = Modifier

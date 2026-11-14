@@ -12,6 +12,7 @@ import android.media.ImageReader
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -55,6 +56,9 @@ object ScreenCaptureManager {
     private var virtualDisplay: VirtualDisplay? = null
     private var recorder: MediaRecorder? = null
     private var recordFile: File? = null
+    // v6.10：系统侧主动终止投屏（Android 14 停止胶囊 / 系统杀投屏）时
+    // 的自动收尾 —— 否则帧流断了 UI 还在计时，最后 stop() 必然无帧报错
+    private var projectionCallback: MediaProjection.Callback? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ticker = object : Runnable {
         override fun run() {
@@ -82,23 +86,43 @@ object ScreenCaptureManager {
         launchConsent(activity)
     }
 
-    /** 停止录屏并落盘。 */
+    /** 停止录屏并落盘。
+     *
+     * v6.10（用户：“录屏都是0秒的假视频”）：MediaRecorder.stop() 在“从未
+     * 收到任何视频帧”时必抛 RuntimeException，旧版被 runCatching 静默吞掉
+     * 后仍提示“已保存”——落盘的是没有 moov atom 的损坏 MP4（时长 0，
+     * 任何播放器都打不开）。现在：stop 失败 = 录制无效 → 删除坏文件并
+     * 明确提示失败；stop 成功才扫描入库并提示已保存。
+     */
     fun stopRecording(context: Context) {
         if (!recording) return
         val file = recordFile
-        runCatching { recorder?.stop() }
+        recording = false
+        mainHandler.removeCallbacks(ticker)
+        val stopped = runCatching { recorder?.stop() }.isSuccess
         runCatching { recorder?.reset() }
         runCatching { recorder?.release() }
         runCatching { virtualDisplay?.release() }
+        projectionCallback?.let { cb -> runCatching { projection?.unregisterCallback(cb) } }
+        projectionCallback = null
         runCatching { projection?.stop() }
         recorder = null
         virtualDisplay = null
         projection = null
         recordFile = null
-        recording = false
-        mainHandler.removeCallbacks(ticker)
-        file?.let { scan(context, it) }
-        toast(context, if (file != null) "录屏已保存：${file.name}" else "录屏已停止")
+        if (file == null) {
+            toast(context, "录屏已停止")
+            return
+        }
+        if (stopped && file.length() > 0L) {
+            scan(context, file)
+            toast(context, "录屏已保存：${file.name}")
+        } else {
+            // stop 失败（无帧/编码器异常）= 无 moov 的坏文件 —— 删除，
+            // 不再把假视频扫进媒体库骗用户
+            runCatching { file.delete() }
+            toast(context, "录屏失败：未捕获到画面（已丢弃损坏文件）")
+        }
     }
 
     /** Activity.onActivityResult 转发；消费返回 true。 */
@@ -121,8 +145,27 @@ object ScreenCaptureManager {
 
     private fun launchConsent(activity: Activity) {
         val pm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        @Suppress("DEPRECATION")
-        activity.startActivityForResult(pm.createScreenCaptureIntent(), REQUEST_CODE)
+        // v6.10（用户：“截屏录屏里应该默认整个屏幕”）：Android 14+ 无参
+        // createScreenCaptureIntent() 的授权页默认停在“单个应用（窗口）”，
+        // 不改选项就只授权了一个窗口；用 createConfigForDefaultDisplay()
+        // 令授权页只提供“整个屏幕”。低版本保留无参调用（无单应用选项）。
+        if (Build.VERSION.SDK_INT >= 34) {
+            runCatching {
+                activity.startActivityForResult(
+                    pm.createScreenCaptureIntent(
+                        android.media.projection.MediaProjectionConfig
+                            .createConfigForDefaultDisplay()
+                    ),
+                    REQUEST_CODE
+                )
+            }.onFailure {
+                @Suppress("DEPRECATION")
+                activity.startActivityForResult(pm.createScreenCaptureIntent(), REQUEST_CODE)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            activity.startActivityForResult(pm.createScreenCaptureIntent(), REQUEST_CODE)
+        }
     }
 
     // ============================================================
@@ -231,10 +274,21 @@ object ScreenCaptureManager {
         )
         rec.start()
 
+        // v6.10：投屏回调 —— 系统侧停止（状态栏“停止投屏”胶囊/系统回收）
+        // 时自动收尾录屏（保存已录内容），防“UI 永远在录但帧流已断”
+        val appContext = context.applicationContext
+        val cb = object : MediaProjection.Callback() {
+            override fun onStop() {
+                mainHandler.post { if (recording) stopRecording(appContext) }
+            }
+        }
+        runCatching { projection.registerCallback(cb, mainHandler) }
+
         this.projection = projection
         this.virtualDisplay = vd
         this.recorder = rec
         this.recordFile = out
+        this.projectionCallback = cb
         recording = true
         elapsedSec = 0
         mainHandler.post(ticker)
@@ -245,6 +299,8 @@ object ScreenCaptureManager {
         runCatching { recorder?.stop() }
         runCatching { recorder?.release() }
         runCatching { virtualDisplay?.release() }
+        projectionCallback?.let { cb -> runCatching { projection?.unregisterCallback(cb) } }
+        projectionCallback = null
         runCatching { projection?.stop() }
         recorder = null
         virtualDisplay = null

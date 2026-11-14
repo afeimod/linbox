@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,10 +50,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -722,12 +728,24 @@ internal fun ShortcutCoverCard(
         value = withContext(Dispatchers.IO) { loadExeIcon(shortcut.exe) }
     }
     // v6.4：长按上下文菜单
+    // v6.10（与游戏库页同款修复）：菜单改用 DropdownMenu 锚定在卡片
+    // 自身（用户："长按卡片菜单应该吸附在对应卡片旁边而不是全居中显示"），
+    // 从卡片右侧弹出，屏幕右半区的卡片改从左侧弹。
     var menuOpen by remember { mutableStateOf(false) }
+    var cardWidthPx by remember { mutableStateOf(0) }
+    var cardEndX by remember { mutableStateOf(0f) }
+    val cardDensity = LocalDensity.current
+    val rootView = LocalView.current
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
+            .onGloballyPositioned { c ->
+                cardWidthPx = c.size.width
+                val p = c.positionInWindow()
+                cardEndX = p.x + c.size.width
+            }
             .combinedClickable(onClick = onRun, onLongClick = { menuOpen = true })
     ) {
         Box(
@@ -807,14 +825,17 @@ internal fun ShortcutCoverCard(
     }
 
     // ===== v6.4：长按上下文菜单（启动 / 编辑 / 删除 / 取消）=====
+    // v6.10：Popup(Alignment.Center) → DropdownMenu（锚定卡片，侧向吸附）
     if (menuOpen) {
-        androidx.compose.ui.window.Popup(
-            alignment = Alignment.Center,
+        val menuW = 196.dp
+        val cardW = with(cardDensity) { cardWidthPx.toDp() }
+        val fromLeft = rootView.width > 0 && cardEndX > rootView.width * 0.55f
+        val menuOffset = if (fromLeft) DpOffset(-menuW - 4.dp, 0.dp)
+        else DpOffset(cardW + 4.dp, 0.dp)
+        DropdownMenu(
+            expanded = true,
             onDismissRequest = { menuOpen = false },
-            properties = androidx.compose.ui.window.PopupProperties(
-                focusable = true,
-                dismissOnClickOutside = true
-            )
+            offset = menuOffset
         ) {
             Column(
                 modifier = Modifier

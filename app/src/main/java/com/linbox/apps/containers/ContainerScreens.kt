@@ -1492,9 +1492,12 @@ internal fun GraphicsDriverTab(
     // 容器选择永远一致）：
     //  - Turnip（Mesa 内置）→ rootfs 自带 freedreno ICD 路径；
     //  - Wrapper 驱动 / Turnip 驱动包槽位 → 独立驱动库 drivers/<slot>/icd.json；
-    //  - 槽位尚未安装（/opt tar 运行时自动装）→ 跳过（不写悬空路径 ——
-    //    loader 打不开 ICD 会致 Vulkan 不可用；RootfsLauncher 6a 激活链
-    //    安装后补写）。
+    //  - v6.10（用户："图形驱动的驱动选择 turnip 驱动包(opt/tz)时没有更改
+    //    path.conf，所以无法正常使用"）：tar-only 槽位（/opt/tz、/opt/yuzu、
+    //    /opt/wrapper 里尚未安装的包）此前直接跳过 —— path.conf 保持旧值，
+    //    选择形同虚设。现在：选择即安装（与 ➕ 同款 WrapperDriverSupport.
+    //    install），装好即写真实 ICD 路径；安装失败（glibc 包等）回退写
+    //    内置 ICD（与运行期回退语义一致，至少不留旧驱动的悬空路径）。
     // key 变化即触发：三个类型选项 / 版本下拉 / ➕ 安装后选择 / 🗑 卸载，
     // 全部经由 edit.wrapper / edit.turnip 落位，无一旁路。
     LaunchedEffect(edit.wrapper, edit.turnip) {
@@ -1516,9 +1519,38 @@ internal fun GraphicsDriverTab(
                 }
                 wrapperActive || tzActive -> {
                     val slot = if (wrapperActive) edit.wrapper else edit.turnip
-                    // 已装槽位才写（ICD 真实存在）；tar-only 槽位等运行时装好后补写
-                    WrapperDriverSupport.icdFor(slot)?.absolutePath?.let { icd ->
-                        GuanliSupport.syncPathConfVkIcd(icd, wineDir)
+                    var icd: File? = WrapperDriverSupport.icdFor(slot)
+                    if (icd == null) {
+                        // v6.10：tar-only 槽位 —— 找到 /opt 对应目录里的源包，
+                        // 立即安装（选择即生效，不等运行时）
+                        val scanDirs = if (wrapperActive) listOf("wrapper")
+                        else listOf("tz", "yuzu")
+                        val wantSlot = WrapperDriverSupport.safeSlotName(slot)
+                        val tar = scanDirs.asSequence()
+                            .mapNotNull { runCatching { GuanliSupport.scanOpt(it) }.getOrNull() }
+                            .flatten()
+                            .firstOrNull {
+                                WrapperDriverSupport.safeSlotName(it.display) == wantSlot
+                            }
+                        if (tar != null) {
+                            // install 返回 null = 成功；失败（glibc 拒装等）保持
+                            // icd=null 走下方内置 ICD 回退
+                            val installErr = runCatching {
+                                WrapperDriverSupport.install(tar.path) { }
+                            }.getOrElse { "安装异常：${it.message}" }
+                            if (installErr == null) {
+                                icd = WrapperDriverSupport.icdFor(slot)
+                            }
+                        }
+                    }
+                    if (icd != null) {
+                        GuanliSupport.syncPathConfVkIcd(icd.absolutePath, wineDir)
+                    } else {
+                        // 安装不可用（包缺失/glibc 拒装）→ 回退 Mesa 内置 ICD，
+                        // 与 RootfsLauncher 运行期回退（fallbackStockConf）一致
+                        GuanliSupport.syncPathConfVkIcd(
+                            WrapperDriverSupport.bundledTurnipIcd()?.absolutePath, wineDir
+                        )
                     }
                 }
                 // Turnip（Mesa 内置）/ 默认 —— 写 rootfs 自带 freedreno ICD

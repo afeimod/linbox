@@ -566,6 +566,16 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                                 enabled = com.linbox.apps.browser.BrowserQuickBus.toggleView3d != null) {
                                 com.linbox.apps.browser.BrowserQuickBus.toggleView3d?.invoke()
                                 expanded = false
+                            },
+                            // v6.10（用户："在悬浮球里加个关闭浏览器回主页的按钮"）：
+                            // 关闭浏览器页并回主页 —— BrowserScreen 退出组合时
+                            // onDispose 自动销毁全部标签会话（WebView 释放，
+                            // 与返回键退出同链路）。danger 红色提示 destructive。
+                            BallChipItem(BallIconKind.CLOSE, "关闭浏览器", danger = true) {
+                                if (ShellController.screen == ShellController.Screen.BROWSER) {
+                                    ShellController.showHome()
+                                }
+                                expanded = false
                             }
                         )
                     )

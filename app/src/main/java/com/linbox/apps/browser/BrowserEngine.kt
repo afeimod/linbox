@@ -4,16 +4,22 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.Message
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
+import android.webkit.MimeTypeMap
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
@@ -32,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -263,32 +271,25 @@ object BrowserEngine {
         cookieManager.setAcceptThirdPartyCookies(wv, true)
         cookieManager.flush()
 
-        // 文件下载监听（很多站点提供 APK/ZIP/图片下载）
+        // 文件下载（v6.10 重写，用户："修复浏览器无法下载文件等问题"）：
+        // - 文件名解析加固：RFC 6266 filename*=UTF-8''…（中文站常用）/
+        //   filename="…" / URL 末段 三级回退 + 非法字符清洗 + 缺扩展名按
+        //   MIME 补全（旧版整体 URLDecoder 后 substringAfter，中文站
+        //   filename* 场景一律落到无扩展名的 "linbox_download"）；
+        // - Cookie/Referer 转发：DownloadManager 不共享 WebView Cookie，
+        //   登录态下载 401/302 直接失败 —— 显式带上；
+        // - blob:/data: URL 分流：DownloadManager 无法处理（现代站点下载
+        //   按钮多为 blob:，旧版直接走 catch 报"下载失败"）—— blob 经
+        //   页内 XHR fetch + __linboxDownload 分块桥落盘，data 直接解码。
         wv.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-            try {
-                val request = DownloadManager.Request(Uri.parse(url)).apply {
-                    setMimeType(mimetype)
-                    addRequestHeader("User-Agent", userAgent)
-                    setDestinationInExternalPublicDir(
-                        Environment.DIRECTORY_DOWNLOADS,
-                        contentDisposition?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-                            ?.substringAfter("filename=", "linbox_download")
-                            ?.trim('"') ?: "linbox_download"
-                    )
-                    setTitle(contentDisposition ?: "下载")
-                    if (mimetype == "application/vnd.android.package-archive") {
-                        allowScanningByMediaScanner()
-                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    } else {
-                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-                    }
-                }
-                val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                dm.enqueue(request)
-                Toast.makeText(ctx, "开始下载到 Downloads/", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(ctx, "下载失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            BrowserDownloads.handleDownload(wv, url, userAgent, contentDisposition, mimetype)
+        }
+
+        // v6.10：blob: 下载落盘桥（页面 JS 经 XHR 读 blob 后分块回调）
+        runCatching {
+            wv.addJavascriptInterface(
+                BrowserDownloads.bridge(wv), "__linboxDownload"
+            )
         }
 
         wv.webViewClient = TabWebViewClient(ctx, tab, manager)
@@ -1484,6 +1485,338 @@ object BrowserEngine {
             } catch (_: Exception) {
             }
             return true
+        }
+    }
+}
+
+// ===========================================================================
+// v6.10：浏览器下载器（用户："修复浏览器无法下载文件等问题"）
+// ===========================================================================
+
+/**
+ * 下载处理中枢：
+ * - http/https → 系统 DownloadManager（带 Cookie/Referer/UA，登录态可用）
+ * - blob: → 页内 XHR 读 blob → FileReader 转 base64 → __linboxDownload
+ *   分块桥 → 临时文件 → 移入公共 Downloads/
+ * - data: → 直接解码落盘
+ *
+ * 文件名三级回退：RFC 6266 filename*（RFC 5987 百分号编码，中文站常用）→
+ * filename="…" → URL 末段 → 时间戳；统一清洗非法字符 + 按 MIME 补扩展名。
+ */
+internal object BrowserDownloads {
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 每个 WebView 一座下载桥（分块状态隔离）。 */
+    fun bridge(wv: WebView): LinboxDownloadBridge = LinboxDownloadBridge(wv)
+
+    fun handleDownload(
+        wv: WebView,
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimetype: String?
+    ) {
+        val ctx = wv.context.applicationContext
+        val filename = parseFilename(contentDisposition, url, mimetype)
+        when {
+            url.startsWith("blob:", ignoreCase = true) -> {
+                // blob: URL 属页面渲染进程私有，DownloadManager 取不到 ——
+                // 注入 JS 用 XHR 读回，经 __linboxDownload 分块写盘
+                val js = buildBlobFetchScript(url, filename, mimetype ?: "")
+                runCatching { wv.evaluateJavascript(js, null) }
+                    .onFailure { toast(ctx, "下载失败：无法读取页面数据") }
+            }
+            url.startsWith("data:", ignoreCase = true) -> {
+                runCatching {
+                    val bytes = decodeDataUri(url)
+                    if (bytes == null) {
+                        toast(ctx, "下载失败：无法解析 data 链接")
+                    } else {
+                        saveBytes(ctx, filename, mimetype, bytes)
+                    }
+                }.onFailure { toast(ctx, "下载失败: ${it.message}") }
+            }
+            else -> runCatching {
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    if (!mimetype.isNullOrBlank()) setMimeType(mimetype)
+                    userAgent?.let { addRequestHeader("User-Agent", it) }
+                    // 登录态下载：DownloadManager 不共享 WebView Cookie
+                    runCatching {
+                        CookieManager.getInstance().getCookie(url)?.let {
+                            addRequestHeader("Cookie", it)
+                        }
+                    }
+                    // 部分站点（网盘/图床）校验 Referer
+                    runCatching {
+                        wv.url?.let { if (it.startsWith("http")) addRequestHeader("Referer", it) }
+                    }
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
+                    setTitle(filename)
+                    setNotificationVisibility(
+                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                    )
+                    if (mimetype == "application/vnd.android.package-archive") {
+                        @Suppress("DEPRECATION")
+                        allowScanningByMediaScanner()
+                    }
+                }
+                val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                dm.enqueue(request)
+                toast(ctx, "开始下载：$filename")
+            }.onFailure { toast(ctx, "下载失败: ${it.message}") }
+        }
+    }
+
+    // ---- 文件名解析 ----
+
+    private fun maybeDecode(s: String): String =
+        if (s.contains("%")) {
+            try { java.net.URLDecoder.decode(s, "UTF-8") } catch (_: Exception) { s }
+        } else s
+
+    /** 清洗非法字符 / 路径分隔符，限长 120。 */
+    private fun sanitize(name: String): String =
+        name.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
+            .trim().trim('.').take(120)
+
+    /** MIME → 扩展名（MimeTypeMap 优先，常见类型兜底）。 */
+    private fun extFor(mimetype: String?): String {
+        mimetype ?: return ""
+        val mapped = runCatching {
+            MimeTypeMap.getSingleton().getExtensionFromMimeType(mimetype)
+        }.getOrNull()
+        if (!mapped.isNullOrBlank()) return ".$mapped"
+        return when (mimetype.lowercase()) {
+            "application/vnd.android.package-archive" -> ".apk"
+            "application/zip", "application/x-zip-compressed" -> ".zip"
+            "application/x-rar-compressed", "application/vnd.rar" -> ".rar"
+            "application/x-7z-compressed" -> ".7z"
+            "application/pdf" -> ".pdf"
+            "application/octet-stream" -> ".bin"
+            "text/html" -> ".html"
+            "text/plain" -> ".txt"
+            "image/jpeg" -> ".jpg"
+            "image/png" -> ".png"
+            "image/gif" -> ".gif"
+            "image/webp" -> ".webp"
+            "audio/mpeg" -> ".mp3"
+            "video/mp4" -> ".mp4"
+            "application/x-msdownload", "application/x-msdos-program" -> ".exe"
+            else -> ""
+        }
+    }
+
+    /** 文件名三级回退 + 扩展名补全。 */
+    fun parseFilename(contentDisposition: String?, url: String, mimetype: String?): String {
+        val cd = contentDisposition ?: ""
+        // 1) RFC 6266/5987：filename*=UTF-8''%E4%B8%AD%E6%96%87.zip（中文站常用）
+        val star = Regex("""filename\*\s*=\s*(?:utf-8|UTF-8)''([^;]+)""")
+            .find(cd)?.groupValues?.get(1)?.trim()
+        if (!star.isNullOrBlank()) {
+            val clean = sanitize(maybeDecode(star))
+            if (clean.isNotEmpty()) return withExt(clean, mimetype)
+        }
+        // 2) filename="…" / filename=…
+        val plain = Regex("""filename\s*=\s*"?([^";]+)"?""")
+            .find(cd)?.groupValues?.get(1)?.trim()
+        if (!plain.isNullOrBlank()) {
+            val clean = sanitize(maybeDecode(plain))
+            if (clean.isNotEmpty()) return withExt(clean, mimetype)
+        }
+        // 3) URL 末段（去掉查询串）
+        if (url.startsWith("http", ignoreCase = true)) {
+            runCatching {
+                val seg = Uri.parse(url).lastPathSegment
+                if (!seg.isNullOrBlank()) {
+                    val clean = sanitize(maybeDecode(seg))
+                    if (clean.length > 1) return withExt(clean, mimetype)
+                }
+            }
+        }
+        // 4) 时间戳回退
+        return "linbox_${System.currentTimeMillis()}${extFor(mimetype)}"
+    }
+
+    /** 缺扩展名时按 MIME 补全。 */
+    private fun withExt(name: String, mimetype: String?): String {
+        if (!mimetype.isNullOrBlank() &&
+            !name.substringAfterLast('.', "").matches(Regex("[A-Za-z0-9]{1,5}"))
+        ) {
+            return name + extFor(mimetype)
+        }
+        return name
+    }
+
+    // ---- data: URI ----
+
+    private fun decodeDataUri(url: String): ByteArray? {
+        val comma = url.indexOf(',')
+        if (comma < 0) return null
+        val meta = url.substring(5, comma).split(';')  // "data:" 固定 5 字符前缀
+        val payload = url.substring(comma + 1)
+        return if (meta.any { it.equals("base64", ignoreCase = true) }) {
+            runCatching { Base64.decode(payload, Base64.DEFAULT) }.getOrNull()
+        } else {
+            maybeDecode(payload).toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    // ---- 公共落盘 ----
+
+    fun saveBytes(ctx: Context, filename: String, mimetype: String?, bytes: ByteArray) {
+        runCatching {
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!dir.exists()) dir.mkdirs()
+            val file = uniqueFile(dir, sanitize(filename))
+            FileOutputStream(file).use { it.write(bytes) }
+            scan(ctx, file.absolutePath, mimetype)
+            toast(ctx, "已保存到 Downloads/${file.name}")
+        }.onFailure { toast(ctx, "保存失败: ${it.message}") }
+    }
+
+    /** 重名自动加 (n) 后缀。 */
+    fun uniqueFile(dir: File, name: String): File {
+        var f = File(dir, name)
+        if (!f.exists()) return f
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ""
+        var i = 1
+        while (i < 1000) {
+            f = File(dir, "${base}(${i})$ext")
+            if (!f.exists()) return f
+            i++
+        }
+        return File(dir, "${base}_${System.currentTimeMillis()}$ext")
+    }
+
+    fun scan(ctx: Context, path: String, mimetype: String?) {
+        runCatching {
+            MediaScannerConnection.scanFile(
+                ctx, arrayOf(path), if (mimetype.isNullOrBlank()) null else arrayOf(mimetype), null
+            )
+        }
+    }
+
+    fun toast(ctx: Context, msg: String) {
+        mainHandler.post {
+            runCatching { Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    // ---- blob: 分块下载桥 ----
+
+    /** 页内 XHR 读 blob → base64 分块回调 __linboxDownload。 */
+    private fun buildBlobFetchScript(url: String, filename: String, mime: String): String {
+        fun esc(s: String) = s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+        return """
+            (function(){
+              try{
+                var xhr=new XMLHttpRequest();
+                xhr.open('GET','${esc(url)}',true);
+                xhr.responseType='blob';
+                xhr.onload=function(){
+                  try{
+                    if(xhr.status!==200&&xhr.status!==0){window.__linboxDownload.fail(xhr.status);return;}
+                    var b=xhr.response;
+                    if(!b){window.__linboxDownload.fail(-1);return;}
+                    var fr=new FileReader();
+                    fr.onload=function(){
+                      try{
+                        var s=String(fr.result||'');
+                        var i=s.indexOf(',');
+                        var b64=i>=0?s.substring(i+1):s;
+                        window.__linboxDownload.begin('${esc(filename)}','${esc(mime)}'||(b.type||''));
+                        var N=393216; // 384KB，4 的倍数（base64 分块可独立解码）
+                        for(var o=0;o<b64.length;o+=N){
+                          window.__linboxDownload.chunk(b64.substr(o,N));
+                        }
+                        window.__linboxDownload.end();
+                      }catch(e){window.__linboxDownload.fail(-2);}
+                    };
+                    fr.onerror=function(){window.__linboxDownload.fail(-3);};
+                    fr.readAsDataURL(b);
+                  }catch(e){window.__linboxDownload.fail(-2);}
+                };
+                xhr.onerror=function(){window.__linboxDownload.fail(0);};
+                xhr.send();
+              }catch(e){window.__linboxDownload.fail(-2);}
+            })();
+        """.trimIndent()
+    }
+
+    /**
+     * blob 下载落盘桥：begin → chunk… → end（临时文件累积，end 时移入
+     * 公共 Downloads/）。分块避免 Binder/Chromium 单次字符串上限，
+     * 临时文件避免大文件驻留内存。fail 任何阶段清理现场。
+     */
+    internal class LinboxDownloadBridge(wv: WebView) {
+        private val ctx = wv.context.applicationContext
+        private var tmp: File? = null
+        private var out: FileOutputStream? = null
+        private var filename: String = ""
+        private var mime: String = ""
+
+        @JavascriptInterface
+        fun begin(name: String?, mime: String?) {
+            runCatching {
+                close()
+                filename = name ?: ""
+                this.mime = mime ?: ""
+                val f = File(ctx.cacheDir, "linbox_dl_${System.currentTimeMillis()}.tmp")
+                out = FileOutputStream(f)
+                tmp = f
+            }
+        }
+
+        @JavascriptInterface
+        fun chunk(b64: String?) {
+            if (b64.isNullOrBlank()) return
+            runCatching {
+                val o = out ?: return
+                o.write(Base64.decode(b64, Base64.DEFAULT))
+            }
+        }
+
+        @JavascriptInterface
+        fun end() {
+            runCatching {
+                val o = out ?: return
+                val src = tmp
+                o.flush(); o.close(); out = null; tmp = null
+                if (src == null || src.length() == 0L) {
+                    src?.delete()
+                    toast(ctx, "下载失败：文件为空")
+                    return
+                }
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!dir.exists()) dir.mkdirs()
+                val dst = uniqueFile(dir, sanitize(if (filename.isBlank()) "linbox_download" else filename))
+                if (!src.renameTo(dst)) {
+                    // 跨分区 rename 失败 → 拷贝
+                    src.copyTo(dst, overwrite = true)
+                    src.delete()
+                }
+                scan(ctx, dst.absolutePath, if (mime.isBlank()) null else mime)
+                toast(ctx, "已保存到 Downloads/${dst.name}")
+            }.onFailure {
+                close()
+                toast(ctx, "保存失败: ${it.message}")
+            }
+        }
+
+        @JavascriptInterface
+        fun fail(code: Int) {
+            close()
+            toast(ctx, if (code == 0) "下载失败：网络错误" else "下载失败（$code）")
+        }
+
+        private fun close() {
+            runCatching { out?.close() }
+            out = null
+            runCatching { tmp?.takeIf { it.exists() }?.delete() }
+            tmp = null
         }
     }
 }
