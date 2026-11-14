@@ -435,6 +435,34 @@ object WineEnvironment {
         ).filter { it.isDirectory }
         // wine 包自带的 x86_64-bionic 依赖闭包（存在才追加；旧版包无此目录）
         val bionicLibDir = File(wineDir, "lib/x86_64-bionic")
+        // v3.4.7【liblog.so 依赖断链自愈】：闭包内 NDK x86_64 版 libandroid.so
+        // 的 DT_NEEDED "liblog.so" 没有任何提供方（设备 /system/lib64/liblog.so
+        // 是 aarch64，box64 仿真加载器不会命中；闭包目录里也没打包它）——
+        // 用户 2026-11-14 15:24/15:25 设备日志实证：每个 wine 进程都报
+        // "Error loading needed lib liblog.so" + "Error loading one of needed
+        // lib"（libandroid.so 依赖链断裂）。ALLOWMISSINGLIBS=1 让加载继续，
+        // 但断链噪音永久存在、且任何 dlopen("liblog.so") / 严格依赖走查都会
+        // 踩空。此处幂等补入一个【零导出符号】的空 ELF 桩（SONAME=liblog.so，
+        // assets builtin/stublibs/liblog.so，x86-64、-nostdlib、无任何依赖）：
+        //  - DT_NEEDED 链闭合 → 两条 error 消失；
+        //  - 桩不导出任何符号 → __android_log_* 的 PLT 引用仍按原路解析到
+        //    box64 0008 补丁的 wrappedlibc 桥（转发宿主真 liblog，logcat
+        //    可见性完整保留，桩不构成符号遮蔽）。
+        // 仅 heal 已存在的闭包目录（无闭包的包形态零动作）；context 为 null
+        // 的旧调用点跳过（无 assets 通道，下次经主链路补齐）。
+        if (bionicLibDir.isDirectory && !File(bionicLibDir, "liblog.so").isFile && context != null) {
+            runCatching {
+                context.assets.open("builtin/stublibs/liblog.so").use { input ->
+                    File(bionicLibDir, "liblog.so").outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }.onSuccess {
+                log("已补 x86_64-bionic 闭包桩 liblog.so（闭合 libandroid.so 的 DT_NEEDED 断链 —— 消除每进程 \"Error loading needed lib liblog.so\"；日志符号仍走 box64 0008 桥）")
+            }.onFailure {
+                log("警告: liblog.so 闭包桩注入失败（${it.message}）—— 不阻断启动，依赖断链噪音可能持续")
+            }
+        }
         val bionicGstDir = File(bionicLibDir, "gstreamer-1.0")
         // x86_64 glibc 运行库（bionic-rootfs 的 glibc-x86_64 配方安装）：
         // 本 wine 是 bionic 链接不需要它；但容器内跑常规 glibc x86_64

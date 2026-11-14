@@ -344,10 +344,13 @@ object RootfsLauncher {
                         }
                     }
                     if (!serverAlive) break
-                    // v3.3.40【性能】：3s → 10s —— 每 3s 全量扫 /proc（读每个
-                    // 进程的 cmdline）在长会话里是持续的系统调用负载；
-                    // tabtip 拉起后 10s 内被杀同样可靠（它只在启动早期出现）。
-                    Thread.sleep(10000)
+                    // v3.4.7【回归 3s】：v3.3.40 曾把周期 3s → 10s（纯性能
+                    // 考量），但 2026-11-14 15:25 wine-10 容器 10.0.0.0 设备
+                    // 日志实证 tabtip.exe 在加载中途即把整个 wineboot 会话
+                    // 拖挂（扫杀粒度必须小于它起破坏作用的窗口）；/proc 扫描
+                    // 为轻量元数据读，3s 周期在 wine 会话生命周期内开销
+                    // 可忽略（会话结束线程自止）。
+                    Thread.sleep(3000)
                 }
             } catch (_: InterruptedException) {
             } catch (_: Throwable) {
@@ -1450,6 +1453,16 @@ object RootfsLauncher {
             WineEnvironment.applyTuningEnv(env, container)
             WineEnvironment.applyExtraEnv(env, container)
 
+            // 11b) v3.4.9：tabtip 预置自启动净化（快路径：exe 缺席时 3 次
+            //      存在性检查即返回、零读盘 —— 生态包 Run 键指向已删的 exe
+            //      即无危害；注册表深度净化在前缀构建链 sanitizeRegistryHygiene
+            //      的 deep=true 路径）。背景见 WineRegistry.sanitizeTabtipAutostart
+            //      KDoc：生态包预置 tabtip.exe 的自启动把 2026-11-14 15:25
+            //      wine-10 前缀构建会话整场拖挂。
+            runCatching {
+                WineRegistry.sanitizeTabtipAutostart(resolved, container, env) { sink.stamp(it) }
+            }.onFailure { sink.stamp("⚠ tabtip 自启动净化异常：${it.message}（不影响启动）") }
+
             // 12) 构建命令并 exec（wine / wineserver / wineboot 特判）
             // 令牌自检：链期间被"停止"或被更新的启动请求取代 → 放弃 exec
             if (pendingLaunches[key] != token) {
@@ -1501,21 +1514,29 @@ object RootfsLauncher {
                     "HOME=${env["HOME"]} LANG=${env["LANG"]}"
             )
 
-            // v3.2.3：前缀构建会话看门狗信号量 —— onStdOut/onStdErr/onExit
-            // 回调置位（供下方 4 分钟无输出看门狗判定；普通会话开销为零）。
-            val gotSessionOutput = java.util.concurrent.atomic.AtomicBoolean(false)
+            // v3.4.7【看门狗滚动窗口重写】：v3.2.3 的实现用一次性布尔
+            // gotSessionOutput（首行输出即置位、永不复位）——“4 分钟无输出”
+            // 实际是“4 分钟累计零输出”。一旦会话【中途】挂死（已有大量
+            // 输出之后冻结，如 2026-11-14 15:25 wine-10 容器 10.0.0.0
+            // 会话：tabtip.exe 加载中途整树冻结，此前日志已滚动千行），
+            // 看门狗永不触发 → 会话无限挂死、无自动恢复。改为记录【最近
+            // 一次输出时间戳】的滚动窗口：任意时段连续静默 + system.reg
+            // 未落盘 = 挂死（mono/gecko 提示框的合法等待窗口维持 8 分钟
+            // 语义不变 —— 从“会话启动”改为“最后一次输出”起算，等待期间
+            // 任何输出都会刷新窗口）。
+            val lastOutputAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
             val sessionEnded = java.util.concurrent.atomic.AtomicBoolean(false)
             val executor = NativeShellExecutor.create()
                 .setCommand(*command.toTypedArray())
                 .putEnv(env)
                 .setWorkingDir(workingDir)
                 .onStdOut {
-                    gotSessionOutput.set(true)
+                    lastOutputAt.set(System.currentTimeMillis())
                     sink.log(it)
                     if (isPrefixSession) prefixLogLine(key, it)
                 }
                 .onStdErr {
-                    gotSessionOutput.set(true)
+                    lastOutputAt.set(System.currentTimeMillis())
                     sink.log(it)
                     if (isPrefixSession) prefixLogLine(key, it)
                 }
@@ -1564,22 +1585,36 @@ object RootfsLauncher {
             if (isPrefixSession) {
                 val prefixMarker = File(container.prefixPath, "system.reg")
                 Thread({
-                    try { Thread.sleep(4 * 60_000L) } catch (_: InterruptedException) { return@Thread }
-                    if (!sessionEnded.get() && !gotSessionOutput.get() && !prefixMarker.isFile) {
-                        sink.stamp("wineboot 会话已 4 分钟无任何输出且 system.reg 未落盘 —— 疑似挂死，抓取进程现场：")
-                        WineRegistry.dumpWineHangSnapshot(resolved, container) { sink.stamp(it) }
-                        // v3.3.1：再等 4 分钟（mono/gecko 提示框等待确认的
-                        // 合法窗口已给足）→ 仍无输出且前缀未落盘即判定挂死
-                        try { Thread.sleep(4 * 60_000L) } catch (_: InterruptedException) { return@Thread }
-                        if (!sessionEnded.get() && !gotSessionOutput.get() && !prefixMarker.isFile) {
-                            sink.stamp("wineboot 会话累计 8 分钟无输出且前缀未落盘 —— 判定挂死，自动恢复：终止会话 + 硬清理 wineserver")
+                    var snapshotted = false
+                    while (true) {
+                        try { Thread.sleep(30_000L) } catch (_: InterruptedException) { return@Thread }
+                        if (sessionEnded.get() || prefixMarker.isFile) return@Thread
+                        val silentMs = System.currentTimeMillis() - lastOutputAt.get()
+                        // 连续 4 分钟静默：先取证一次（不处置 —— mono/gecko
+                        // 提示框等待用户确认属正常场景；等待期间有输出则
+                        // 窗口刷新，不会误判）。
+                        if (silentMs >= 4 * 60_000L && !snapshotted) {
+                            snapshotted = true
+                            sink.stamp("wineboot 会话已 4 分钟连续无输出且 system.reg 未落盘 —— 疑似挂死，抓取进程现场：")
+                            WineRegistry.dumpWineHangSnapshot(resolved, container) { sink.stamp(it) }
+                            continue
+                        }
+                        // 连续 8 分钟静默：判定挂死 → 自动恢复（终止会话）。
+                        // v3.4.7：恢复后 onExit 照常触发 → postPrefixBootChain
+                        // 续链 → 开头的 wineserver 确定性收尾（-k/-w + 硬清理，
+                        // 注册表缓存落盘）→ system.reg 缺失路径自动重跑一次
+                        // wineboot -u —— “挂死一次 = 前缀永远建不起来”的死循环
+                        // 从此拆掉。注意：此处【不再】另调 ensureCleanBeforeStart
+                        // —— 续链收尾已覆盖，且并发清理会误杀重试拉起的新
+                        // wineserver（竞态：onExit 在 stopAndWait 返回前后即
+                        // 触发，重试与清理并发）。
+                        if (silentMs >= 8 * 60_000L) {
+                            sink.stamp("wineboot 会话连续 8 分钟无输出且前缀未落盘 —— 判定挂死，自动恢复：终止会话（wineserver 由续链收尾），随后自动重跑 wineboot")
                             runCatching { executor.stopAndWait(true, 10, TimeUnit.SECONDS) }
-                            runCatching {
-                                WineServerUtils.ensureCleanBeforeStart(resolved, container, env, log = { sink.stamp(it) })
-                            }
-                            sink.stamp("→ 已自动恢复（挂死现场已记录于上方日志）；请重新构建前缀")
+                            sink.stamp("→ 已自动恢复（挂死现场已记录于上方日志）；将自动重跑一次 wineboot（如前缀仍未就绪）")
                             sink.stamp("→ 若再次挂死：请把本窗口完整日志（含进程现场与清理决策行）反馈给开发者")
                             _prefixBuildFlow.value = null
+                            return@Thread
                         }
                     }
                 }, "linbox-prefix-session-watchdog").apply { isDaemon = true; start() }
@@ -1739,6 +1774,24 @@ object RootfsLauncher {
         // → 游戏 DLL 加载序无安装包配置 → "media 错误"依旧。wineboot 可
         // 重入，重跑一次成本低（分钟级一次性路径）；仍失败才放行，日志
         // 大声可见。
+        //
+        // v3.4.7【假前缀竞态根治】：另有一类 system.reg 缺失【不是 wineboot
+        // 失败，而是落盘竞态】——wineboot 外层进程（explorer /desktop 包桌）
+        // 退出时，wineserver 常仍在收尾（boot 尾声拉起的 explorer.exe
+        // /desktop 子进程还在加载），注册表 hive 只在 server 退出/显式
+        // flush 时落盘。旧链在 +0.2s 就探测 system.reg，撞上未落盘窗口 →
+        // “前缀未就绪”误判 → 白跑一整轮 wineboot 重试（2026-11-14 15:24
+        // 容器 9.2.2 实证：wineboot 已打印 "configuration ... has been
+        // updated" 但 system.reg 仍缺，重跑 13s 后“已生成”——实际第一次
+        // 已成功，只是没等落盘）。先优雅收尾 wineserver（-k/-w：注册表
+        // 缓存落盘 + 收进程树，冻结守护自动硬清理）再探测 —— 判定从竞态
+        // 变确定。仅在本前缀仍有存活 server 时才动作（无残留零开销）。
+        runCatching {
+            if (WineServerUtils.isServerRunning(container.prefixPath)) {
+                prefixLog("wineboot 会话收尾：wineserver 注册表缓存落盘（system.reg 探测前的确定性收尾）……")
+                WineServerUtils.stop(resolved, container, env)
+            }
+        }.onFailure { prefixLog("警告: wineserver 收尾异常（${it.message}）—— 继续，system.reg 探测照常") }
         val systemReg = File(container.prefixPath, "system.reg")
         if (!systemReg.isFile) {
             prefixLog("前缀未就绪（system.reg 缺失）→ 自动重跑一次 wineboot -u 修复……")
@@ -1752,6 +1805,11 @@ object RootfsLauncher {
                     .putEnv("WINEDLLOVERRIDES", "mscoree=disabled")
                     .putEnv("WINEPREFIX", container.prefixPath)
                     .setWorkingDir(WineEnvironment.RUNTIME_DIR)
+                    // v3.4.7：重试 wineboot 输出捕获 —— 旧版静默运行，重试
+                    // 若秒退/挂死无从排查（stdout/stderr 含 box64 横幅与
+                    // wine loader 错误，与主会话同视角）。
+                    .onStdOut { prefixLog(it) }
+                    .onStdErr { prefixLog(it) }
                     .exec()
                 val finished = runCatching { rb.waitFor(300, TimeUnit.SECONDS) }.getOrDefault(false)
                 if (!finished) {
@@ -1783,6 +1841,9 @@ object RootfsLauncher {
                         .putEnv("WINEPREFIX", container.prefixPath)
                         .putEnv("BOX64_DYNAREC", "0")
                         .setWorkingDir(WineEnvironment.RUNTIME_DIR)
+                        // v3.4.7：同重试路径 —— 输出捕获（见上）。
+                        .onStdOut { prefixLog(it) }
+                        .onStdErr { prefixLog(it) }
                         .exec()
                     val finished2 = runCatching { rb2.waitFor(600, TimeUnit.SECONDS) }.getOrDefault(false)
                     if (!finished2) {
@@ -1875,6 +1936,13 @@ object RootfsLauncher {
                     .putEnv(env)
                     .putEnv("WINEPREFIX", container.prefixPath)
                     .setWorkingDir(WineEnvironment.RUNTIME_DIR)
+                    // v3.4.7：taskmgr 输出捕获 —— 用户 2026-11-14 全天四会话
+                    // 实证 taskmgr 秒退（退出码 0、2~4s），但旧链路零捕获：
+                    // wine loader 的 "could not load / could not open display"
+                    // 类 stderr 全部丢失，无法定位根因。现在 stdout/stderr
+                    // 全部进会话日志与前缀日志（含 box64 横幅）。
+                    .onStdOut { sink.log(it); prefixLogLine(key, it) }
+                    .onStdErr { sink.log(it); prefixLogLine(key, it) }
                     .onExit { code ->
                         sink.log("\n[taskmgr 退出码: $code] 前缀构建会话结束 " +
                             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))

@@ -535,6 +535,21 @@ jobs:
           # 清掉非运行时文件（.a/.la/pkgconfig/cmake 等静态开发残留）
           find "$OUT" \( -name '*.a' -o -name '*.la' -o -name '*.pc' -o -name '*.sh' \) -delete 2>/dev/null || true
           rm -rf "$OUT/pkgconfig" "$OUT/cmake" "$OUT/icu" 2>/dev/null || true
+          # v3.4.7：liblog.so 空桩 —— 闭包内 NDK x86_64 版 libandroid.so 的
+          # DT_NEEDED "liblog.so" 没有任何提供方（设备 /system/lib64/liblog.so
+          # 是 aarch64，box64 仿真加载器不会命中；闭包目录也没打包它），
+          # 每个 wine 进程都报 "Error loading needed lib liblog.so" +
+          # "Error loading one of needed lib"（2026-11-14 设备日志实证）。
+          # 零导出符号空 ELF（SONAME=liblog.so）闭合依赖链；__android_log_*
+          # 的 PLT 引用仍由 box64 0008 补丁的 wrappedlibc 桥转发宿主真身
+          # （logcat 可见性保留，桩不构成符号遮蔽）。CI runner 为 x86_64，
+          # gcc -nostdlib 直出（与 App 侧 assets builtin/stublibs/liblog.so
+          # 自愈桩同一构造方式）。
+          gcc -shared -nostdlib -Wl,-soname,liblog.so -x c /dev/null -o "$OUT/liblog.so"
+          strip "$OUT/liblog.so" 2>/dev/null || true
+          readelf -d "$OUT/liblog.so" 2>/dev/null | grep -q 'SONAME.*liblog.so' \
+            || { echo "::error::liblog.so 桩生成/校验失败"; exit 1; }
+          echo "  [OK] $OUT/liblog.so（libandroid.so DT_NEEDED 断链桩）"
           COUNT=$(find "$OUT" -name '*.so*' | wc -l)
           echo "已打包 ${COUNT} 个 x86_64-bionic 运行库 → opt/wine/lib/x86_64-bionic/"
           [[ "${COUNT:-0}" -gt 20 ]] || { echo "::error::依赖库打包异常（仅 ${COUNT} 个 .so）"; exit 1; }

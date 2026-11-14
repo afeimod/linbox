@@ -619,13 +619,24 @@ object WineRegistry {
             val WATCHDOG_MIN = 4L
             var lastCode = -1
             for (attempt in 1..2) {
-                var gotOutput = false
+                // v3.4.7【滚动静默窗口】：旧实现用一次性布尔 gotOutput（首行
+                // 输出即置位、永不复位）——"4 分钟无输出"实际是"4 分钟累计
+                // 零输出"，会话【中途】挂死（有输出后冻结，2026-11-14 15:25
+                // wine-10 设备日志实证）完全探测不到。改为记录最近一次输出
+                // 时间戳：任意时段连续静默 + system.reg 未落盘即取证（本路径
+                // 维持"只取证不杀进程"语义 —— 处置由外层 15 分钟超时 + 重试
+                // 循环负责，与 RootfsLauncher 会话级看门狗的处置分工不变）。
+                val lastOutputAt = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
                 val watchdog = Thread({
-                    try { Thread.sleep(WATCHDOG_MIN * 60_000L) } catch (_: InterruptedException) { return@Thread }
-                    if (!gotOutput && !File(container.prefixPath, "system.reg").isFile) {
-                        log("wineboot 已 ${WATCHDOG_MIN} 分钟无任何输出且 system.reg 未落盘 ——")
-                        log("（mono/gecko 安装提示框等待确认属正常；否则疑似挂死）提前抓取进程现场：")
-                        dumpWineHangSnapshot(resolved, container, log)
+                    while (true) {
+                        try { Thread.sleep(30_000L) } catch (_: InterruptedException) { return@Thread }
+                        if (File(container.prefixPath, "system.reg").isFile) return@Thread
+                        if (System.currentTimeMillis() - lastOutputAt.get() >= WATCHDOG_MIN * 60_000L) {
+                            log("wineboot 已 ${WATCHDOG_MIN} 分钟连续无任何输出且 system.reg 未落盘 ——")
+                            log("（mono/gecko 安装提示框等待确认属正常；否则疑似挂死）提前抓取进程现场：")
+                            dumpWineHangSnapshot(resolved, container, log)
+                            return@Thread
+                        }
                     }
                 }, "linbox-prefix-watchdog").apply { isDaemon = true; start() }
                 // v3.3.3（用户问题 3，startfex.sh 同款）：-i → -u —— 参考链
@@ -639,8 +650,8 @@ object WineRegistry {
                     .putEnv("WINEDLLOVERRIDES", "mscoree=disabled")
                     .putEnv("WINEPREFIX", container.prefixPath)
                     .setWorkingDir(WineEnvironment.RUNTIME_DIR)
-                    .onStdOut { gotOutput = true; log(it) }
-                    .onStdErr { gotOutput = true; log(it) }
+                    .onStdOut { lastOutputAt.set(System.currentTimeMillis()); log(it) }
+                    .onStdErr { lastOutputAt.set(System.currentTimeMillis()); log(it) }
                     .exec()
                 val finished = runCatching {
                     executor.waitFor(TIMEOUT_MIN, TimeUnit.MINUTES)
@@ -1048,6 +1059,15 @@ object WineRegistry {
                         "生态包打入的游戏加载序垃圾，恢复 wine 全局默认加载序；管理器 per-exe 配置$keep 不受影响）"
                 )
             }
+            // ②b v3.4.9【tabtip 自启动根除】：生态包预置的 tabtip.exe（wine
+            // 上游/hangover 均无此程序 —— 纯 /opt 生态资产）经 Run 键在
+            // wineboot/boot 后自启动，2026-11-14 15:25 wine-10 容器 10.0.0.0
+            // 设备日志实证它把整条 wineboot 会话拖挂（日志止于 tabtip.exe
+            // 加载 libc.so 中途、无退出码）。删 exe + 剥 Run/RunOnce 值，
+            // 从源头断绝自启动；后台扫杀线程与会话看门狗降级为二线防线。
+            // 幂等：零命中零写入（已净化前缀零开销）。
+            runCatching { sanitizeTabtipAutostart(resolved, container, env, log, deep = true) }
+                .onFailure { log("⚠ tabtip 自启动剥除异常：${it.message}（不影响启动，后台扫杀仍在线）") }
             // ③ 全局 DllOverrides 注入
             ensureGlobalDllOverrides(context, resolved, container, env, log)
             // ③b v3.4.7：音频驱动显式落位（[Software\\Wine\\Drivers] Audio
@@ -1061,6 +1081,94 @@ object WineRegistry {
         }.getOrElse {
             log("⚠ 注册表卫生异常：${it.message}")
             false
+        }
+    }
+
+    /**
+     * v3.4.9【tabtip 自启动根除】：删除生态包预置的 tabtip.exe 并剥除
+     * Run/RunOnce 自启动值。
+     *
+     * 背景（2026-11-14 15:25 wine-10 容器 10.0.0.0 设备日志）：tabtip.exe
+     * 不是 wine 组件（上游 wine / hangover 树均无此程序 —— 全树零命中），
+     * 是 /opt 生态预置资产随 drive_c.tar.xz 注入的第三方触摸键盘辅助
+     * 程序，其 Run 自启动项在 wineboot/boot 后被拉起 —— 在本 box64/
+     * bionic 环境下它加载中途即把整个会话拖挂（日志止于其加载 libc.so、
+     * 无任何后续输出与退出码；历史 wine-10arm-20261109 崩溃快照另实证
+     * 其 UIA/WM_GETOBJECT 查询会杀死老 32 位游戏）。
+     *
+     * 手段（双管齐下，幂等）：
+     *  ① 删 drive_c windows/{system32,syswow64}/tabtip.exe —— Run 键
+     *    指向的 exe 缺失时 wineboot 仅记一条无害日志，自启动自然失效；
+     *  ② user.reg/system.reg/userdef.reg 的 Run/RunOnce 段内含 tabtip
+     *    的值行剥除（exe 已删后仍净化注册表，消除 “找不到程序” 噪音）。
+     *
+     * [deep]=false（会话启动快路径）：exe 不存在时直接返回（3 次文件
+     * 存在性检查，零读盘）—— Run 键指向已删的 exe 本身无害；
+     * [deep]=true（前缀构建链 sanitizeRegistryHygiene）：无论 exe 是否
+     * 存在都扫注册表做深度净化。
+     *
+     * 注册表直写前 wineserver 必须已收尾（自带 isServerRunning+stop 保险）。
+     */
+    fun sanitizeTabtipAutostart(
+        resolved: WineRuntime.Resolved,
+        container: ContainerData,
+        env: Map<String, String>,
+        log: (String) -> Unit,
+        deep: Boolean = false
+    ) {
+        val prefix = File(container.prefixPath)
+        val exePaths = listOf(
+            File(prefix, "drive_c/windows/system32/tabtip.exe"),
+            File(prefix, "drive_c/windows/syswow64/tabtip.exe"),
+            File(prefix, "drive_c/windows/SysWOW64/tabtip.exe")
+        )
+        val exeHit = exePaths.any { it.isFile }
+        if (!exeHit && !deep) return
+        var changed = false
+        // ① 删除预置注入的 tabtip.exe 本体
+        for (p in exePaths) {
+            if (p.isFile && runCatching { p.delete() }.getOrDefault(false)) {
+                changed = true
+                log("已删除预置 tabtip.exe（${p.parentFile?.name}/tabtip.exe）—— wineboot 自启动拉起源根除（wine 上游无此程序，纯生态包资产）")
+            }
+        }
+        // ② Run/RunOnce 段内的 tabtip 值行剥除（wine .reg 文本段内逐行过滤；
+        //    段判定用子串匹配，规避 WINE REGISTRY 双反斜杠转义差异）
+        for (name in listOf("user.reg", "system.reg", "userdef.reg")) {
+            val reg = File(prefix, name)
+            if (!reg.isFile) continue
+            val text = runCatching { reg.readText() }.getOrNull() ?: continue
+            if (!text.contains("tabtip", ignoreCase = true)) continue
+            var removed = 0
+            val out = StringBuilder()
+            var inRun = false
+            for (line in text.lineSequence()) {
+                val t = line.trim()
+                val isSection = t.startsWith("[") && t.endsWith("]")
+                if (isSection) {
+                    inRun = t.contains("CurrentVersion", ignoreCase = true) &&
+                        t.contains("Run", ignoreCase = true)
+                } else if (inRun && t.contains("tabtip", ignoreCase = true)) {
+                    removed++
+                    continue
+                }
+                out.appendLine(line)
+            }
+            if (removed > 0) {
+                // 写前保险：server 仍在跑时先收尾（防内存缓存回写覆盖直写）
+                if (WineServerUtils.isServerRunning(container.prefixPath)) {
+                    runCatching { WineServerUtils.stop(resolved, container, env) }
+                }
+                runCatching { reg.writeText(out.toString()) }
+                    .onSuccess {
+                        changed = true
+                        log("已剥除 $name 中 $removed 条 tabtip 自启动值（Run/RunOnce 段）")
+                    }
+                    .onFailure { log("⚠ $name tabtip 值剥除写回失败：${it.message}（exe 已删，自启动已失效）") }
+            }
+        }
+        if (changed) {
+            log("tabtip 预置自启动已根除（删 exe + 剥 Run 值；后台扫杀线程与会话看门狗继续作为二线防线）")
         }
     }
 
