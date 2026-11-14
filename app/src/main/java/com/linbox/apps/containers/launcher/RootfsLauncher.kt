@@ -1460,7 +1460,14 @@ object RootfsLauncher {
             //      KDoc：生态包预置 tabtip.exe 的自启动把 2026-11-14 15:25
             //      wine-10 前缀构建会话整场拖挂。
             runCatching {
-                WineRegistry.sanitizeTabtipAutostart(resolved, container, env) { sink.stamp(it) }
+                // v3.4.9 修正：log 必须具名传入 —— 尾随 lambda 会绑定到最后
+                // 一个参数 deep: Boolean（() -> Unit ≠ Boolean，CI 三连报错
+                // 的根源）；deep 保持默认 false（会话快路径：exe 缺席时 3
+                // 次存在性检查即返回）。
+                WineRegistry.sanitizeTabtipAutostart(
+                    resolved, container, env,
+                    log = { sink.stamp(it) }
+                )
             }.onFailure { sink.stamp("⚠ tabtip 自启动净化异常：${it.message}（不影响启动）") }
 
             // 12) 构建命令并 exec（wine / wineserver / wineboot 特判）
