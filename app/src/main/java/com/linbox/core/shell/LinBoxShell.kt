@@ -237,8 +237,14 @@ fun LinBoxShell() {
 
         // ===== 5. 虚拟游戏手柄层（悬浮球 + 摇杆/按钮 + 设置窗） =====
         GamepadOverlay()
-        GamepadSettingsWindow()
-        GamepadFloatingBall()
+        // v6.9（用户："悬浮球所有菜单应该显示在虚拟手柄按键前端才对"）：
+        // X11 显示层在场时，悬浮球/手柄设置窗改由 X11Surface 挂在
+        // decorView 的 ballHost 渲染（位于手柄宿主之上 —— 菜单显示在
+        // 手柄按键前端）；此处让位，防双重渲染。
+        if (!com.linbox.apps.x11.X11DisplayState.ballHostActive) {
+            GamepadSettingsWindow()
+            GamepadFloatingBall()
+        }
 
         // ===== 6. 虚拟鼠标指针层（最顶层） =====
         MouseCursorOverlay()

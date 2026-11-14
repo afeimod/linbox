@@ -394,6 +394,10 @@ data class ContainerData(
      * DXVK —— 解压到对应容器 C 盘 windows，装 FEX 仿真器 PE DLL
      * libarm64ecfex.dll / libwow64fex.dll 等升级版）。 */
     val fexcore: String = "",
+    /** v6.9（用户："加入一个vkd3d12的选项，用于选择d3d12的版本"）：
+     * VKD3D12（D3D12→Vulkan）版本槽位（对接 /opt/vkd3d12；与 dxvk
+     * 同链路 —— 运行前自动解压 tar 到对应容器 C 盘 windows）。 */
+    val vkd3d12: String = "",
     /** v3.3.15：Wrapper 驱动版本槽位（对接 /opt/wrapper —— 用户驱动包
      * 为 rootfs 布局 usr/lib+usr/share 的预编译 Turnip/Adreno tar；按包
      * 结构直接落位 rootfs/usr/，同名 Mesa so 自动备份、卸载可恢复，
@@ -455,6 +459,7 @@ data class ContainerData(
         "zink" to zink,
         "wined3d" to wined3d,
         "fexcore" to fexcore,
+        "vkd3d12" to vkd3d12,
         "wrapper" to wrapper,
         "uargs" to uargs,
         "exe" to exe,
@@ -561,6 +566,7 @@ data class ContainerData(
                 zink = kv["zink"] ?: "",
                 wined3d = kv["wined3d"] ?: "",
                 fexcore = kv["fexcore"] ?: "",
+                vkd3d12 = kv["vkd3d12"] ?: "",
                 wrapper = kv["wrapper"] ?: "",
                 uargs = kv["uargs"] ?: "",
                 exe = kv["exe"] ?: "",

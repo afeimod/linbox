@@ -1448,6 +1448,8 @@ internal fun GraphicsDriverTab(
     var zinkTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     var dxvkTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     var wined3dTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
+    // v6.9：VKD3D12（D3D12→Vulkan）版本槽位（/opt/vkd3d12）
+    var vkd3d12Tars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     var fexcoreTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     // v3.3.16（上游实现 DriverPackages 模型）：Vulkan 驱动 = 类型
     //（turnip / wrapper）+ 版本（独立目录多驱动共存）+ ➕ yuzu 式安装
@@ -1471,6 +1473,7 @@ internal fun GraphicsDriverTab(
             zinkTars = GuanliSupport.scanOpt("zink")
             dxvkTars = GuanliSupport.scanOpt("dxvk1")
             wined3dTars = GuanliSupport.scanOpt("vkord3d")
+            vkd3d12Tars = GuanliSupport.scanOpt("vkd3d12")
             fexcoreTars = GuanliSupport.scanOpt("fexcore")
             tzTars = GuanliSupport.scanOpt("tz")
             yuzuTars = GuanliSupport.scanOpt("yuzu")
@@ -1860,29 +1863,80 @@ internal fun GraphicsDriverTab(
             onSelect = { onChange(edit.copy(zink = it)) }
         )
     }
-    GGroup("DXVK") {
-        DriverCombo(
-            tars = dxvkTars,
-            value = if (edit.dxvk == ContainerData.DXVK_AUTO) "" else if (edit.dxvk == ContainerData.DXVK_OFF) "off" else edit.dxvk,
-            dirNote = "默认=APK 内置资产自动注入；不使用=关闭注入；tar 槽位（rootfs/opt/dxvk1）运行前自动解压到容器 C 盘 windows（v3.3.9）",
-            onSelect = { v ->
-                onChange(
-                    edit.copy(
-                        dxvk = when (v) {
-                            "" -> ContainerData.DXVK_AUTO
-                            "off" -> ContainerData.DXVK_OFF
-                            else -> v
-                        }
+    // ==============================================================
+    // v6.9（用户："dxvk和wined3d应该是同样的东西，改成在一起，一个
+    // 按钮选择dxvk就只显示dxvk列表选择，选择wined3d就是wined3d列表，
+    // 避免冲突，就像驱动那里一样"）：DXVK / WineD3D 合并为同一 GGroup ——
+    // 上方类型下拉（D3D 转译引擎，与 Vulkan 驱动区同款交互），下方只
+    // 显示所选类型的版本列表；互斥写回 —— 选 WineD3D 强制 dxvk=off、
+    // 选 DXVK 清 wined3d（两者都覆盖 C 盘 d3d8/9/10/11 DLL，同时注入
+    // 必冲突）。
+    // ==============================================================
+    GGroup("D3D 转译（DXVK / WineD3D）") {
+        val d3dType = if (edit.wined3d.isNotBlank() && edit.wined3d != "off") "wined3d" else "dxvk"
+        GComboBox(
+            options = listOf("DXVK（D3D→Vulkan，推荐）", "WineD3D（D3D→OpenGL）"),
+            selected = if (d3dType == "wined3d") "WineD3D（D3D→OpenGL）" else "DXVK（D3D→Vulkan，推荐）",
+            onSelect = { label ->
+                if (label.startsWith("DXVK")) {
+                    // 切 DXVK：清 WineD3D 槽位；dxvk 原为 off（被 WineD3D 联动
+                    // 关闭）时回 auto 注入，显式 off 保持
+                    onChange(
+                        edit.copy(
+                            wined3d = "",
+                            dxvk = if (edit.dxvk == ContainerData.DXVK_OFF && edit.wined3d.isNotBlank())
+                                ContainerData.DXVK_AUTO else edit.dxvk
+                        )
                     )
-                )
+                } else {
+                    // 切 WineD3D：强制 dxvk=off（防 DLL 冲突）；wined3d 预选
+                    // 首个可用版本，无 tar 则默认（rootfs 内置 WineD3D）
+                    onChange(
+                        edit.copy(
+                            dxvk = ContainerData.DXVK_OFF,
+                            wined3d = edit.wined3d.ifBlank { wined3dTars.firstOrNull()?.display ?: "" }
+                        )
+                    )
+                }
             }
         )
+        if (d3dType == "wined3d") {
+            DriverCombo(
+                tars = wined3dTars, value = edit.wined3d,
+                dirNote = "默认=rootfs 内置 WineD3D（wine 自带 OpenGL 转译）；不使用=关闭覆盖；tar 槽位（rootfs/opt/vkord3d）运行前自动解压到容器 C 盘 windows",
+                onSelect = { onChange(edit.copy(wined3d = it, dxvk = ContainerData.DXVK_OFF)) }
+            )
+        } else {
+            DriverCombo(
+                tars = dxvkTars,
+                value = if (edit.dxvk == ContainerData.DXVK_AUTO) "" else if (edit.dxvk == ContainerData.DXVK_OFF) "off" else edit.dxvk,
+                dirNote = "默认=APK 内置资产自动注入；不使用=关闭注入；tar 槽位（rootfs/opt/dxvk1）运行前自动解压到容器 C 盘 windows（v3.3.9）",
+                onSelect = { v ->
+                    onChange(
+                        edit.copy(
+                            dxvk = when (v) {
+                                "" -> ContainerData.DXVK_AUTO
+                                "off" -> ContainerData.DXVK_OFF
+                                else -> v
+                            },
+                            wined3d = ""
+                        )
+                    )
+                }
+            )
+        }
     }
-    GGroup("WineD3D") {
+    // ==============================================================
+    // v6.9（用户："加入一个vkd3d12的选项，用于选择d3d12的版本，读取和
+    // 解压opt下vkd3d12目录的，和dxvk d3d一样解压到c盘windows"）：
+    // VKD3D12 —— D3D12→Vulkan 转译层版本槽位（/opt/vkd3d12 独立目录，
+    // tar 运行前自动解压到容器 C 盘 windows，与 DXVK 同链路）。
+    // ==============================================================
+    GGroup("VKD3D12（D3D12 → Vulkan）") {
         DriverCombo(
-            tars = wined3dTars, value = edit.wined3d,
-            dirNote = dirNote,
-            onSelect = { onChange(edit.copy(wined3d = it)) }
+            tars = vkd3d12Tars, value = edit.vkd3d12,
+            dirNote = "默认=不安装（用 wine 自带 vkd3d）；不使用=显式关闭；tar 槽位（rootfs/opt/vkd3d12，vkd3d-proton 等）运行前自动解压到容器 C 盘 windows",
+            onSelect = { onChange(edit.copy(vkd3d12 = it)) }
         )
     }
     // v3.3.10（用户问题 1）：FEXCore 选项框 —— /opt/fexcore 独立目录，
@@ -1895,11 +1949,11 @@ internal fun GraphicsDriverTab(
         )
     }
     GNote(
-        "图形驱动槽位：Vulkan 驱动（turnip/wrapper，上方新机制）、Zink(/opt/zink)、DXVK(/opt/dxvk1)、" +
-            "WineD3D(/opt/vkord3d)、FEXCore(/opt/fexcore)。运行容器时：" +
+        "图形驱动槽位：Vulkan 驱动（turnip/wrapper，上方新机制）、Zink(/opt/zink)、D3D 转译（DXVK /opt/dxvk1 与" +
+            "WineD3D /opt/vkord3d 二选一，互斥防 DLL 冲突）、VKD3D12(/opt/vkd3d12)、FEXCore(/opt/fexcore)。运行容器时：" +
             "Vulkan 驱动 → VK_ICD_FILENAMES 指向独立目录 ICD（含用户 turnip 包，" +
             "GL 自动联动 zink 吃驱动加速）；Zink → rootfs/usr/lib；" +
-            "DXVK/WineD3D/FEXCore → 对应容器 C 盘 windows"
+            "DXVK/WineD3D/VKD3D12/FEXCore → 对应容器 C 盘 windows"
     )
 }
 

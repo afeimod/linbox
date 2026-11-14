@@ -684,13 +684,18 @@ object RootfsLauncher {
                     Triple("Zink", container.zink, File(ContainerManager.ROOTFS_ROOT, "usr/lib")),
                     Triple("WineD3D", container.wined3d, prefixWin),
                     Triple("DXVK", container.dxvk, prefixWin),
-                    Triple("FEXCore", container.fexcore, prefixWin)
+                    Triple("FEXCore", container.fexcore, prefixWin),
+                    // v6.9（用户："加入一个vkd3d12的选项…读取和解压opt下vkd3d12
+                    // 目录的，和dxvk d3d一样解压到c盘windows"）：VKD3D12 槽位
+                    //（D3D12→Vulkan）—— 与 DXVK 同链路，解压到容器 C 盘 windows
+                    Triple("VKD3D12", container.vkd3d12, prefixWin)
                 ).forEach { (label, slot, dest) ->
                     if (slot.isNotBlank() && slot != "off" && slot != ContainerData.DXVK_AUTO) {
                         val dir = when (label) {
                             "Zink" -> "zink"
                             "WineD3D" -> "vkord3d"
                             "FEXCore" -> "fexcore"   // v3.3.10：独立目录（非 dxvk1）
+                            "VKD3D12" -> "vkd3d12"   // v6.9：独立目录（与 dxvk 同链路）
                             else -> "dxvk1"            // DXVK
                         }
                         val tar = GuanliSupport.scanOpt(dir).firstOrNull { it.display == slot }

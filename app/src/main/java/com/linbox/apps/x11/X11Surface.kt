@@ -34,6 +34,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +51,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ComposeView
@@ -61,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.viewinterop.AndroidView
@@ -247,6 +251,8 @@ fun X11DisplayLayer() {
     // LocalLifecycleOwner（factory 非 Composable 作用域内预取）
     val lifecycleOwner = LocalLifecycleOwner.current
     var gamepadHostRef by remember { mutableStateOf<ComposeView?>(null) }
+    // v6.9：悬浮球 decor 宿主引用（onDispose 一并销毁；见 factory 内说明）
+    var ballHostRef by remember { mutableStateOf<ComposeView?>(null) }
 
     // 连接建立即应用分辨率协议文件（兜底时序：glibc-runner 写文件可能
     // 早于/晚于窗口打开；FileObserver 只覆盖窗口已打开的情况）。
@@ -289,6 +295,13 @@ fun X11DisplayLayer() {
                 (host.parent as? ViewGroup)?.removeView(host)
             }
             gamepadHostRef = null
+            // v6.9：悬浮球 decor 宿主一并销毁（主树悬浮球/手柄设置窗恢复渲染）
+            ballHostRef?.let { host ->
+                host.disposeComposition()
+                (host.parent as? ViewGroup)?.removeView(host)
+            }
+            ballHostRef = null
+            X11DisplayState.ballHostActive = false
             // 手柄 → X11 转发目标一并注销（内部会对仍按着的键补发 UP）
             X11InputHub.get(context).setActiveLorieView(null)
             X11WindowController.detachView(userClosed = true)
@@ -505,6 +518,35 @@ fun X11DisplayLayer() {
                     }
                     gamepadHost.visibility = View.GONE
                     gamepadHostRef = gamepadHost
+
+                    // v6.9（用户："悬浮球所有菜单应该显示在虚拟手柄按键前端才
+                    // 对"）：悬浮球/手柄设置窗第二宿主 —— 挂在 gamepadHost 之后
+                    //（decorView 后加子视图绘制在上、事件先派发）：球与全部菜单
+                    // 恒在虚拟手柄按键之上，菜单不再被按键遮挡。主树（LinBoxShell）
+                    // 的悬浮球/设置窗在 ballHostActive 时让位（GamepadOverlay 同款
+                    // gating），会话期间只此一处，无双重渲染。兜底路径（无 decor）
+                    // 不建宿主，主树版本照常渲染。
+                    if (decorParent != null) {
+                        val ballHost = ComposeView(ctx).apply {
+                            setViewTreeLifecycleOwner(lifecycleOwner)
+                            (lifecycleOwner as? SavedStateRegistryOwner)?.let {
+                                setViewTreeSavedStateRegistryOwner(it)
+                            }
+                            setContent {
+                                com.linbox.core.input.gamepad.GamepadFloatingBall()
+                                com.linbox.core.input.gamepad.GamepadSettingsWindow()
+                            }
+                        }
+                        decorParent.addView(
+                            ballHost,
+                            ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                        ballHostRef = ballHost
+                        X11DisplayState.ballHostActive = true
+                    }
 
                     // 分流接线：屏幕子事件直达 LorieView（桥），手柄命中区
                     // 判定复用 GamepadController（元素 ∪ 工具条，窗口坐标）
@@ -896,6 +938,10 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var downX = 0f; private var downY = 0f
     private var downAt = 0L
     private var moved = false
+    // v6.9：本手势长按是否已到点 —— 轻点/长按唯一分界（原 260ms 轻点窗 +
+    // 400ms 长按之间存在 260~400ms 死区：既不轻点也不长按；更慢的轻点
+    // 直接进入长按拖拽 → 用户实测"轻点时变成了长按"）
+    private var longPressFired = false
     private var curX = 0f; private var curY = 0f
     // v2.33.1：本手势 tap 落点（X 坐标）—— 按下与释放共用同一条 absolute
     // 坐标（释放零位移）；双击吸附记录同一落点（吸附语义对齐按下瞬间）
@@ -912,7 +958,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var lastTapAt = 0L
 
     private val slopPx = (ViewConfiguration.get(context).scaledTouchSlop * 1.5f)
-    private val tapMaxMs = 260L
     private val dblTapMaxMs = 450L
     private val wheelStep = 40f
 
@@ -943,6 +988,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     /** 长按到点（主线程）：仍处于单指未滑动状态才触发。 */
     private fun onLongPressFired() {
         if (mode != Mode.ONE || moved) return
+        longPressFired = true
         when (touchMode) {
             TOUCH_SIMULATED -> {
                 // 光标绝对定位到指尖 + 左键按下（单条 absolute 按钮消息，
@@ -1400,6 +1446,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
                 moved = false
+                longPressFired = false
                 diagDowns++
                 // v6.8：长按检测挂起（到点未滑动 → 定位 + 左键按下进拖拽）
                 armLongPress()
@@ -1517,7 +1564,11 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                     pressedLeft = false
                 } else if (mode == Mode.ONE) {
                     val now = android.os.SystemClock.uptimeMillis()
-                    if (!moved && now - downAt <= tapMaxMs) {
+                    // v6.9（用户："修复模拟触摸的方式无效果"）：轻点判定去掉 260ms
+                    // 时间窗 —— 未滑动且长按未到点 = 轻点（定位 + 点击）；长按到点 =
+                    // 按住拖拽。原 260~400ms 死区令慢速轻点完全无响应，是"模拟
+                    // 触摸无效果"的根因。
+                    if (!moved && !longPressFired) {
                         // v6.8 轻点（上游 onTap 语义）：光标绝对定位到指尖 +
                         // 左键点击 —— 单条消息先定位后按下/抬起（对齐上游
                         // moveCursorToScreenPoint → sendMouseClick）；双击
@@ -1735,6 +1786,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 curX = downX; curY = downY
                 downAt = android.os.SystemClock.uptimeMillis()
                 moved = false
+                longPressFired = false
                 diagDowns++
                 // v6.8：长按检测挂起（tapToMove 关闭时长按 = 左键按住拖拽，
                 // 上游 TrackpadInputStrategy.onPressAndHold 同款）
@@ -1843,8 +1895,12 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                     pressedLeft = false
                 }
                 if (mode == Mode.ONE) {
-                    val now = android.os.SystemClock.uptimeMillis()
-                    if (!moved && now - downAt <= tapMaxMs) {
+                    // v6.9（用户："x11选择触控板时默认轻点打开…轻点就是点击一下，
+                    // 应该长按后才是长按拖动"）：轻点判定去掉 260ms 时间窗 ——
+                    // 未滑动且长按未到点 = 轻点左键单击（默认可用，无需任何设置）；
+                    // 长按到点后 = 左键按住 + 相对拖拽。原 260ms 窗与 400ms 长按
+                    // 之间的死区令稍慢的轻点落入"无响应/误长按"。
+                    if (!moved && !longPressFired) {
                         if (tapToMove) {
                             // 轻点拖拽：轻点=按下（随后移动即拖拽），再轻点=释放
                             if (padPressed) {
@@ -2406,6 +2462,60 @@ object X11FloatWindow {
         else Rect(x, y, x + w, y + h)
 }
 
+/**
+ * v6.9（用户："x11小窗口模式时关闭按钮特别难点到"）：标题栏按钮专用点击
+ * 修饰符 —— 双重修复：
+ * 1) 触摸目标放大：最小高 30dp + 最小宽（✕ 等小按钮原本仅约 20×22dp，
+ *    指尖命中率极低）；
+ * 2) 手势抢占根治：父容器标题栏挂有 detectDragGestures（拖动窗口）与
+ *    detectTapGestures（双击最大化），普通 clickable 在手指微移超 touch
+ *    slop 时即被父级拖拽检测夺走 → 点击取消。本修饰符在按钮自身持续
+ *    消费按住期间的事件（子级先于父级收事件）→ 父级拖拽/双击检测因事件
+ *    已消费即刻取消 —— 落点在按钮内必定完成点击；滑动超 24dp 视为滑出
+ *    按钮取消点击（父级拖拽本手势已死，抬指即结束）。
+ */
+private fun Modifier.chromeButton(minWidth: Dp, onClick: () -> Unit): Modifier =
+    this
+        .heightIn(min = 30.dp)
+        .widthIn(min = minWidth)
+        .pointerInput(onClick) {
+            val slop = 24.dp.toPx()
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                val sx = down.position.x
+                val sy = down.position.y
+                val pid = down.id
+                var alive = true
+                while (alive) {
+                    val event = awaitPointerEvent()
+                    if (event.type == PointerEventType.Cancel) break
+                    val c = event.changes.firstOrNull { it.id == pid } ?: continue
+                    val dx = c.position.x - sx
+                    val dy = c.position.y - sy
+                    val beyond = dx * dx + dy * dy > slop * slop
+                    when {
+                        !c.pressed -> {
+                            // 抬起：未滑出才点击（消费本事件，防父级双击误判）
+                            if (!beyond) {
+                                c.consume()
+                                onClick()
+                            }
+                            alive = false
+                        }
+                        beyond -> {
+                            // 滑出按钮：取消点击，残余事件放行
+                            alive = false
+                        }
+                        else -> {
+                            // 按住期间持续消费 —— 父级拖拽检测要求事件未消费
+                            c.consume()
+                        }
+                    }
+                }
+            }
+        }
+
 /** 八向缩放边。 */
 private enum class ResizeEdge(val l: Boolean, val r: Boolean, val t: Boolean, val b: Boolean) {
     L(l = true,  r = false, t = false, b = false),
@@ -2527,7 +2637,7 @@ private fun X11FloatWindowChrome(
                     fontSize = 11.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable { X11FloatWindow.toggleQuickBar(context) }
+                        .chromeButton(minWidth = 34.dp) { X11FloatWindow.toggleQuickBar(context) }
                         .padding(horizontal = 7.dp, vertical = 5.dp)
                 )
                 // 全屏（v6.5：点击全屏按钮恢复全屏，返回键恢复小窗）
@@ -2537,7 +2647,7 @@ private fun X11FloatWindowChrome(
                     fontSize = 10.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable { onFullscreen() }
+                        .chromeButton(minWidth = 44.dp) { onFullscreen() }
                         .padding(horizontal = 7.dp, vertical = 5.dp)
                 )
                 // 最大化 / 还原
@@ -2547,7 +2657,7 @@ private fun X11FloatWindowChrome(
                     fontSize = 10.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable { X11FloatWindow.setMaximized(context, !X11FloatWindow.maximized) }
+                        .chromeButton(minWidth = 52.dp) { X11FloatWindow.setMaximized(context, !X11FloatWindow.maximized) }
                         .padding(horizontal = 7.dp, vertical = 5.dp)
                 )
                 // 关闭（结束会话）
@@ -2557,7 +2667,7 @@ private fun X11FloatWindowChrome(
                     fontSize = 12.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable { onExit() }
+                        .chromeButton(minWidth = 40.dp) { onExit() }
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                 )
             }

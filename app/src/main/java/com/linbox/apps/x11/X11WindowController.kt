@@ -34,6 +34,14 @@ object X11DisplayState {
 
     /** X11 显示层处于全屏形态（游戏会话独占，主界面刷新静止）。 */
     var fullscreenActive by mutableStateOf(false)
+
+    /**
+     * v6.9（用户："悬浮球所有菜单应该显示在虚拟手柄按键前端才对"）：
+     * 悬浮球 decor 宿主在场（X11Surface factory 已把悬浮球/手柄设置窗
+     * 宿主挂上 decorView，且位于手柄宿主之上）—— 主树（LinBoxShell）
+     * 的悬浮球与设置窗让位，防双重渲染。
+     */
+    var ballHostActive by mutableStateOf(false)
 }
 
 /**

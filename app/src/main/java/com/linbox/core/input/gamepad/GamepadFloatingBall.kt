@@ -144,6 +144,11 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
     // 的全部功能并入本球（用户：“终端界面的悬浮球没有集中到虚拟手柄
     // 悬浮球里，要和 x11 那样多排集合进去”）
     val inTerminal = ShellController.screen == ShellController.Screen.TERMINAL
+    // v6.9（用户："浏览器里的快捷设置也移动到悬浮球里，识别浏览器后就
+    // 显示"）：浏览器组可见性 —— 浏览器页，或浏览器窗口在场
+    //（BrowserQuickBus.available 由浏览器内容组合时注册，浮窗形态也覆盖）
+    val inBrowser = ShellController.screen == ShellController.Screen.BROWSER ||
+        com.linbox.apps.browser.BrowserQuickBus.available
 
     var expanded by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
@@ -162,6 +167,14 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
         mutableStateOf(
             com.termux.x11.LoriePreferences.prefs?.displayStretch?.get() ?: true
         )
+    }
+    // v6.9：菜单每次展开时刷新快捷镜像 —— 原实现仅 remember 初读一次，
+    // 经 X11 设置面板切换触摸方式/拉伸后，球的芯片标签与点亮态停在旧值。
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            touchModeState = com.termux.x11.LoriePreferences.prefs?.touchMode?.get()?.toIntOrNull() ?: 2
+            x11Stretch = com.termux.x11.LoriePreferences.prefs?.displayStretch?.get() ?: true
+        }
     }
     // v5.0：键盘切换需要 Context（组合层取，回调内使用）
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -234,7 +247,11 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
             return pts.any { (x, y) -> GamepadController.isOverPadElement(x, y) }
         }
 
-        val menuHpx = menuHeightEstimate(density, inX11 || inTerminal)
+        // v6.9：浏览器组计入估算（X11 会话后台运行 + 浏览器页时两组同屏）
+        val menuHpx = menuHeightEstimate(
+            density,
+            (if (inX11) 1 else 0) + (if (inTerminal) 1 else 0) + (if (inBrowser) 1 else 0)
+        )
         val menuPad = with(density) { 10.dp.toPx() }
         val screenWpxTotal = with(density) { maxWidth.toPx() }
         val screenHpxTotal = with(density) { maxHeight.toPx() }
@@ -479,6 +496,82 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                 }
 
                 // =====================================================
+                // v6.9：浏览器快捷组（用户：“浏览器里的快捷设置也移动到
+                // 悬浮球里，识别浏览器后就显示，浏览器上的按钮去掉只保留
+                // 收藏按钮”）—— 原工具条按钮全部并入本组，经 BrowserQuickBus
+                // 投递；浏览器工具条只留地址栏 + 收藏按钮。
+                // =====================================================
+                if (inBrowser) {
+                    BallMenuSectionDivider()
+                    Text(
+                        "浏览器快捷",
+                        color = Color(0x80B8C7D9),
+                        fontSize = 9.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                    )
+                    BallChipGrid(
+                        listOf(
+                            BallChipItem(BallIconKind.BACK, "后退",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.goBack != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.goBack?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.FORWARD, "前进",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.goForward != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.goForward?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.REFRESH, "刷新",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.refresh != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.refresh?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.HOME, "主页",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.goHome != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.goHome?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.BOOKMARK, "收藏",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.bookmarkCurrent != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.bookmarkCurrent?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.FOLDER, "书签",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.showBookmarks != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.showBookmarks?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.HISTORY, "历史",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.showHistory != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.showHistory?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(
+                                BallIconKind.UA,
+                                if (com.linbox.apps.browser.BrowserQuickBus.uaIsDesktop) "手机模式" else "桌面模式",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.toggleUaMode != null
+                            ) {
+                                com.linbox.apps.browser.BrowserQuickBus.toggleUaMode?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(
+                                BallIconKind.FULLSCREEN,
+                                if (com.linbox.apps.browser.BrowserQuickBus.fullscreenActive) "退出全屏" else "全屏",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.toggleFullscreen != null
+                            ) {
+                                com.linbox.apps.browser.BrowserQuickBus.toggleFullscreen?.invoke()
+                                expanded = false
+                            },
+                            BallChipItem(BallIconKind.DISPLAY, "3D 视角",
+                                enabled = com.linbox.apps.browser.BrowserQuickBus.toggleView3d != null) {
+                                com.linbox.apps.browser.BrowserQuickBus.toggleView3d?.invoke()
+                                expanded = false
+                            }
+                        )
+                    )
+                }
+
+                // =====================================================
                 // v5.0：X11 组（用户：“把 x11 设置的悬浮球功能放在虚拟手柄
                 // 悬浮球里” —— 原 X11GlassFab 的全部功能并入本球；
                 // v6.6：会话存活即常驻（含浮窗小窗/后台运行），
@@ -582,8 +675,17 @@ private fun GamepadFloatingBallContent(onPersistConfig: (() -> Unit)?) {
                                 com.linbox.apps.x11.X11SettingsBridge.requestShow()
                                 expanded = false
                             },
-                            BallChipItem(BallIconKind.HOME, "回主页") {
-                                ShellController.showHome()
+                            // v6.9（用户："悬浮球里x11快捷设置回主页改成关闭x11，
+                            // 关闭x11同时关闭所有wine"）：与小窗 ✕ 同语义 ——
+                            // closeSession 断开显示（显示层退场 onDispose →
+                            // X11Session.killWine 扫 /proc 收掉整棵 wine 进程树）；
+                            // 此处再显式补一次（幂等防抖），X11 页上同时返回主页。
+                            BallChipItem(BallIconKind.CLOSE, "关闭 X11", danger = true) {
+                                com.linbox.apps.x11.X11WindowController.closeSession()
+                                com.linbox.apps.x11.X11Session.killWine()
+                                if (ShellController.screen == ShellController.Screen.X11) {
+                                    ShellController.showHome()
+                                }
                                 expanded = false
                             }
                         )
@@ -832,7 +934,9 @@ private fun X11QuickChip(
 private enum class BallIconKind {
     GAMEPAD, SETTINGS, EDIT, SAVE, FOLDER, CLOSE,
     KEYBOARD, TOUCH, FSGAME, CYCLE, FULLSCREEN, GEAR, HOME,
-    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY, PIP, STRETCH
+    ADD, PASTE, FONT_MINUS, FONT_PLUS, SYMBOL, X11, DISPLAY, PIP, STRETCH,
+    // v6.9：浏览器组六枚
+    BACK, FORWARD, REFRESH, BOOKMARK, HISTORY, UA
 }
 
 /** 图标配色（危险项统一红系；v6.2 增终端组七枚）。 */
@@ -859,6 +963,13 @@ private fun BallIconKind.tint(danger: Boolean): Color = if (danger) Color(0xFFFF
     BallIconKind.DISPLAY -> Color(0xFF7FE8DC)
     BallIconKind.PIP -> Color(0xFF8FB7FF)
     BallIconKind.STRETCH -> Color(0xFF9AD8F5)
+    // v6.9：浏览器组配色
+    BallIconKind.BACK -> Color(0xFF9AD8F5)
+    BallIconKind.FORWARD -> Color(0xFF9AD8F5)
+    BallIconKind.REFRESH -> Color(0xFF7CE87C)
+    BallIconKind.BOOKMARK -> Color(0xFFF2D06B)
+    BallIconKind.HISTORY -> Color(0xFFC7A6FF)
+    BallIconKind.UA -> Color(0xFF8FD6FF)
 }
 
 /**
@@ -1145,6 +1256,60 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) 
                 drawLine(tint, Offset(20.4f * u, 11f * u), Offset(18.8f * u, 9.4f * u), s.width)
                 drawLine(tint, Offset(20.4f * u, 11f * u), Offset(18.8f * u, 12.6f * u), s.width)
             }
+
+            // ---- v6.9：浏览器组六枚 ----
+            BallIconKind.BACK -> {
+                drawLine(tint, Offset(13.5f * u, 5.2f * u), Offset(7.2f * u, 11f * u), s.width)
+                drawLine(tint, Offset(7.2f * u, 11f * u), Offset(13.5f * u, 16.8f * u), s.width)
+                drawLine(tint, Offset(8.2f * u, 11f * u), Offset(15.8f * u, 11f * u), s.width)
+            }
+            BallIconKind.FORWARD -> {
+                drawLine(tint, Offset(8.5f * u, 5.2f * u), Offset(14.8f * u, 11f * u), s.width)
+                drawLine(tint, Offset(14.8f * u, 11f * u), Offset(8.5f * u, 16.8f * u), s.width)
+                drawLine(tint, Offset(13.8f * u, 11f * u), Offset(6.2f * u, 11f * u), s.width)
+            }
+            BallIconKind.REFRESH -> {
+                drawArc(
+                    color = tint,
+                    startAngle = -55f,
+                    sweepAngle = 300f,
+                    useCenter = false,
+                    topLeft = Offset(4.6f * u, 4.6f * u),
+                    size = Size(12.8f * u, 12.8f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(15.6f * u, 4.6f * u), Offset(18.2f * u, 7.4f * u), s.width)
+                drawLine(tint, Offset(15.6f * u, 4.6f * u), Offset(12.2f * u, 5.8f * u), s.width)
+            }
+            BallIconKind.BOOKMARK -> {
+                drawPath(
+                    Path().apply {
+                        moveTo(6.8f * u, 3.8f * u)
+                        lineTo(15.2f * u, 3.8f * u)
+                        lineTo(15.2f * u, 18.2f * u)
+                        lineTo(11f * u, 14.2f * u)
+                        lineTo(6.8f * u, 18.2f * u)
+                        close()
+                    },
+                    color = tint,
+                    style = s
+                )
+            }
+            BallIconKind.HISTORY -> {
+                drawCircle(color = tint, radius = 7.4f * u, center = Offset(11f * u, 11f * u), style = s)
+                drawLine(tint, Offset(11f * u, 11f * u), Offset(11f * u, 6.4f * u), s.width)
+                drawLine(tint, Offset(11f * u, 11f * u), Offset(14.6f * u, 12.8f * u), s.width)
+            }
+            BallIconKind.UA -> {
+                drawRoundRect(
+                    color = tint,
+                    topLeft = Offset(6.2f * u, 3.6f * u),
+                    size = Size(9.6f * u, 13.2f * u),
+                    cornerRadius = CornerRadius(2.2f * u, 2.2f * u),
+                    style = s
+                )
+                drawLine(tint, Offset(9.4f * u, 18.6f * u), Offset(12.6f * u, 18.6f * u), s.width)
+            }
         }
     }
 }
@@ -1159,7 +1324,7 @@ private fun BallMenuIcon(kind: BallIconKind, tint: Color, iconSize: Dp = 16.dp) 
  */
 private fun menuHeightEstimate(
     density: androidx.compose.ui.unit.Density,
-    withExtraGroup: Boolean = false
+    extraGroups: Int = 0
 ): Float = with(density) {
-    (if (withExtraGroup) 370.dp else 150.dp).toPx()
+    (150.dp + 220.dp * extraGroups).toPx()
 }

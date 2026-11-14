@@ -280,6 +280,58 @@ internal fun BrowserContent(scope: WindowContentScope) {
                 )
             }
 
+            // v6.9（用户："浏览器里的快捷设置也移动到悬浮球里，识别浏览器后就
+            // 显示"）：工具条动作注册进 BrowserQuickBus —— 悬浮球「浏览器快捷」
+            // 组经此投递；ua/全屏状态变化时重注册（标签实时刷新）。注意放在
+            // !isFullscreen 条件块之外：真全屏时工具条隐藏，悬浮球是这些动作的
+            // 唯一入口，总线不能随工具条一起注销。
+            DisposableEffect(uaMode, isFullscreen) {
+                BrowserQuickBus.register(
+                    uaDesktop = uaMode == "desktop",
+                    fs = isFullscreen,
+                    onBack = { tabManager.getTab(tabManager.activeTabId)?.goBack() },
+                    onForward = { tabManager.getTab(tabManager.activeTabId)?.goForward() },
+                    onRefresh = { tabManager.getTab(tabManager.activeTabId)?.refresh() },
+                    onHome = {
+                        tabManager.getTab(tabManager.activeTabId)?.loadUrl(defaultHome)
+                        tabManager.addressInput = if (defaultHome == "linbox://home") "" else defaultHome
+                    },
+                    onToggleUa = { toggleUaMode() },
+                    onToggleFs = { toggleFullscreen() },
+                    onShowBookmarks = { showBookmarks = !showBookmarks },
+                    onShowHistory = { showHistory = !showHistory },
+                    onToggleView3d = { showView3dSettings = true },
+                    onBookmark = {
+                        val url = tabManager.addressInput
+                        if (url.isNotEmpty()) {
+                            // v3.0（LinBox 补强）：书签携带页面标题与 favicon
+                            //（浏览器图标识别：标签捕获 → Base64 持久化 → 列表展示）
+                            val activeTab = tabManager.tabs.firstOrNull { it.id == tabManager.activeTabId }
+                            val title = activeTab?.title?.takeIf { it.isNotBlank() && it != "新标签" } ?: url
+                            val faviconB64 = activeTab?.faviconPng?.let {
+                                runCatching { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }.getOrNull()
+                            }
+                            scope0.launch {
+                                val dao = app.database.bookmarkDao()
+                                val existing = dao.findByUrl(url)
+                                if (existing == null) {
+                                    dao.insert(
+                                        BookmarkEntity(
+                                            title = title,
+                                            url = url,
+                                            favicon = faviconB64
+                                        )
+                                    )
+                                } else {
+                                    dao.delete(existing)
+                                }
+                            }
+                        }
+                    }
+                )
+                onDispose { BrowserQuickBus.unregister() }
+            }
+
             // ===== 内容区 =====
             // v2.16：移除旧版“双击页面退出全屏”手势（与网页游戏的双击操作冲突、
             // 误触率高），退出全屏改用左上角悬浮按钮（见下方 FullscreenExitButton）
@@ -782,6 +834,75 @@ private fun TabBar(
 }
 
 /**
+ * v6.9：浏览器快捷总线（TerminalQuickBus 同款模式）—— 浏览器内容在场时
+ * 把工具条动作注册进来，虚拟手柄悬浮球的「浏览器快捷」组经此投递
+ *（用户："浏览器里的快捷设置也移动到悬浮球里，识别浏览器后就显示，
+ * 浏览器上的按钮去掉只保留收藏按钮"）。
+ */
+object BrowserQuickBus {
+    /** 浏览器内容是否在场（BrowserContent 组合中 = true；浮窗形态也覆盖）。 */
+    var available by mutableStateOf(false)
+        private set
+
+    var uaIsDesktop by mutableStateOf(true)
+    var fullscreenActive by mutableStateOf(false)
+
+    var goBack: (() -> Unit)? = null
+    var goForward: (() -> Unit)? = null
+    var refresh: (() -> Unit)? = null
+    var goHome: (() -> Unit)? = null
+    var toggleUaMode: (() -> Unit)? = null
+    var toggleFullscreen: (() -> Unit)? = null
+    var showBookmarks: (() -> Unit)? = null
+    var showHistory: (() -> Unit)? = null
+    var toggleView3d: (() -> Unit)? = null
+    var bookmarkCurrent: (() -> Unit)? = null
+
+    fun register(
+        uaDesktop: Boolean,
+        fs: Boolean,
+        onBack: () -> Unit,
+        onForward: () -> Unit,
+        onRefresh: () -> Unit,
+        onHome: () -> Unit,
+        onToggleUa: () -> Unit,
+        onToggleFs: () -> Unit,
+        onShowBookmarks: () -> Unit,
+        onShowHistory: () -> Unit,
+        onToggleView3d: () -> Unit,
+        onBookmark: () -> Unit
+    ) {
+        uaIsDesktop = uaDesktop
+        fullscreenActive = fs
+        goBack = onBack
+        goForward = onForward
+        refresh = onRefresh
+        goHome = onHome
+        toggleUaMode = onToggleUa
+        toggleFullscreen = onToggleFs
+        showBookmarks = onShowBookmarks
+        showHistory = onShowHistory
+        toggleView3d = onToggleView3d
+        bookmarkCurrent = onBookmark
+        available = true
+    }
+
+    fun unregister() {
+        available = false
+        goBack = null
+        goForward = null
+        refresh = null
+        goHome = null
+        toggleUaMode = null
+        toggleFullscreen = null
+        showBookmarks = null
+        showHistory = null
+        toggleView3d = null
+        bookmarkCurrent = null
+    }
+}
+
+/**
  * 工具栏
  */
 @Composable
@@ -811,22 +932,8 @@ private fun Toolbar(
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        IconButton(onClick = onForward, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        IconButton(onClick = onRefresh, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Refresh, contentDescription = "Refresh",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        IconButton(onClick = onHome, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.Home, contentDescription = "Home",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
+        // v6.9：前进/后退/刷新/主页按钮已移除 —— 动作并入悬浮球
+        // 「浏览器快捷」组（BrowserQuickBus），工具条只留地址栏 + 收藏。
 
         // 地址栏
         Box(
@@ -865,67 +972,13 @@ private fun Toolbar(
             )
         }
 
-        // 显眼 Go/搜索按钮：带主题背景色，确保用户能发现"如何前往"
-        Box(
-            modifier = Modifier
-                .height(30.dp)
-                .background(theme.accentColor, RoundedCornerShape(15.dp))
-                .clickable(onClick = onGo)
-                .padding(horizontal = 14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Search,
-                    contentDescription = "前往",
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    "前往",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
+        // v6.9（用户："浏览器上的按钮去掉只保留收藏按钮"）：显眼「前往」按钮、
+        // 书签列表/历史/3D 设置/UA 切换/全屏切换全部移除 —— 动作并入悬浮球
+        // 「浏览器快捷」组（BrowserQuickBus）；前往由地址栏回车（keyboardActions
+        // 的 onGo）承担，收藏（加/删书签）是工具条唯一保留的按钮。
         IconButton(onClick = onBookmark, modifier = Modifier.size(36.dp)) {
             Icon(Icons.Default.StarBorder, contentDescription = "Bookmark",
                 tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        IconButton(onClick = onShowBookmarks, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.BookmarkBorder, contentDescription = "Bookmarks",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        IconButton(onClick = onShowHistory, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Default.History, contentDescription = "History",
-                tint = if (theme.isDark) Color.White else Color.Black)
-        }
-        // v2.16：浏览器设置（3D 视角旋转）
-        IconButton(onClick = onOpenView3d, modifier = Modifier.size(36.dp)) {
-            Icon(
-                imageVector = Icons.Default._3dRotation,
-                contentDescription = "浏览器设置（3D 视角）",
-                tint = if (theme.isDark) Color.White else Color.Black
-            )
-        }
-        // 桌面/手机模式切换
-        IconButton(onClick = onToggleUaMode, modifier = Modifier.size(36.dp)) {
-            Icon(
-                imageVector = if (uaMode == "desktop") Icons.Default.Computer else Icons.Default.Smartphone,
-                contentDescription = if (uaMode == "desktop") "桌面模式" else "手机模式",
-                tint = if (theme.isDark) Color.White else Color.Black
-            )
-        }
-        // 真全屏切换（F11 风格）：隐藏状态栏/导航键/任务栏/标签栏/工具栏，浏览器占满整屏；
-        // v2.16：全屏中点左上角悬浮按钮或按返回键恢复窗口（双击退出已移除）
-        IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(36.dp)) {
-            Icon(
-                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                contentDescription = if (isFullscreen) "退出全屏" else "全屏",
-                tint = if (theme.isDark) Color.White else Color.Black
-            )
         }
     }
 }
