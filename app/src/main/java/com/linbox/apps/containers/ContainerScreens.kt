@@ -1302,8 +1302,8 @@ internal fun BasicSettingsTab(
                 ContainerFlags.OPENGL to "OpenGL驱动 (opengl3)",
                 ContainerFlags.UNITY to "Unity单线程渲染 (-force-gfx-direct)",
                 ContainerFlags.F5TASK to "F5任务管理器 (随容器启动)",
-                ContainerFlags.FEXMODE to "FEX模式(勾选才注入HODLL=libwow64fex.dll, 默认不注入)",
-                ContainerFlags.WOWBOXMODE to "wowbox64模式(勾选才注入HODLL=wowbox64.dll, 部分32位游戏)",
+                ContainerFlags.FEXMODE to "FEX模式(兼容保留项：HODLL 已默认注入 libwow64fex.dll)",
+                ContainerFlags.WOWBOXMODE to "wowbox64模式(兼容保留项：需显式 hodll=wowbox64.dll 才生效)",
                 ContainerFlags.CLOSESERVICE to "关闭service服务",
                 ContainerFlags.DEBUG to "调试日志"
             ),
@@ -1330,10 +1330,9 @@ internal fun BasicSettingsTab(
             "启动参数一律追加在 exe 之后：强制DX11 → -dx11；" +
                 "OpenGL → --rendering-driver opengl3；Unity单线程 → -force-gfx-direct；" +
                 "F5任务管理器 → 随容器启动 /opt/apps/f5taskmgr.exe；" +
-                "FEX模式 → 勾选才注入 HODLL=libwow64fex.dll；wowbox64模式 → 勾选才注入 HODLL=wowbox64.dll" +
-                "（部分 32 位游戏需要 box64-in-wow64；默认都不注入，wine 内部缺省即 FEX；两档同勾时 FEX模式 优先；" +
-                "HODLL 二选一取值）；" +
-                "自定义参数里写 hodll=… / hodll64=…（大小写均可）会自动提升为环境变量不再传给游戏（优先于两个勾选档）；" +
+                "FEX模式/wowbox64模式 → 兼容保留勾选档（2.38.40 对齐修复后 HODLL=libwow64fex.dll/HODLL64=" +
+                "libarm64ecfex.dll 均为包内存在即默认注入，勾选不再承担门禁）；" +
+                "自定义参数里写 hodll=… / hodll64=…（大小写均可）会自动提升为环境变量，显式值最高优先）；" +
                 "调试日志 → LinBox 会话日志本就常显（标记槽位）"
         )
     }
