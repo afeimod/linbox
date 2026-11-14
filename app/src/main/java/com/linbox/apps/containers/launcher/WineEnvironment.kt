@@ -359,16 +359,26 @@ object WineEnvironment {
         // v3.2.24（用户问题 3，对齐 startwine.sh / startfex.sh）：
         //   export BOX64_PATH=$WINE_PATH/bin
         //   export BOX64_LD_LIBRARY_PATH=$WINEPATH/lib/wine/i386-unix:$WINEPATH/lib/wine/x86_64-unix
-        // v3.3.38【性能】：BOX64_LOG 默认回 0。v3.2.13 由 0 改 1 是
-        // wineboot 崩溃排查期的诊断遗留 —— LOG=1 时 box64 对每个
-        // wrap/emulate 库加载都打 stderr，wine 每次拉起子进程
-        // （wineserver 握手、regedit、游戏内 CreateProcess）都重刷一遍，
-        // 日志管道 IO + 格式化白白吃启动 CPU；崩溃根因（RELR/SAFEFLAGS）
-        // 已由构建补丁与档位定稿根治，error 级可诊断性由会话日志兜底。
-        // 排障需要时 opt conf / 容器 env= 设 BOX64_LOG=1 即可（此处
-        // putIfAbsent，conf 在链路后段可覆盖）。
-        env.putIfAbsent("BOX64_LOG", "0")
-        env["BOX64_NOBANNER"] = "1"
+        // v3.4.6【用户点名】：恢复 box64 正常启动日志。v3.3.38 曾把
+        // BOX64_LOG 默认压回 0 并强制 BOX64_NOBANNER=1（性能考量），
+        // 用户 2026-11-14 拿正常 box64 日志对照（"正确的应该是类似
+        // [BOX64] Dynarec for ARM64, with extension: ... / Wine64
+        // detected / Using native(wrapped) libc.so ..."）指出 LinBox
+        // 会话日志"根本不是正常的 box64 运行日志"——横幅/Dynarec 扩展/
+        // wrap 探测/argv 全部不可见，只剩 error 行，排障无从下手。
+        // 恢复为：BOX64_LOG 默认 1（INFO：横幅 + "Using native(wrapped)"
+        // + Wine64 detected + argv 等，与上游/同类项目一致），不再强制
+        // NOBANNER。INFO 级只在每个进程启动时打一次（约十几行），
+        // 开销可忽略；更深的诊断仍走 LOG=2/3。putIfAbsent 语义保留 ——
+        // opt conf / 容器 env= 仍可逐项覆盖（含压回 0）。
+        // 注：此前 error 级刷屏的 "Symbol ... not found" 根因已由
+        // box64 0008 补丁 v3.4.6 扩展（__fseterr/__system_property_*/
+        // __str*_chk/glob 桥）在构建侧根治，LOG=1 不再意味着刷屏。
+        env.putIfAbsent("BOX64_LOG", "1")
+        // v3.4.6：撤除强制 NOBANNER —— 上游默认即 0（打印横幅）；
+        // 用户需要看到 "[BOX64] Box64 v0.4.4 ..." 版本行。仍可经
+        // opt conf / 容器 env= 设 BOX64_NOBANNER=1 关闭。
+        env["BOX64_NOBANNER"] = "0"
         env["BOX64_DYNAREC_TRACE"] = "0"
         // v3.2.13：BOX64_ENVFILE —— 让 rootfs 的 /usr/etc/box64.box64rc
         // 真正生效。上游 box64（v0.4.4 env.c InitializeEnvFiles）只读

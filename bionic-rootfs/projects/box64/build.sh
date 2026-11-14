@@ -473,8 +473,8 @@ install() {
     echo "错误: 产物未注册 libandroid-shmem.so 包装（ANDROID 编译单元缺失）"
     _shmem_ok=0
   fi
-  # ---- 6.6 v3.4.4 · 冒烟校验（0008 bionic 兼容符号桥） ----
-  # 用户 2026-11-14 设备日志（容器 000/1080）：x86_64-bionic 闭包的
+  # ---- 6.6 v3.4.6 · 冒烟校验（0008 bionic 兼容符号桥） ----
+  # 用户 2026-11-14 设备日志第一轮（容器 000/1080）：x86_64-bionic 闭包的
   # libX11.so(__FD_SET_chk/__FD_ISSET_chk)、libfontconfig.so
   # (__gnu_strerror_r)、libandroid-shmem.so(__android_log_print) 的符号
   # 引用被 box64 报 "Symbol not found" —— wineboot 卡死 / 构建完啥也
@@ -483,6 +483,25 @@ install() {
   # LBC_EXPORT 特征 = 补丁在链。缺导出（v3.2.21 同型事故：
   # -fvisibility=hidden + gc-sections）时 my_* 永不入 .dynsym，运行时
   # 桥接 dlsym(dlopen(NULL), "my_*") 扑空 —— 硬错误。
+  # v3.4.6（用户 2026-11-14 第二轮日志，容器 92 wine-9.2-x86_64 /
+  # 10889 hangover-11.16）：上一轮只堵了第一批 —— 第二批 bionic 专属
+  # 符号仍 not found：
+  #   libunistring.so  __fseterr                (optver=4 / LIBC_P)
+  #   libglib-2.0.so   __system_property_get    (optver=2 / LIBC)
+  #   libicuuc.so.78   __system_property_find   (optver=2 / LIBC)
+  #   libx265.so       __strchr_chk/__strlen_chk(optver=2 / LIBC)
+  #   每轮 wineboot 3 次 "Warning, function my_glob not found"
+  #   （上游 wrappedlibc.c 的 my_glob/my_glob64 在 #ifndef ANDROID 下，
+  #    bionic 构建根本没有这对 my_*；GOM(glob) 却无条件在表里）
+  # 0008 就地扩展：同族 fortify 全家（__strrchr_chk/__strlcat_chk/
+  # __strncpy_chk2/__stpncpy_chk2）与 __system_property_read/set 主动
+  # 补齐，glob/glob64 由 compat 文件直接转发 bionic glob()（API 28+，
+  # LP64 glob_t 布局 x86_64-bionic 与 aarch64-bionic 一致）并仅包装
+  # errfunc 回调（RunFunctionFmt 跳板）。符号族签名全部对照 AOSP
+  # bionic libc/mapfile/libc.map.txt + libc/include 核实（__fseterr/glob
+  # 为 LIBC_P API 28+，其余 LIBC 基块；本配方 api=28，Android 15 设备
+  # 全量可用）。rebuild_wrappers.py 的 #ifdef/#else 配平（v3.4.5 约束）
+  # 已在沙箱实测通过（十九符号全入 functions_list.txt）。
   local _compat_in_tree=0
   if [[ -f "${_src}/src/libtools/android_bionic_compat.c" ]] \
      && grep -q 'LBC_EXPORT' "${_src}/src/libtools/android_bionic_compat.c" 2>/dev/null; then
@@ -493,20 +512,27 @@ install() {
     for _csym in my___FD_SET_chk my___FD_ISSET_chk my___FD_CLR_chk \
                  my___gnu_strerror_r my___android_log_print \
                  my___android_log_write my___android_log_is_loggable \
-                 my___android_log_buf_write; do
+                 my___android_log_buf_write \
+                 my___fseterr my___strchr_chk my___strrchr_chk \
+                 my___strlen_chk my___strlcat_chk my___strncpy_chk2 \
+                 my___stpncpy_chk2 my___system_property_get \
+                 my___system_property_find my___system_property_read \
+                 my___system_property_set my_glob my_glob64; do
       if ! nm -D "${_src}/build/box64" 2>/dev/null | grep -qw "${_csym}"; then
         echo "错误: bionic 兼容符号 ${_csym} 未进 .dynsym —— 0008 补丁未生效或 LBC_EXPORT 可见性修复被破"
         echo "  （wrapped-libc 桥接 dlsym 将扑空；x86_64-bionic 闭包的"
-        echo "   __FD_SET_chk/__gnu_strerror_r/__android_log_print 将保持 not found）"
+        echo "   __FD_SET_chk/__gnu_strerror_r/__android_log_print/__fseterr/"
+        echo "   __system_property_*/__str*_chk/glob 将保持 not found）"
         _compat_ok=0
       fi
     done
     [[ "${_compat_ok}" == "1" ]] \
-      && echo "冒烟[1.5]: bionic 兼容符号桥（0008：__FD_*_chk/__gnu_strerror_r/__android_log_* → my_* 均已入 .dynsym）✓" \
+      && echo "冒烟[1.5]: bionic 兼容符号桥（0008 v3.4.6：__FD_*_chk/__gnu_strerror_r/__android_log_*/__fseterr/__str*_chk 全家/__system_property_* /glob+glob64 → my_* 共 21 符号均已入 .dynsym）✓" \
       || _sym_ok=0
   else
     echo "警告: 0008-linbox-android-bionic-compat.patch 未在链 —— x86_64-bionic 闭包的"
-    echo "  __FD_SET_chk/__FD_ISSET_chk/__gnu_strerror_r/__android_log_print 符号仍将 not found"
+    echo "  __FD_SET_chk/__FD_ISSET_chk/__gnu_strerror_r/__android_log_print/__fseterr/"
+    echo "  __system_property_*/__str*_chk 符号仍将 not found"
     echo "  （wineboot 卡死 / 构建完啥也打不开的已知诱因；请核查 custom_patch 门禁日志）"
   fi
   [[ "${_sym_ok}" == "1" && "${_shmem_ok}" == "1" ]] \
