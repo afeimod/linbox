@@ -144,7 +144,7 @@ object TrackpadRouter {
     // “稍慢轻点”此前被直接判成长按拖拽，是短按变长按的另一处来源。
     // 对齐 X11 SmartTouchBridge 的 longPressTimeoutMs，两处手感一致。
     private val longPressMs: Long =
-        android.view.ViewConfiguration.getLongPressTimeout().coerceAtLeast(400L)
+        android.view.ViewConfiguration.getLongPressTimeout().toLong().coerceAtLeast(400L)
     private val twoFingerTapMs = 450L
 
     // ===== 入口（MainActivity.dispatchTouchEvent 调用） =====

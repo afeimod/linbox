@@ -473,6 +473,42 @@ install() {
     echo "错误: 产物未注册 libandroid-shmem.so 包装（ANDROID 编译单元缺失）"
     _shmem_ok=0
   fi
+  # ---- 6.6 v3.4.4 · 冒烟校验（0008 bionic 兼容符号桥） ----
+  # 用户 2026-11-14 设备日志（容器 000/1080）：x86_64-bionic 闭包的
+  # libX11.so(__FD_SET_chk/__FD_ISSET_chk)、libfontconfig.so
+  # (__gnu_strerror_r)、libandroid-shmem.so(__android_log_print) 的符号
+  # 引用被 box64 报 "Symbol not found" —— wineboot 卡死 / 构建完啥也
+  # 打不开的直接根因之一。0008 补丁给 wrappedlibc 加 GOM 桥接，实现在
+  # android_bionic_compat.c。判据与 0001 同款：源码树存在该文件且含
+  # LBC_EXPORT 特征 = 补丁在链。缺导出（v3.2.21 同型事故：
+  # -fvisibility=hidden + gc-sections）时 my_* 永不入 .dynsym，运行时
+  # 桥接 dlsym(dlopen(NULL), "my_*") 扑空 —— 硬错误。
+  local _compat_in_tree=0
+  if [[ -f "${_src}/src/libtools/android_bionic_compat.c" ]] \
+     && grep -q 'LBC_EXPORT' "${_src}/src/libtools/android_bionic_compat.c" 2>/dev/null; then
+    _compat_in_tree=1
+  fi
+  if [[ "${_compat_in_tree}" == "1" ]]; then
+    local _compat_ok=1
+    for _csym in my___FD_SET_chk my___FD_ISSET_chk my___FD_CLR_chk \
+                 my___gnu_strerror_r my___android_log_print \
+                 my___android_log_write my___android_log_is_loggable \
+                 my___android_log_buf_write; do
+      if ! nm -D "${_src}/build/box64" 2>/dev/null | grep -qw "${_csym}"; then
+        echo "错误: bionic 兼容符号 ${_csym} 未进 .dynsym —— 0008 补丁未生效或 LBC_EXPORT 可见性修复被破"
+        echo "  （wrapped-libc 桥接 dlsym 将扑空；x86_64-bionic 闭包的"
+        echo "   __FD_SET_chk/__gnu_strerror_r/__android_log_print 将保持 not found）"
+        _compat_ok=0
+      fi
+    done
+    [[ "${_compat_ok}" == "1" ]] \
+      && echo "冒烟[1.5]: bionic 兼容符号桥（0008：__FD_*_chk/__gnu_strerror_r/__android_log_* → my_* 均已入 .dynsym）✓" \
+      || _sym_ok=0
+  else
+    echo "警告: 0008-linbox-android-bionic-compat.patch 未在链 —— x86_64-bionic 闭包的"
+    echo "  __FD_SET_chk/__FD_ISSET_chk/__gnu_strerror_r/__android_log_print 符号仍将 not found"
+    echo "  （wineboot 卡死 / 构建完啥也打不开的已知诱因；请核查 custom_patch 门禁日志）"
+  fi
   [[ "${_sym_ok}" == "1" && "${_shmem_ok}" == "1" ]] \
     && echo "冒烟[1/2]: $(
       if [[ "${_patch_in_tree}" == "1" ]]; then

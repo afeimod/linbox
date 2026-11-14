@@ -98,9 +98,11 @@ fun RecordingBadgeOverlay() {
                     else pos
                     IntOffset(
                         (p.x + dragOffset.x)
-                            .coerceIn(0f, (rootView.width - badgeW).coerceAtLeast(0f)),
+                            .coerceIn(0f, (rootView.width - badgeW).coerceAtLeast(0f))
+                            .roundToInt(),
                         (p.y + dragOffset.y)
                             .coerceIn(0f, (rootView.height - badgeH).coerceAtLeast(0f))
+                            .roundToInt()
                     )
                 }
                 .background(Color(0xE6161616), RoundedCornerShape(15.dp))

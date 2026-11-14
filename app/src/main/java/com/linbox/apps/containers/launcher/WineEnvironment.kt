@@ -392,47 +392,58 @@ object WineEnvironment {
         if (wineBinDir.isDirectory) {
             env["BOX64_PATH"] = wineBinDir.absolutePath
         }
-        // v3.2.24（用户问题 3）：BOX64_LD_LIBRARY_PATH 前插 wine 槽位
-        // 自身的 unix 库目录（lib/wine/i386-unix + x86_64-unix，存在才加）。
+        // v3.2.24（用户问题 3）：wine 槽位自身的 unix 库目录
+        // （lib/wine/i386-unix + x86_64-unix，存在才加）。
         // startwine.sh：export BOX64_LD_LIBRARY_PATH=…/i386-unix:…/x86_64-unix ——
         // wine 的 unix 侧 .so（ntdll.so 背后的 unix 库、各 *.so 驱动）由
         // box64 仿真加载时，优先在 wine 自己的 lib/wine/<arch>-unix 里
         // 解析；旧链路只给了 x86_64-bionic 闭包目录，wine 自身 unix 库
-        // 目录缺位（对齐参考脚本的第二差异点）。顺序：wine unix 目录 →
-        // x86_64-bionic 闭包（下方）→ glibc 目录（下方）。
+        // 目录缺位（对齐参考脚本的第二差异点）。
+        //
+        // v3.4.4（用户问题 1：“box64 运行 x86_64 wine 构建前缀失败，要么
+        // 卡住要么构建完啥也打不开”）：目录优先级改为**一次成型** ——
+        //   wine unix → x86_64-bionic 闭包 → x86_64 glibc 兑底
+        // 旧代码三段各自【前插】，glibc 段最后执行反而排到首位，实际拼出
+        // “glibc → bionic → wine unix”，与 v3.2.24 注释声明的顺序完全
+        // 相反。后果（用户 2026-11-14 设备日志实证，容器 1080）：
+        //   wine unix .so 请求 libz.so.1 时，box64 先在 glibc 目录命中
+        //   【glibc 版】（usr/lib/x86_64-linux-gnu/libz.so.1）→ 它的 PLT
+        //   引用 __errno_location@GLIBC_2.2.5 等 glibc 专属版本化符号，
+        //   而进程里只有 bionic 桥（wrappedlibc）没有 glibc 形态的
+        //   libc.so.6 → "Symbol __errno_location not found … in
+        //   libz.so.1" → zlib/freetype/fontconfig/libpng 整条链路随时断
+        //   —— wineboot 卡死、taskmgr 等 GUI 程序起不来（构建完啥也
+        //   打不开）的直接根因。同名冲突不止 libz（libpng/libexpat/
+        //   libxml2 等同样两目录并存）。
+        // glibc 目录退到末尾不影响它的原始用途（常规 glibc x86_64 Linux
+        // 程序）：bionic 闭包里没有 glibc 形态的 libc.so.6/ld-linux/
+        // libstdc++ 等独有 soname，兑底位仍能命中；而同名 bionic 版
+        // 本就该优先于 glibc 版被选中。
         val wineUnixLibDirs = listOf(
             File(wineDir, "lib/wine/i386-unix"),
             File(wineDir, "lib/wine/x86_64-unix")
         ).filter { it.isDirectory }
-        if (wineUnixLibDirs.isNotEmpty()) {
-            val existing0 = env["BOX64_LD_LIBRARY_PATH"]
-            val prefix0 = wineUnixLibDirs.joinToString(":") { it.absolutePath }
-            env["BOX64_LD_LIBRARY_PATH"] = if (existing0.isNullOrBlank()) prefix0
-            else "$prefix0:$existing0"
-        }
         // wine 包自带的 x86_64-bionic 依赖闭包（存在才追加；旧版包无此目录）
         val bionicLibDir = File(wineDir, "lib/x86_64-bionic")
         val bionicGstDir = File(bionicLibDir, "gstreamer-1.0")
-        if (bionicLibDir.isDirectory) {
-            env["BOX64_LD_LIBRARY_PATH"] = bionicLibDir.absolutePath +
-                (env["BOX64_LD_LIBRARY_PATH"]?.let { ":$it" } ?: "")
-            if (bionicGstDir.isDirectory) {
-                // x86_64 gstreamer 只认 x86_64 插件；rootfs 的 aarch64 插件目录对它无效
-                env["GST_PLUGIN_SYSTEM_PATH"] = bionicGstDir.absolutePath
-            }
-        }
         // x86_64 glibc 运行库（bionic-rootfs 的 glibc-x86_64 配方安装）：
         // 本 wine 是 bionic 链接不需要它；但容器内跑常规 glibc x86_64
         // Linux 程序时 box64 要在这些目录找 libc/ld-linux，缺它直接报
-        // "cannot open shared object file"。仅目录存在时追加。
+        // "cannot open shared object file"。仅作末尾兑底（见上方 v3.4.4）。
         val glibcDir = File("$RFS_USR/lib/x86_64-linux-gnu")
-        if (glibcDir.isDirectory) {
-            val existing = env["BOX64_LD_LIBRARY_PATH"]
-            env["BOX64_LD_LIBRARY_PATH"] = if (existing.isNullOrBlank()) {
-                glibcDir.absolutePath
-            } else {
-                "${glibcDir.absolutePath}:$existing"
-            }
+        val ldPriority = buildList {
+            addAll(wineUnixLibDirs.map { it.absolutePath })
+            if (bionicLibDir.isDirectory) add(bionicLibDir.absolutePath)
+            if (glibcDir.isDirectory) add(glibcDir.absolutePath)
+        }
+        if (ldPriority.isNotEmpty()) {
+            env["BOX64_LD_LIBRARY_PATH"] = ldPriority.joinToString(":") +
+                (env["BOX64_LD_LIBRARY_PATH"]?.takeIf { it.isNotBlank() }
+                    ?.let { ":$it" } ?: "")
+        }
+        if (bionicGstDir.isDirectory) {
+            // x86_64 gstreamer 只认 x86_64 插件；rootfs 的 aarch64 插件目录对它无效
+            env["GST_PLUGIN_SYSTEM_PATH"] = bionicGstDir.absolutePath
         }
         // v3.3.37（用户：“性能问题根本没有解决，甚至还不如 proot”）：
         // 四档全面对齐上游参考 Box86_64PresetManager.java:23-95 参考值

@@ -650,12 +650,13 @@ fun X11DisplayLayer() {
             //      被拉进 X11 页看 wine 桌面，壳层页的进度卡/日志窗全被
             //      全屏画面盖住。此处按 RootfsLauncher.prefixBuildFlow 驱动：
             //      可拖动、日志可显隐、可收起为小徽标，不拦截 X11 操作。 =====
-            if (!trueFs) {
-                X11PrefixBuildOverlay(
-                    areaW = areaSize.width,
-                    areaH = areaSize.height
-                )
-            }
+            // v6.10（用户：“构建前缀的进度条偶尔被挡在 x11 界面后面
+            //      显示不出来”）：本卡已移至 Box 末位渲染（同层最顶，
+            //      不再被小窗 chrome / 附加键盘栏盖住），并去掉 !trueFs
+            //      门控 —— 真全屏形态原先连本卡一起隐藏，而真全屏下壳层页
+            //      进度卡又不可达，进度彻底消失（“偶尔看不见”主场景）。
+            //      前缀构建是分钟级一次性事件，进度可见性优先于“画面
+            //      独占”纯净性；不需要时可收起为小徽标。
 
             // ===== v6.5：小窗模式窗口 chrome（标题栏拖动 / 双击最大化 /
             //      边缘八向缩放 / 快捷配置条 / 全屏恢复 / 关闭结束会话；
@@ -697,6 +698,15 @@ fun X11DisplayLayer() {
                 }
                 }
             }
+
+            // ===== v6.10：前缀构建进度悬浮卡（从 Box 前段移入末位 ——
+            //      Compose 同层后渲染者在上：小窗 chrome / 附加键盘栏均
+            //      不能再盖住它；全形态（全屏/真全屏/小窗）均渲染，
+            //      prefixBuildFlow 为空时自绘为零。 =====
+            X11PrefixBuildOverlay(
+                areaW = areaSize.width,
+                areaH = areaSize.height
+            )
 
             // ===== v5.0：原 X11 玻璃悬浮球已移除 —— 全部功能并入虚拟手柄
             //      悬浮球（GamepadFloatingBall，常驻 LinBoxShell 层，尺寸不随
@@ -982,8 +992,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     // v6.10：长按阈值加 400ms 下限 —— 部分机型无障碍“触摸与按住延迟”设为
     // “短”（~300ms）时 getLongPressTimeout() 偏短，正常速度的短按也会被
     // 判成长按；wine 场景统一 400ms 下限（与事件时间轴仲裁共用同一常量）。
-    private val longPressTimeoutMs =
-        ViewConfiguration.getLongPressTimeout().coerceAtLeast(400L)
+    private val longPressTimeoutMs: Long =
+        ViewConfiguration.getLongPressTimeout().toLong().coerceAtLeast(400L)
 
     /** 长按定时器是否挂着（DOWN 挂起，MOVE 出 slop / 多指 / UP / CANCEL 解除）。 */
     private fun armLongPress() {
