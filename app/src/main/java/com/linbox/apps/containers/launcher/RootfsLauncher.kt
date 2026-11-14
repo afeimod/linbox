@@ -1229,6 +1229,38 @@ object RootfsLauncher {
             // 的实证通道：libwow64fex/libarm64ecfex 读 $HOME/.fex-emu/
             // Config.json（FEX_* env 在部分构建上不生效，双通道保险）。
             if (resolved.backend == ContainerBackend.ARM64EC) {
+                // v3.4.12【恢复】：wine<10 试验形态 arm64ec 包（split 布局）
+                // 运行期告警。proton_9.0 等 9.x 树的 arm64ec 原为 Windows
+                // 宿主试验形态（Valve 反向移植，configure 能过 arm64ec 校验
+                // 但 Linux 运行时三大件全缺）：
+                // ntdll/loader.c 无 load_arm64ec_module（x64 仿真装载点缺失）、
+                // signal_arm64ec.c 无 xtajit64/BTCpu64 接口、makedep.c 无
+                // ARM64X 合并 —— 设备实证（2026-11-13）：CI 构建全绿，但
+                // wineboot 建前缀丢失 syswow64 文件注入（Wow64Install 段的
+                // 32 位 syswow64\rundll32 即死，libwow64fex.dll 在场亦无效），
+                // x64 游戏死于 "failed to load …/x86_64-windows/ntdll.dll"
+                // （本形态从不产出该目录）。本告警仅命中【v3.4.11 时代的存量
+                // split 包】（免重装即可见原因；仅告警不阻断）。
+                runCatching {
+                    val wineInfo = File(resolved.wineDir, ".linbox-wine-info")
+                    if (wineInfo.isFile) {
+                        val kind = wineInfo.readLines()
+                            .map { it.trim() }
+                            .firstOrNull { it.startsWith("kind=") }
+                            ?.removePrefix("kind=") ?: ""
+                        if (kind == "arm64ec-split-wow64-x11") {
+                            sink.stamp(
+                                "警告: 当前 wine 包为 v3.4.11 时代的 wine<10 试验形态 arm64ec（kind=arm64ec-split-wow64-x11，如 proton_9.0）——" +
+                                    "该形态无 x64 仿真装载（load_arm64ec_module 缺失）、无 ARM64X 合并，" +
+                                    "前缀构建会丢失 syswow64 文件注入，x64 游戏必死"
+                            )
+                            sink.stamp(
+                                "→ 修复路径（v3.4.12）：重跑 build-wine-bionic（proton 源 9.0，经 0025 回移补全 wine-10 完整形态）" +
+                                    "或换装 wine 10+ 的 arm64ec 形态包（proton 10.0/11.0、official 10.0+、hangover 10.0+ 构建）"
+                            )
+                        }
+                    }
+                }
                 // v3.4.3：预设 JSON 注入（assets builtin/fex_presets.json ——
                 // 用户提供的 assets-ck 资产，上游发行包 FEXPresetManager
                 // 同一张表；旧表每档仅 2-3 项，performance 档的 TSOENABLED=0/
@@ -1296,19 +1328,27 @@ object RootfsLauncher {
             //   2. v3.1.6 时代的 proton10（vanilla wine-10）根本没有读取
             //      HODLL64/HODLL 的代码，注入与否对当时的挂死毫无影响（挂死
             //      根因是 bionic 堆标记/预加载器/esync，已由 v3.2.x 修复）。
-            // 【现在·v3.4.2】0010/0011 补丁已把 HODLL/HODLL64 机制连同
-            // 内部缺省值（HODLL 未设 → libwow64fex；HODLL64 未设 →
-            // libarm64ecfex）移植进 official/proton 树（对齐
-            // hangover-11.16）—— 前缀构建会话【无需 App 侧注入】，
-            // 32 位 rundll32 由 wine 内部缺省仿真器支撑，syswow64 正常
-            // 生成；勾选 FEX模式/wowbox64模式或显式 HODLL=/HODLL64=
-            // 时以用户值为准（6b 步 applyWineCompatEnv 已注入同一份 env，
-            // wineboot/游戏会话共用，无需分支重复）。
+            // 【现在·v3.4.13】恢复 AnWind 2.38.40 基线语义：0010/0011 补丁
+            // 把 HODLL/HODLL64 机制移植进 official/proton 树并带内部缺省值，
+            // 但【并非所有树都带】——hangover 树自带 HODLL 机制、0010 锚点
+            // 不命中被静默跳过，其内部缺省是 box64cpu.dll（hangover-10.x）/
+            // wowbox64.dll（hangover-11.x），并非 FEX 家族 → 32 位 wow64
+            // 进程装载器找不到 x86 仿真 dll → "could not load kernel32.dll,
+            // status c0000135"（退出码 53）→ Wow64Install 段从未执行 →
+            // syswow64 空目录 → 前缀永远建不起来（用户 2026-11-12 设备日志
+            // 实证：hangover 源 arm64ec 前缀构建即死 c0000135/退出 53）。
+            // 6b 步 applyWineCompatEnv（v3.4.13 恢复 2.38.40 缺省注入）按
+            // wine 包实际在场 DLL 兜底注入 HODLL=libwow64fex.dll（在场才
+            // 注入，对 official/proton 树幂等 no-op，对 hangover 树拉回 FEX
+            // 通道），HODLL64=libarm64ecfex.dll 同款兜底；构建侧
+            // hangover-wine 配方同步拉齐缺省值；用户显式 HODLL=/勾选
+            // FEX模式/wowbox64模式 时以用户值为准。
             if (wineArgs.firstOrNull() == "wineboot") {
                 sink.stamp(
-                    "前缀构建会话：32 位 rundll32 由 wine 内部缺省仿真器支撑" +
-                        "（0010/0011 补丁缺省 libwow64fex/libarm64ecfex；勾选 FEX模式" +
-                        "/wowbox64模式或显式 HODLL=/HODLL64= 时以用户值为准）" +
+                    "前缀构建会话：32 位 rundll32 仿真器已按 wine 包实际在场 DLL 兜底" +
+                        "（v3.4.13 恢复 AnWind 2.38.40 基线：libwow64fex.dll 在场即默认注入 HODLL——" +
+                        "hangover 源树的内部缺省（box64cpu/wowbox64）会致 32 位进程死于 c0000135；" +
+                        "用户显式 HODLL=/勾选 FEX模式/wowbox64模式 时以用户值为准）" +
                         "—— syswow64 正常生成"
                 )
                 // v3.2.0（用户诉求 4）：前缀构建画面指引 —— 构建已包 explorer
@@ -1802,6 +1842,18 @@ object RootfsLauncher {
         val systemReg = File(container.prefixPath, "system.reg")
         if (!systemReg.isFile) {
             prefixLog("前缀未就绪（system.reg 缺失）→ 自动重跑一次 wineboot -u 修复……")
+            // v3.4.13【恢复 AnWind v3.4.9 的存储 fail-fast 守卫】：剩余空间
+            // <64MB 时 wineboot 需写入上千个前缀文件，重试必然无输出超时
+            // —— 300 秒白跑（用户 2026-11-12 三容器会话日志实证：存储 0MB
+            // 时 arm64ec 线 wineboot 2 秒 c0000135 + 300s 重试全超时）。
+            // 直接跳过重试并大声指路，省掉 15 分钟挂死。
+            val freeMb = runCatching {
+                (resolved.wineDir.parentFile ?: resolved.wineDir).usableSpace / 1024L / 1024L
+            }.getOrDefault(-1L)
+            if (freeMb in 0..64) {
+                prefixLog("→ 存储不足（仅剩 ${freeMb}MB）：wineboot 需写入上千个文件，重试必无输出超时 —— 跳过重试")
+                prefixLog("  对策：清理内部存储（旧容器前缀 / rootfs 残留 / 多余 wine 包）后重建容器")
+            } else {
             var rbCode = -1
             runCatching {
                 // v3.3.3：-i → -u（startfex.sh 同款）+ 压 mono 弹窗。
@@ -1865,6 +1917,7 @@ object RootfsLauncher {
                     }
                 }.onFailure { prefixLog("警告: 解释器模式兜底异常: ${it.message}") }
             }
+            } // v3.4.13 存储守卫 else 结束
         }
         // v3.3.4：taskmgr 前置保活已移除（用户问题 5 —— 参考链路里解压与
         // 注册表的每一步都是独立 wine 客户端，wineserver 按需拉起，无需

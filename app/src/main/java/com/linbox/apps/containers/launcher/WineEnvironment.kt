@@ -378,7 +378,12 @@ object WineEnvironment {
         // v3.4.6：撤除强制 NOBANNER —— 上游默认即 0（打印横幅）；
         // 用户需要看到 "[BOX64] Box64 v0.4.4 ..." 版本行。仍可经
         // opt conf / 容器 env= 设 BOX64_NOBANNER=1 关闭。
-        env["BOX64_NOBANNER"] = "0"
+        // v3.4.13：改 putIfAbsent —— 原为强制赋值（env["BOX64_NOBANNER"]="0"），
+        // 会【压掉】opt conf / 容器 env= 里的用户取值；而脚本侧
+        // （assets/linbox/scripts/linbox-wine）是 `[ -z "${BOX64_NOBANNER:-}" ] &&
+        // export BOX64_NOBANNER=0`（条件导出）—— 两侧语义不一致 = 同一次
+        // 会话在 App 端与终端端跑出不同的 box64 环境。统一为条件导出。
+        env.putIfAbsent("BOX64_NOBANNER", "0")
         env["BOX64_DYNAREC_TRACE"] = "0"
         // v3.2.13：BOX64_ENVFILE —— 让 rootfs 的 /usr/etc/box64.box64rc
         // 真正生效。上游 box64（v0.4.4 env.c InitializeEnvFiles）只读
@@ -890,39 +895,70 @@ object WineEnvironment {
         // winedbg=n,b 可恢复调试器。
         env.putIfAbsent("WINEDLLOVERRIDES", "winedbg=d")
         if (arch != WineRuntime.Arch.AARCH64) return
-        // v3.4.2【HODLL 对齐参考源码·撤销全部默认注入】（用户两轮反馈：
-        // 「把默认的 HODLL=libwow64fex.dll 去掉，fex 运行默认直接 wine exe
-        //  的，只有我选择了 HODLL 才在前面加」；上游发行包
-        // LaunchPlan.buildEnv:222-228 —— HODLL 是【用户容器设置项】，
-        // 从不默认注入、从不设 HODLL64）：
-        // ① 默认【不注入】HODLL/HODLL64 —— 0010/0011 补丁后 wine 内部缺省
-        //    即 libwow64fex/libarm64ecfex（hangover 树自带缺省），App 侧
-        //    注入纯冗余；v3.4.0 A2 的「默认 wowbox64」把 32 位游戏从 FEX
-        //    强切 box64-in-wow64 —— 用户实测「性能更差了」的直接嫌疑源。
-        // ② 大小写归一（v3.3.34 保留）：wine 的 get_cpu_dll_name /
-        //    load_arm64ec_module 读【大写】HODLL/HODLL64 —— 用户写小写
-        //    hodll= 的 token 经 extractEnvTokenIgnoreCase 规范成大写键导出，
-        //    不再「导出了但 wine 读不到」。
-        // ③ 恰三处注入（优先级：用户显式 > FEX模式 > wowbox64模式）：
-        //    a. 用户显式 env=/启动参数 HODLL=/HODLL64=（最高优）；
-        //    b. 勾选 FEX模式 → HODLL=libwow64fex.dll（dll 缺席跳过 —— 注入
-        //       不存在的 dll 会让 32 位进程死于 c0000135，不如交给内部缺省）；
-        //    c. 勾选 wowbox64模式（用户：「wowbox64 模式别取消，加入选项，
-        //       部分 32 游戏需要」）→ HODLL=wowbox64.dll（box64-in-wow64
-        //       32 位模拟层，dll 缺席同样跳过）。上游发行包 的 HODLL
-        //       取值恰是这两个二选一（LaunchPlan.buildEnv:224-225 /
-        //       WineConfigure.fexDllsInstalled:356-358：0=libwow64fex.dll，
-        //       1=wowbox64.dll —— SettingKeys.ContainerFEXHodll）—— LinBox
-        //       拆成两个勾选档，同勾时 FEX模式 在前。
+        // v3.4.13【恢复 AnWind 2.38.40 基线的 HODLL/HODLL64 指派语义】
+        // （用户 2026-11-14 定调：「只有 AnWind 2.38.40 分支是正确的，
+        //  后面都破坏了相关逻辑」——被破坏的正是这一段）。
+        //
+        // 【为什么 2.38.40 的语义是对的】
+        // arm64ec 线的 wine 是【bionic 原生 aarch64】进程，它要执行
+        // Windows 侧的 32 位（wow64）与 64 位（arm64ec）代码时，靠的是
+        // 两个【box64 家族仿真器 PE DLL】：
+        //     HODLL   → 32 位仿真器（libwow64fex.dll / wowbox64.dll）
+        //     HODLL64 → 64 位仿真器（libarm64ecfex.dll）
+        // wine 的 get_cpu_dll_name / load_arm64ec_module 读【大写】这两个
+        // 键；【键缺席即无仿真器】：
+        //     · HODLL64 缺席 → x64 代码路径没有 64 位仿真器 → 报
+        //       "failed to load …/x86_64-windows/ntdll.dll" → x64 程序/
+        //       前缀构建即死（v3.4.12 提到的 split 形态即此症状）。
+        //     · HODLL 缺席且 wine 树【无】内部缺省 → 32 位 wow64 进程
+        //       找不到 x86 仿真 dll → "could not load kernel32.dll,
+        //       status c0000135"（退出码 53）→ Wow64Install 段从未执行
+        //       → syswow64 空目录 → 前缀永远建不起来（hangover 树尤其：
+        //       其内部缺省是 box64cpu.dll / wowbox64.dll，并非 FEX 家族）。
+        // v3.4.2 曾把默认注入整体撤销（"从不设 HODLL64"），导致上述两条
+        // 断链无 App 侧兜底 —— 即本次要修的「残缺且崩溃」。
+        //
+        // 【本次恢复的优先级链】（用户显式 > 用户勾选 > 缺省兜底）
+        //  a. 用户显式 env=/启动参数 HODLL=/HODLL64=（最高优，大小写归一
+        //     沿用 v3.3.34 的 extractEnvTokenIgnoreCase）；
+        //  b. 勾选 FEX模式 → HODLL=libwow64fex.dll（dll 缺席跳过 —— 注入
+        //     不存在的 dll 会让 32 位进程死于 c0000135）；
+        //  c. 勾选 wowbox64模式（用户：「wowbox64 模式别取消，加入选项，
+        //     部分 32 游戏需要」）→ HODLL=wowbox64.dll（box64-in-wow64
+        //     32 位模拟层，dll 缺席同样跳过）；
+        //  d. 【恢复 2.38.40 缺省】两档都没勾选时：
+        //     - libwow64fex.dll 在场 → HODLL=libwow64fex.dll
+        //       （对自带同款内部缺省的 official/proton 树是幂等 no-op；
+        //        对 hangover 树把 32 位模拟层拉回 FEX 家族，根治
+        //        c0000135；不采用 v3.4.0 A2 那个「默认 wowbox64」的
+        //        写法 —— 那会把 32 位游戏从 FEX 强切 box64-in-wow64，
+        //        是用户实测「性能更差了」的直接嫌疑源）；
+        //     - libwow64fex.dll 缺席但 wowbox64.dll 在场 → HODLL=wowbox64.dll
+        //       （v3.4.7 兜底，纯可用性判断）。
+        //  HODLL64 同款：用户显式优先，否则 libarm64ecfex.dll 在场即注入
+        //  （对自带同款缺省的树幂等 no-op，对未带 0011 缺省的老包是根治）。
         val userHodll64 = extractEnvTokenIgnoreCase(userEnv, "HODLL64")
         val userHodll = extractEnvTokenIgnoreCase(userEnv, "HODLL")
-        userHodll64?.let { env["HODLL64"] = it }
+        if (userHodll64 != null) {
+            env["HODLL64"] = userHodll64
+        } else if (probeEmulatorDll(wineDir, "libarm64ecfex.dll")) {
+            env["HODLL64"] = "libarm64ecfex.dll"
+        }
         if (userHodll != null) {
             env["HODLL"] = userHodll
         } else if (fexMode && probeEmulatorDll(wineDir, "libwow64fex.dll")) {
             env["HODLL"] = "libwow64fex.dll"
         } else if (wowboxMode && probeEmulatorDll(wineDir, "wowbox64.dll")) {
             env["HODLL"] = "wowbox64.dll"
+        } else if (!fexMode && !wowboxMode &&
+            probeEmulatorDll(wineDir, "libwow64fex.dll")
+        ) {
+            // v3.4.13【恢复 2.38.40 缺省注入】（见上方语义说明）：dll 在场
+            // 即指派 —— 对 official/proton 树幂等 no-op，对 hangover 树把
+            // 32 位模拟层从 box64cpu/wowbox64 拉回 FEX 家族，根治
+            // "could not load kernel32.dll, status c0000135"（退出码 53）
+            // → 前缀构建挂死、syswow64 空目录。
+            env["HODLL"] = "libwow64fex.dll"
         } else if (!fexMode && !wowboxMode &&
             !probeEmulatorDll(wineDir, "libwow64fex.dll") &&
             probeEmulatorDll(wineDir, "wowbox64.dll")

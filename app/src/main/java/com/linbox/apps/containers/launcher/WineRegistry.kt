@@ -591,6 +591,20 @@ object WineRegistry {
         if (File(container.prefixPath, "system.reg").isFile) return true
         log("首次使用，初始化 wine 前缀: ${container.prefixPath}")
         log("提示: 构建过程中的 mono/gecko 等安装提示框将显示在『X11 桌面』窗口（explorer 虚拟桌面）内，请在该窗口确认")
+        // v3.4.13【恢复 AnWind v3.4.9 的存储 fail-fast 守卫】（用户 2026-11-12
+        // 三容器会话日志实证：arm64ec 线 wineboot 2 秒 c0000135 + 300s 重试
+        // 全超时 + 自诊断"内部存储空间仅剩 0MB"—— 存储耗尽时 wineboot 需写入
+        // 上千个前缀文件必失败，且 wine 包解压可能残缺（kernel32.dll 缺失即
+        // c0000135）。低于 64MB 直接放弃本次构建并大声指路，省掉 15 分钟
+        // 挂死与 300 秒重试白跑）。
+        val freeMb = runCatching {
+            (resolved.wineDir.parentFile ?: resolved.wineDir).usableSpace / 1024L / 1024L
+        }.getOrDefault(-1L)
+        if (freeMb in 0..64) {
+            log("→ 存储不足：内部存储仅剩 ${freeMb}MB —— wineboot 需写入上千个前缀文件，本次构建必失败")
+            log("  对策：清理内部存储（旧容器前缀 / rootfs 残留 / 多余 wine 包）后重建容器；wine 包如疑似残缺（启动报 c0000135）请一并重装")
+            return false
+        }
         return try {
             // v3.2.1 ③：加载器冒烟测试 —— 静默阵亡拦在前级并给出结论
             if (!loaderSmokeTest(resolved, container, env, log)) {

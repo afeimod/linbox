@@ -1279,18 +1279,65 @@ apply_android_safe_env() {
                 ;;
         esac
     fi
-    # v3.4.2【HODLL 对齐参考源码】：默认【不】注入 HODLL/HODLL64 ——
-    # wine 侧（0010/0011 补丁）无 HODLL 时的内部缺省即 libwow64fex/
-    # libarm64ecfex（hangover 树自带缺省），fex 运行默认直接 wine exe。
-    # 只有用户显式选择才注入：env= 写 HODLL=/HODLL64=（apply_extra_env
-    # 的小写归一已处理）或启动命令行前置 HODLL=xxx。v3.3.34/v3.4.0 的
-    # 默认注入已撤销 —— 会在用户未选择时改写 32 位模拟层（用户实测
-    # 「性能更差了」的直接嫌疑源）。
-    # 取值对齐上游发行包（LaunchPlan 二选一）：HODLL=libwow64fex.dll
-    # 或 HODLL=wowbox64.dll（部分 32 位游戏需要后者 box64-in-wow64；
-    # App 侧勾选 FEX模式/wowbox64模式 即等价写入 env= —— 脚本路径用户
-    # 手写 env= HODLL=wowbox64.dll 同效）。dll 缺席请勿注入（32 位进程
-    # 死于 c0000135，不如留给 wine 内部缺省）。
+    # v3.4.13【恢复 AnWind 2.38.40 基线的 HODLL/HODLL64 指派语义】
+    # （用户 2026-11-14 定调：「只有 AnWind 2.38.40 分支是正确的，后面都破坏
+    #  了相关逻辑」——被破坏的正是这一段；App 侧 WineEnvironment.
+    #  applyWineCompatEnv 已同款恢复，两侧语义必须一致）。
+    #
+    # arm64ec 线的 wine 是 bionic 原生 aarch64 进程，执行 Windows 侧 32 位
+    # （wow64）与 64 位（arm64ec）代码靠的是两个【box64 家族仿真器 PE DLL】：
+    #     HODLL   → 32 位仿真器（libwow64fex.dll / wowbox64.dll）
+    #     HODLL64 → 64 位仿真器（libarm64ecfex.dll）
+    # wine 的 get_cpu_dll_name / load_arm64ec_module 读【大写】这两个键；
+    # 【键缺席即无仿真器】：
+    #     · HODLL64 缺席 → x64 代码路径没有 64 位仿真器 → 报 "failed to
+    #       load …/x86_64-windows/ntdll.dll" → x64 程序/前缀构建即死；
+    #     · HODLL 缺席且 wine 树无内部缺省 → 32 位 wow64 进程找不到 x86
+    #       仿真 dll → "could not load kernel32.dll, status c0000135"
+    #       （退出码 53）→ Wow64Install 段从未执行 → syswow64 空目录 →
+    #       前缀永远建不起来（hangover 树尤其：其内部缺省是 box64cpu.dll /
+    #       wowbox64.dll，并非 FEX 家族）。
+    # v3.4.2 曾把默认注入整体撤销，导致上述两条断链无脚本侧兜底。
+    # 【优先级】用户 env= 显式值 > 缺省注入；dll 缺席不注入（注入不存在的
+    # dll 会让 32 位进程死于 c0000135，不如交给 wine 内部缺省）。
+    if [ "${WINE_ARCH:-unknown}" = "aarch64" ]; then
+        # 用户 env= 是否已显式给出 HODLL/HODLL64（大小写不敏感）——命中则
+        # 完全交给用户（apply_extra_env 稍后把 env= 原样导出，优先级最高）。
+        _u_env="$(conf_read "$CONT_CONF" env "")"
+        local _u_h=0 _u_h64=0
+        printf '%s' "$_u_env" | grep -qiE '(^|[[:space:]])hodll64=' && _u_h64=1
+        printf '%s' "$_u_env" | grep -qiE '(^|[[:space:]])hodll='   && _u_h=1
+        # ① HODLL64 —— 64 位（arm64ec）仿真器：dll 在场即指派
+        if [ "$_u_h64" = "0" ] && [ -z "${HODLL64:-}" ]; then
+            for _d in "$WINE_DIR/lib/wine/aarch64-windows" \
+                      "$WINE_DIR/lib/wine/arm64ec-windows" \
+                      "$WINE_DIR/lib/wine/x86_64-windows"; do
+                if [ -f "$_d/libarm64ecfex.dll" ]; then
+                    export HODLL64="libarm64ecfex.dll"
+                    break
+                fi
+            done
+        fi
+        # ② HODLL —— 32 位（wow64）仿真器：优先 FEX 家族（libwow64fex），
+        #    缺席才用 wowbox64（box64-in-wow64）。
+        if [ "$_u_h" = "0" ] && [ -z "${HODLL:-}" ]; then
+            _fex=""; _wow=""
+            for _d in "$WINE_DIR/lib/wine/aarch64-windows" \
+                      "$WINE_DIR/lib/wine/arm64ec-windows" \
+                      "$WINE_DIR/lib/wine/x86_64-windows"; do
+                [ -z "$_fex" ] && [ -f "$_d/libwow64fex.dll" ] && _fex="libwow64fex.dll"
+                [ -z "$_wow" ] && [ -f "$_d/wowbox64.dll" ]    && _wow="wowbox64.dll"
+            done
+            if [ -n "$_fex" ]; then
+                export HODLL="$_fex"
+            elif [ -n "$_wow" ]; then
+                export HODLL="$_wow"
+            fi
+        fi
+        [ -n "${HODLL:-}${HODLL64:-}" ] && \
+            info "arm64ec 仿真器指派：HODLL=${HODLL:-（内部缺省）} HODLL64=${HODLL64:-（内部缺省）}"
+        true
+    fi
 }
 
 # ---------- v3.3.37：全局性能基线（上游参考 容器出厂调优串移植） ----------
@@ -1469,12 +1516,29 @@ apply_box64_env() {
     fi
     # ② wine 槽位自身的 unix 库目录：wine 的 unix 侧 .so 由 box64 仿真
     #   加载时优先在自己的 lib/wine/<arch>-unix 里解析（参考脚本原样
-    #   导出的两个目录），前插到闭包目录之前。
-    if [ -d "$WINE_DIR/lib/wine/i386-unix" ] || [ -d "$WINE_DIR/lib/wine/x86_64-unix" ]; then
-        _wul=""
-        [ -d "$WINE_DIR/lib/wine/i386-unix" ]   && _wul="$WINE_DIR/lib/wine/i386-unix"
-        [ -d "$WINE_DIR/lib/wine/x86_64-unix" ] && _wul="${_wul:+$_wul:}$WINE_DIR/lib/wine/x86_64-unix"
-        export BOX64_LD_LIBRARY_PATH="$_wul${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+    #   导出的两个目录）。
+    #
+    # v3.4.13【目录优先级一次成型·与 App 端对齐】：旧实现三段各自【前插】，
+    #   glibc 段最后执行反而排到首位，实际拼出 "glibc → bionic → wine unix"
+    #   —— 与本段注释声明的顺序完全相反。后果（用户 2026-11-14 设备日志
+    #   实证，容器 1080）：wine unix .so 请求 libz.so.1 时，box64 先在 glibc
+    #   目录命中【glibc 版】（usr/lib/x86_64-linux-gnu/libz.so.1）→ 它的 PLT
+    #   引用 __errno_location@GLIBC_2.2.5 等 glibc 专属版本化符号，而进程里
+    #   只有 bionic 桥（wrappedlibc）没有 glibc 形态的 libc.so.6 →
+    #   "Symbol __errno_location not found … in libz.so.1" → zlib/freetype/
+    #   fontconfig/libpng 整条链路随时断 —— wineboot 卡死、taskmgr 等 GUI
+    #   程序起不来。同名冲突不止 libz（libpng/libexpat/libxml2 同样并存）。
+    #   App 端（WineEnvironment.applyBox64Env，v3.4.4）已改为一次成型，
+    #   本脚本此前未同步 —— 同一台设备上 App 端与终端端跑出不同的解析序。
+    #   现在两侧统一为：wine unix → x86_64-bionic 闭包 → x86_64 glibc 兑底。
+    #   glibc 目录退到末尾不影响它的原始用途（bionic 闭包里没有 glibc 形态的
+    #   libc.so.6/ld-linux/libstdc++ 等独有 soname，兑底位仍能命中）。
+    _ldp=""
+    if [ -d "$WINE_DIR/lib/wine/i386-unix" ]; then
+        _ldp="$WINE_DIR/lib/wine/i386-unix"
+    fi
+    if [ -d "$WINE_DIR/lib/wine/x86_64-unix" ]; then
+        _ldp="${_ldp:+$_ldp:}$WINE_DIR/lib/wine/x86_64-unix"
     fi
     # v3.1.4：wine 发行包自带的 x86_64-bionic 依赖闭包（opt/<wine>/lib/
     # x86_64-bionic，CI 打包步骤 8.5a 注入）—— aarch64 rootfs 只有
@@ -1484,7 +1548,7 @@ apply_box64_env() {
     # found" 起不来。gstreamer 插件同步指向包内 x86_64 版（rootfs 里
     # 的是 aarch64，x86_64 libgstreamer 加载不了）。
     if [ -d "$WINE_DIR/lib/x86_64-bionic" ]; then
-        export BOX64_LD_LIBRARY_PATH="$WINE_DIR/lib/x86_64-bionic${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+        _ldp="${_ldp:+$_ldp:}$WINE_DIR/lib/x86_64-bionic"
         if [ -d "$WINE_DIR/lib/x86_64-bionic/gstreamer-1.0" ]; then
             export GST_PLUGIN_SYSTEM_PATH="$WINE_DIR/lib/x86_64-bionic/gstreamer-1.0"
         fi
@@ -1500,10 +1564,12 @@ apply_box64_env() {
     # bionic-rootfs 的 glibc-x86_64 配方安装）：本 wine 是 bionic 链接、
     # 不需要它；但容器内跑常规 glibc x86_64 Linux 程序时，box64 会在
     # BOX64_LD_LIBRARY_PATH 各目录里找 libc/ld-linux —— 缺它则直接报
-    # "cannot open shared object file"。仅在目录存在时追加，不干扰纯
-    # bionic 环境。
+    # "cannot open shared object file"。仅作末尾兑底（见上方 v3.4.13）。
     if [ -d "$RFS_USR/lib/x86_64-linux-gnu" ]; then
-        export BOX64_LD_LIBRARY_PATH="$RFS_USR/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+        _ldp="${_ldp:+$_ldp:}$RFS_USR/lib/x86_64-linux-gnu"
+    fi
+    if [ -n "$_ldp" ]; then
+        export BOX64_LD_LIBRARY_PATH="$_ldp${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
     fi
     # v3.2.5：glibc 形态 box64 的加载器自检 —— CI 构建的 box64 是
     # glibc 链接 ELF（PT_INTERP 已被配方 patchelf 指到 rootfs 内的
