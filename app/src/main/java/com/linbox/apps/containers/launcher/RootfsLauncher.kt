@@ -720,6 +720,94 @@ object RootfsLauncher {
                     }
                 }
 
+                // 0.2) v7.0（用户需求："图形驱动加上个d7d8实现方式"）：d7d8
+                //      实现方式（/opt/d7d8 生态包，conf 键 d7d8= csv）：
+                //        d3d9  = 强制 D3D9   → D7D8to9.tar.gz → C 盘 windows
+                //        d3d11 = 强制 D3D11  → D7D8to11.tar.gz → C 盘 windows
+                //        都没选（默认）= 恢复官方 ddraw/d3d8.dll
+                //              → 2D7d8(default).tar.gz → C 盘 windows
+                //        ddraw = ddraw 同级绘制 → ddraw.tar.gz → 游戏 exe
+                //              同目录（本次启动的 exe，未选定则提示并跳过）
+                //      d3d9/d3d11 互斥；ddraw 与强制档可叠加。目录不存在
+                //      （未安装 d7d8 生态包）时整组跳过，不影响启动。
+                runCatching {
+                    val d7d8Tars = GuanliSupport.scanOpt("d7d8")
+                    if (d7d8Tars.isNotEmpty()) {
+                        val modes = container.d7d8Set
+                        // 匹配：文件名/display 精确等值优先，关键词兜底
+                        //（display = 去 tar 后缀的文件名，生态包改名仍可命中）
+                        fun pickTar(vararg names: String): GuanliSupport.OptTar? {
+                            val lower = names.map { it.lowercase() }
+                            d7d8Tars.firstOrNull {
+                                it.fileName.lowercase() in lower || it.display.lowercase() in lower
+                            }?.let { return it }
+                            val kw = when (lower.firstOrNull()) {
+                                "d7d8to9.tar.gz" -> "to9"
+                                "d7d8to11.tar.gz" -> "to11"
+                                else -> return null
+                            }
+                            return d7d8Tars.firstOrNull { it.display.lowercase().contains(kw) }
+                        }
+                        val cWin = File(container.prefixPath, "drive_c/windows")
+                        val forceTar = when {
+                            ContainerData.D7D8_D3D9 in modes -> pickTar("D7D8to9.tar.gz")
+                            ContainerData.D7D8_D3D11 in modes -> pickTar("D7D8to11.tar.gz")
+                            else -> null
+                        }
+                        if (forceTar != null) {
+                            runCatching { cWin.mkdirs() }
+                            val err = GuanliSupport.extractTarTo(forceTar.path, cWin) { sink.stamp(it) }
+                            if (err != null) {
+                                sink.stamp("⚠ d7d8 ${forceTar.display} 解压失败：$err（继续启动）")
+                            } else {
+                                sink.stamp("d7d8 强制档 ${forceTar.display} 已解压 → ${cWin.absolutePath}")
+                            }
+                        } else {
+                            // 默认（不勾选任何）= 恢复官方 ddraw/d3d8.dll
+                            val defaultTar = d7d8Tars.firstOrNull {
+                                it.display.lowercase().contains("default")
+                            }
+                            if (defaultTar != null) {
+                                runCatching { cWin.mkdirs() }
+                                val err = GuanliSupport.extractTarTo(defaultTar.path, cWin) { sink.stamp(it) }
+                                if (err != null) {
+                                    sink.stamp("⚠ d7d8 默认还原包 ${defaultTar.display} 解压失败：$err（继续启动）")
+                                } else {
+                                    sink.stamp("d7d8 默认档 ${defaultTar.display} 已解压（还原官方 ddraw/d3d8.dll）→ ${cWin.absolutePath}")
+                                }
+                            }
+                        }
+                        // ddraw 同级绘制：解压 ddraw.tar.gz 到本次启动 exe 的
+                        // 同目录（exe 缺失/目录不存在 → 提示跳过，不阻断启动）
+                        if (ContainerData.D7D8_DDRAW in modes) {
+                            val exePath = argv.firstOrNull { it.isNotBlank() }
+                            val exeDir = exePath?.let { resolveExeWorkingDir(it, container) }
+                            if (exeDir == null) {
+                                sink.stamp("⚠ d7d8 ddraw 同级绘制：未选定游戏 exe 或目录不存在（请先选择 exe），跳过")
+                            } else {
+                                val ddrawTar = d7d8Tars.firstOrNull {
+                                    it.fileName.equals("ddraw.tar.gz", ignoreCase = true) ||
+                                        it.display.equals("ddraw", ignoreCase = true)
+                                } ?: d7d8Tars.firstOrNull {
+                                    val n = it.display.lowercase()
+                                    n.contains("ddraw") && !n.contains("to9") &&
+                                        !n.contains("to11") && !n.contains("default")
+                                }
+                                if (ddrawTar == null) {
+                                    sink.stamp("⚠ d7d8 ddraw 同级绘制：/opt/d7d8 下未找到 ddraw.tar.gz（跳过）")
+                                } else {
+                                    val err = GuanliSupport.extractTarTo(ddrawTar.path, exeDir) { sink.stamp(it) }
+                                    if (err != null) {
+                                        sink.stamp("⚠ d7d8 ddraw 同级绘制解压失败：$err（继续启动）")
+                                    } else {
+                                        sink.stamp("d7d8 ddraw 同级绘制 ${ddrawTar.display} 已解压 → ${exeDir.absolutePath}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 0.5) v3.3.16（上游实现 DriverPackages 模型）：Vulkan 驱动
                 //      （wrapper / 用户 turnip tar）装到【独立目录】
                 //      usr/share/linbox-wrapper/drivers/<slot>/（自带 ICD，

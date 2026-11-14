@@ -410,6 +410,20 @@ data class ContainerData(
     val uargs: String = "",
     /** v3.2.18：默认运行的程序（wineguanli.py custom_exe_path；空 = 运行时再选）。 */
     val exe: String = "",
+    /**
+     * v7.0（用户需求：“图形驱动加上个d7d8实现方式”）：d7d8 实现方式 csv
+     * （对接 /opt/d7d8 生态包；ContainerFlags 同款逗号分隔解析）：
+     *  - ""（缺省/不勾选任何）= 恢复默认 —— 运行前解压
+     *    2D7d8(default).tar.gz 到容器 C 盘 windows（还原官方 ddraw/d3d8.dll）；
+     *  - "d3d9"  = 强制 D3D9  —— 解压 D7D8to9.tar.gz 到 C 盘 windows；
+     *  - "d3d11" = 强制 D3D11 —— 解压 D7D8to11.tar.gz 到 C 盘 windows；
+     *  - "ddraw" = ddraw 同级绘制 —— 解压 ddraw.tar.gz 到游戏 exe 同目录
+     *    （勾选时需已选定游戏 exe，未选定则提示选择；“清除ddraw同级绘制”
+     *    在 UI 侧删 exe 目录下 ddraw.ini/ddraw.dll，不留存模式）。
+     * d3d9 与 d3d11 互斥（两者都覆盖 C 盘 d3d8.dll）；ddraw 可与任一
+     * 强制档叠加（一个管 C 盘转译层、一个管 exe 同目录 2D 渲染）。
+     */
+    val d7d8: String = "",
     /** LinBox 移植新增：容器卡片自定义背景图（本地图片绝对路径；
      * 空 = 使用默认主题卡片）。首页容器卡片与容器管理器列表卡片的
      * 封面图，经文件管理器 pickMode=image 选择后回填。 */
@@ -420,6 +434,13 @@ data class ContainerData(
 
     /** 容器目录绝对路径。 */
     val containerDir: String get() = "${ContainerManager.CONTAINERS_ROOT}/$name"
+
+    /** v7.0：d7d8 实现方式 csv → 已启用模式集合（d3d9/d3d11/ddraw）。 */
+    val d7d8Set: Set<String>
+        get() = d7d8.split(',')
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .toSet()
 
     /** v3.2.15：flags csv → 开关集合。 */
     val flagSet: Set<String> get() = ContainerFlags.parse(flags)
@@ -463,6 +484,7 @@ data class ContainerData(
         "wrapper" to wrapper,
         "uargs" to uargs,
         "exe" to exe,
+        "d7d8" to d7d8,
         "card_image" to cardImage
     )
 
@@ -506,6 +528,11 @@ data class ContainerData(
          *  assets/dxvk 内的 dxvk-2.3.1.tar.gz）。 */
         const val DXVK_AUTO = "auto"
         const val DXVK_OFF = "off"
+
+        /** v7.0：d7d8 实现方式 csv 值（详见 [d7d8] 字段注释）。 */
+        const val D7D8_D3D9 = "d3d9"
+        const val D7D8_D3D11 = "d3d11"
+        const val D7D8_DDRAW = "ddraw"
 
         /** 常用虚拟分辨率（"native" 表示跟随 X11 桌面窗口）。 */
         val SCREEN_CHOICES: List<String> = listOf(
@@ -570,6 +597,7 @@ data class ContainerData(
                 wrapper = kv["wrapper"] ?: "",
                 uargs = kv["uargs"] ?: "",
                 exe = kv["exe"] ?: "",
+                d7d8 = kv["d7d8"] ?: "",
                 cardImage = kv["card_image"] ?: ""
             )
         }

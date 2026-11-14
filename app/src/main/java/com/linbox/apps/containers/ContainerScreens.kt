@@ -1442,7 +1442,10 @@ internal fun ResolutionWindowGroup(
 @Composable
 internal fun GraphicsDriverTab(
     edit: ContainerData,
-    onChange: (ContainerData) -> Unit
+    onChange: (ContainerData) -> Unit,
+    // v7.0：d7d8 ddraw 同级绘制的游戏 exe（游戏编辑页传游戏自己的 exe；
+    // 容器编辑页不传 → 用容器默认程序 edit.exe）
+    d7d8GameExe: String = ""
 ) {
     // wineguanli.py load_driver_versions：默认/不使用 + 目录内 tar 包
     var zinkTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
@@ -1463,6 +1466,8 @@ internal fun GraphicsDriverTab(
     // 怎么全跑到turnip(opt/tz)那里了，安装应该放在对应的目录进行选择"）。
     var yuzuTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     var wrapperTars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
+    // v7.0：d7d8 生态包（/opt/d7d8：2D7d8(default)/D7D8to9/D7D8to11/ddraw）
+    var d7d8Tars by remember { mutableStateOf<List<GuanliSupport.OptTar>>(emptyList()) }
     var driversTick by remember { mutableIntStateOf(0) }
     var installing by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -1481,6 +1486,7 @@ internal fun GraphicsDriverTab(
             // 图形驱动页的 Wrapper 下拉自动扫描 tar 包；RootfsLauncher 0.5 在
             // 运行时对未安装的槽位自动安装）
             wrapperTars = GuanliSupport.scanOpt("wrapper")
+            d7d8Tars = GuanliSupport.scanOpt("d7d8")
             installedDrivers = WrapperDriverSupport.listDrivers()
         }
     }
@@ -1980,12 +1986,151 @@ internal fun GraphicsDriverTab(
             onSelect = { onChange(edit.copy(fexcore = it)) }
         )
     }
+    // ==============================================================
+    // v7.0（用户需求：“给容器编辑游戏编辑里图形驱动加上个d7d8实现方式，
+    // 分为强制d3d9、强制d3d11、ddraw同级绘制、清除ddraw同级绘制，
+    // 不勾选任何也就是默认就是恢复ddraw和d3d8.dll为默认”）
+    // d7d8 实现方式（/opt/d7d8 生态包，容器编辑与游戏编辑共用本页）：
+    //  - 强制D3D9 / 强制D3D11：互斥勾选（都覆盖 C 盘 d3d8.dll）；
+    //  - ddraw同级绘制：勾选时检测是否已选定游戏 exe —— 有则立即把
+    //    ddraw.tar.gz 解压到 exe 同目录（运行前也会再应用），没有则
+    //    提示先选择 exe；
+    //  - 清除ddraw同级绘制：动作 —— 删 exe 目录下 ddraw.ini/ddraw.dll
+    //    并解除 ddraw 同级勾选；
+    //  - 全部不勾（默认）= 恢复官方 ddraw/d3d8.dll：运行前自动解压
+    //    2D7d8(default).tar.gz 到 C 盘 windows。
+    // ==============================================================
+    GGroup("d7d8 实现方式（DirectDraw / D3D8 转译）") {
+        val modes = edit.d7d8Set
+        var d7d8Msg by remember { mutableStateOf<String?>(null) }
+        // ddraw 同级绘制的目标 exe：游戏编辑页传游戏 exe，容器编辑用
+        // 容器默认程序（更多配置 → 默认运行的程序）
+        val d7d8Exe = d7d8GameExe.ifBlank { edit.exe }
+        fun setD7D8(next: Set<String>) {
+            onChange(edit.copy(d7d8 = next.joinToString(",")))
+        }
+        GCheckFlow(
+            items = listOf(
+                ContainerData.D7D8_D3D9 to "强制D3D9",
+                ContainerData.D7D8_D3D11 to "强制D3D11",
+                ContainerData.D7D8_DDRAW to "ddraw同级绘制"
+            ),
+            checked = { it in modes },
+            onToggle = { mode, on ->
+                when (mode) {
+                    ContainerData.D7D8_D3D9, ContainerData.D7D8_D3D11 -> {
+                        // 强制档互斥：勾一个清另一个（都覆盖 C 盘 d3d8.dll）
+                        val next = modes.toMutableSet()
+                        if (on) {
+                            next.add(mode)
+                            next.remove(
+                                if (mode == ContainerData.D7D8_D3D9) ContainerData.D7D8_D3D11
+                                else ContainerData.D7D8_D3D9
+                            )
+                        } else next.remove(mode)
+                        d7d8Msg = null
+                        setD7D8(next)
+                    }
+                    ContainerData.D7D8_DDRAW -> {
+                        if (!on) {
+                            d7d8Msg = null
+                            setD7D8(modes - mode)
+                            return@GCheckFlow
+                        }
+                        // 勾选需已选定游戏 exe 目录：有 → 立即解压 ddraw.tar.gz
+                        // 到 exe 同目录；没有 → 提示选择 exe（保持未勾选）
+                        if (d7d8Exe.isBlank()) {
+                            d7d8Msg = "请先选择游戏 exe（容器编辑 → 更多配置 → 默认运行的程序；" +
+                                "游戏编辑 → 基本 → 程序），再勾选 ddraw 同级绘制"
+                            return@GCheckFlow
+                        }
+                        val dir = RootfsLauncher.resolveExeWorkingDir(d7d8Exe, edit)
+                        if (dir == null) {
+                            d7d8Msg = "无法定位 exe 目录（路径不存在或盘符未映射）：$d7d8Exe"
+                            return@GCheckFlow
+                        }
+                        setD7D8(modes + mode)
+                        cs.launch(Dispatchers.IO) {
+                            val tars = runCatching { GuanliSupport.scanOpt("d7d8") }
+                                .getOrDefault(emptyList())
+                            val tar = tars.firstOrNull {
+                                it.fileName.equals("ddraw.tar.gz", true) ||
+                                    it.display.equals("ddraw", true)
+                            }
+                            val err = if (tar == null)
+                                "/opt/d7d8 下未找到 ddraw.tar.gz（运行前会再次尝试）"
+                            else GuanliSupport.extractTarTo(tar.path, dir)
+                            withContext(Dispatchers.Main) {
+                                d7d8Msg = if (err == null)
+                                    "ddraw 同级绘制已解压 → ${dir.absolutePath}"
+                                else "⚠ ddraw 同级绘制：$err"
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            GSmallButton(
+                label = "清除ddraw同级绘制",
+                bg = GuanliColors.red
+            ) {
+                if (d7d8Exe.isBlank()) {
+                    d7d8Msg = "请先选择游戏 exe —— 清除需要知道 exe 目录"
+                } else {
+                    val dir = RootfsLauncher.resolveExeWorkingDir(d7d8Exe, edit)
+                    if (dir == null) {
+                        d7d8Msg = "无法定位 exe 目录（路径不存在或盘符未映射）：$d7d8Exe"
+                    } else {
+                        cs.launch(Dispatchers.IO) {
+                            val ini = java.io.File(dir, "ddraw.ini")
+                            val dll = java.io.File(dir, "ddraw.dll")
+                            val hadIni = ini.exists()
+                            val hadDll = dll.exists()
+                            val ok = (!hadIni || ini.delete()) && (!hadDll || dll.delete())
+                            withContext(Dispatchers.Main) {
+                                // 文件已删，同步解除 ddraw 同级勾选
+                                if (ContainerData.D7D8_DDRAW in edit.d7d8Set) {
+                                    setD7D8(edit.d7d8Set - ContainerData.D7D8_DDRAW)
+                                }
+                                d7d8Msg = when {
+                                    !ok -> "⚠ 删除失败（文件被占用？）：${dir.absolutePath}"
+                                    !hadIni && !hadDll -> "exe 目录下没有 ddraw.ini / ddraw.dll（无需清除）：${dir.absolutePath}"
+                                    else -> "已清除 ddraw 同级绘制（" +
+                                        listOfNotNull(
+                                            "ddraw.ini".takeIf { hadIni },
+                                            "ddraw.dll".takeIf { hadDll }
+                                        ).joinToString(" + ") + "）→ ${dir.absolutePath}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (d7d8Msg != null) {
+            Text(
+                d7d8Msg ?: "",
+                fontSize = gsp(10.sp), color = GuanliColors.info, lineHeight = gsp(14.sp)
+            )
+        }
+        GNote(
+            "• 强制D3D9 = 解压 /opt/d7d8/D7D8to9.tar.gz、强制D3D11 = D7D8to11.tar.gz → 容器 C 盘 windows\n" +
+                "• 全部不勾选（默认）= 恢复 ddraw 和 d3d8.dll 为官方默认：解压 2D7d8(default).tar.gz → C 盘 windows\n" +
+                "• ddraw同级绘制 = 解压 ddraw.tar.gz → 游戏 exe 同目录（需已选定 exe，运行前也会自动应用）\n" +
+                "• 清除ddraw同级绘制 = 删除 exe 目录下的 ddraw.ini 和 ddraw.dll\n" +
+                (if (d7d8Tars.isEmpty()) "⚠ 未检测到 /opt/d7d8 生态包（放入上述 tar.gz 后此处选择即生效）"
+                else "已检测到 /opt/d7d8：${d7d8Tars.joinToString(" / ") { it.display }}")
+        )
+    }
     GNote(
         "图形驱动槽位：Vulkan 驱动（turnip/wrapper，上方新机制）、Zink(/opt/zink)、D3D 转译（DXVK /opt/dxvk1 与" +
-            "WineD3D /opt/vkord3d 二选一，互斥防 DLL 冲突）、VKD3D12(/opt/vkd3d12)、FEXCore(/opt/fexcore)。运行容器时：" +
+            "WineD3D /opt/vkord3d 二选一，互斥防 DLL 冲突）、VKD3D12(/opt/vkd3d12)、FEXCore(/opt/fexcore)、" +
+            "d7d8(/opt/d7d8)。运行容器时：" +
             "Vulkan 驱动 → VK_ICD_FILENAMES 指向独立目录 ICD（含用户 turnip 包，" +
             "GL 自动联动 zink 吃驱动加速）；Zink → rootfs/usr/lib；" +
-            "DXVK/WineD3D/VKD3D12/FEXCore → 对应容器 C 盘 windows"
+            "DXVK/WineD3D/VKD3D12/FEXCore → 对应容器 C 盘 windows；d7d8 强制档/默认还原 → C 盘 windows、" +
+            "ddraw 同级 → 游戏 exe 同目录"
     )
 }
 

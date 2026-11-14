@@ -903,8 +903,43 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     private var scaleTouchpad = true
     private var tapToMove = false
 
-    /** 轻点拖拽（tapToMove）：左键已按下、等待"再轻点"释放。 */
-    private var padPressed = false
+    /**
+     * v7.0 官方对齐：当前按住的鼠标键（InputStub.BUTTON_*，0 = 未按）。
+     * 取代旧 pressedLeft/padPressed 双状态 —— 官方 TrackpadInputStrategy /
+     * SimulatedTouchInputStrategy 各自只有一个 mHeldButton。
+     */
+    private var heldButton = 0
+
+    /**
+     * v7.0 官方 tapToMove（轻点拖拽）：第一击轻点后挂起的延迟单击。
+     * 官方 GestureListener.onTap：tapToMove 开启时左键轻点【不立即点击】，
+     * 而是 sendEmptyMessageDelayed(BUTTON_LEFT, getDoubleTapTimeout())；
+     * 窗口内第二击按下（onDoubleTapEvent ACTION_DOWN）则撤消息改为按下
+     * 左键进入拖拽，窗口内没有第二击才补发普通单击。旧实现“第一击立即
+     * 按下并保持”→ 点一下就变成长按（用户实测），本字段即官方延迟消息。
+     */
+    private var tapPending = false
+    private val tapPendingRunnable = Runnable {
+        if (!tapPending) return@Runnable
+        tapPending = false
+        // 窗口内无第二击 → 补发普通单击（官方 mGestureListenerHandler 同款）
+        sendButton(InputStub.BUTTON_LEFT, true)
+        sendButton(InputStub.BUTTON_LEFT, false)
+    }
+
+    /** 官方双击窗口：ViewConfiguration.getDoubleTapTimeout()（默认 300ms） */
+    private val doubleTapTimeoutMs: Long =
+        android.view.ViewConfiguration.getDoubleTapTimeout().toLong()
+
+    /**
+     * v7.0 官方 TapGestureDetector 对齐：逐指初始位置（pointerId → [x,y]）。
+     * 任一指滑出 slop 即取消轻点/长按候选（trackMoveEvent 同款）—— 取代
+     * 旧 twoMoved 的 0.5px 抖动阈值（双指轻点右键几乎必被误取消）。
+     */
+    private val pointerStarts = HashMap<Int, FloatArray>()
+
+    /** 本手势出现过的最大手指数（官方 mPointerCount：决定轻点/长按的鼠标键） */
+    private var maxPointers = 1
 
     /**
      * 从偏好同步触摸方式与触控板参数（真实生效：本桥是 LinBox X11 的
@@ -916,8 +951,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         if (newMode != touchMode) {
             // v6.8：切换方式时解除长按定时（旧模式的悬挂手势全部收尾）
             disarmLongPress()
-            if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
-            if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
+            if (heldButton != 0) { sendButton(heldButton, false); heldButton = 0 }
+            cancelTapPending()
             mode = Mode.IDLE
             // v2.33：冲掉直接触摸可能遗留的 X 侧活跃触摸（0..9）——否则触摸
             // 仿真按钮 1 永久卡按，此后一切左键按下被 dix 丢弃（点击全失灵）；
@@ -943,7 +978,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
     // 手势状态
     private var mode = Mode.IDLE
-    private var pressedLeft = false
     private var downX = 0f; private var downY = 0f
     private var downAt = 0L
     // v6.10：DOWN 事件的 MotionEvent 时间戳（eventTime）—— 轻点/长按仲裁的
@@ -959,9 +993,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     // 坐标（释放零位移）；双击吸附记录同一落点（吸附语义对齐按下瞬间）
     private var tapX = 0f; private var tapY = 0f
 
-    // 双指
-    private var twoStartAt = 0L
-    private var twoMoved = false
+    // 双指（滚轮质心增量；v7.0 起轻点取消改用逐指 slop 判定 pointerStarts）
     private var lastTwoY = 0f
     private var scrollAccum = 0f
 
@@ -1005,32 +1037,83 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         mainHandler.removeCallbacks(longPressRunnable)
     }
 
-    /** 长按到点（主线程）：仍处于单指未滑动状态才触发。 */
+    /** v7.0：撤销挂起的 tapToMove 延迟单击（手势异常收尾/模式切换/双击拖拽接管时） */
+    private fun cancelTapPending() {
+        tapPending = false
+        mainHandler.removeCallbacks(tapPendingRunnable)
+    }
+
+    /** v7.0：挂起官方 tapToMove 延迟单击（doubleTapTimeout 内无第二击才补发） */
+    private fun armTapPending() {
+        cancelTapPending()
+        tapPending = true
+        mainHandler.postDelayed(tapPendingRunnable, doubleTapTimeoutMs)
+    }
+
+    /**
+     * v7.0 官方 mouseButtonFromPointerCount：1=左 2=右 3=中，其余未定义。
+     */
+    private fun buttonForPointerCount(count: Int): Int = when (count) {
+        1 -> InputStub.BUTTON_LEFT
+        2 -> InputStub.BUTTON_RIGHT
+        3 -> InputStub.BUTTON_MIDDLE
+        else -> InputStub.BUTTON_UNDEFINED
+    }
+
+    /**
+     * v7.0：任一受跟踪指针自初始位置滑出 slop（官方 trackMoveEvent 同款）。
+     * 返回 true 时调用方应取消轻点/长按候选（moved=true + disarm）。
+     */
+    private fun anyPointerBeyondSlop(event: MotionEvent): Boolean {
+        for (i in 0 until event.pointerCount) {
+            val id = event.getPointerId(i)
+            val s = pointerStarts[id] ?: continue
+            val dx = event.getX(i) - s[0]
+            val dy = event.getY(i) - s[1]
+            if (dx * dx + dy * dy > slopPx * slopPx) return true
+        }
+        return false
+    }
+
+    /** 长按到点（主线程）：仍处于未滑动状态才触发（官方 mTapCancelled 闸门）。 */
     private fun onLongPressFired() {
-        if (mode != Mode.ONE || moved) return
+        if (moved || longPressFired) return
+        if (mode != Mode.ONE && mode != Mode.TWO) return
+        if (pointerStarts.isEmpty()) return
         longPressFired = true
+        // v7.0 官方对齐：长按的鼠标键由最大手指数决定（双指长按 = 右键按住，
+        // 三指长按 = 中键按住 —— GestureListener.onLongPress +
+        // mouseButtonFromPointerCount 同款）
+        val button = buttonForPointerCount(maxPointers)
+        if (button == InputStub.BUTTON_UNDEFINED) return
         when (touchMode) {
             TOUCH_SIMULATED -> {
-                // 光标绝对定位到指尖 + 左键按下（单条 absolute 按钮消息，
-                // 与上游 onTap 的"先 moveCursorToScreenPoint 再
-                // onPressAndHold"等价；随后 MOVE 走相对增量拖拽）
-                val p = toXpx(curX, curY)
-                val px = p[0]
-                val py = p[1]
-                postSend {
-                    if (LorieView.connected())
-                        view.sendMouseEvent(px, py, InputStub.BUTTON_LEFT, true, false)
-                }
-                pressedLeft = true
-                // 拖拽增量基准 = 按下瞬间的指尖位置（丢弃 slop 内的微小漂移）
+                // 官方：光标先绝对定位到首指落点（moveCursorToScreenPoint +
+                // onPressAndHold 两条消息；旧实现把坐标塞进按键消息——被
+                // X server 忽略，拖拽起点错位），再按下鼠标键；随后 MOVE
+                // 走相对增量拖拽（v2.30 wine warp 兼容语义保留）。
+                val p = toXpx(downX, downY)
+                sendAbsPress(p[0], p[1], button)
+                heldButton = button
+                // 拖拽即时生效：增量基准重置到当前指尖（不吃 slop 死区）
                 downX = curX; downY = curY
+                moved = true
             }
             TOUCH_TRACKPAD -> {
-                // 上游：tapToMove 开启时长按不进入拖拽（返回 false）
-                if (!tapToMove && !pressedLeft) {
-                    sendButton(InputStub.BUTTON_LEFT, true)
-                    pressedLeft = true
+                // 官方：tapToMove 开启时左键长按不进入拖拽（onPressAndHold
+                // 返回 false）；其余（含双指右键/三指中键长按）按住进入拖拽
+                if (button == InputStub.BUTTON_LEFT && tapToMove) return
+                if (heldButton == 0) {
+                    sendButton(button, true)
+                    heldButton = button
                 }
+                // v7.0（用户：“不开轻点拖拽需要长按很久才生效，而且长按
+                // 拖动丢失”）：长按到点即进入拖拽并置 moved —— 旧实现保持
+                // moved=false，拖拽要等手指再滑出 slop 才开始出增量，
+                // 400ms 后还要多滑 8dp 才看得见拖动（“很久才生效”）；
+                // 误滑出 slop 的手势长按定时早被取消（“拖动丢失”）。
+                // 到点即拖 + 基线重置：长按一生效拖拽立即跟随手指。
+                moved = true
             }
         }
     }
@@ -1137,6 +1220,8 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     fun onDetached() {
         dropPendingMoves()
         disarmLongPress()
+        // v7.0：撤销挂起的 tapToMove 延迟单击（桥已分离，不再补发点击）
+        cancelTapPending()
         synchronized(dtLock) { dtCount = 0; dtDirty = false }
         flushHandler.removeCallbacks(dtFlushRunnable)
         dtFlushPending = false
@@ -1323,6 +1408,45 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         }
     }
 
+    // ---- v7.0 官方两消息点击协议（“定位 + 点击”必须拆两条消息） ----
+    // Linbox-Tx11-aar cmdentrypoint.c 的 EVENT_MOUSE 分发实证：
+    //   detail != 0（按键）→ QueuePointerEvents(ButtonPress/Release, ..., 
+    //                          POINTER_RELATIVE, NULL) —— x/y 完全被忽略！
+    //   detail == 0（移动）→ POINTER_ABSOLUTE | POINTER_SCREEN 绝对 MotionNotify
+    // 上游 TouchInputHandler.moveCursorToScreenPoint（sendCursorMove 绝对）
+    // + InputEventSender.sendMouseClick（(0,0)+按键）正是这两步。旧实现把
+    // 坐标塞进按键消息 → 坐标被 X server 丢弃 → 模拟触摸轻点/长按全部落在
+    // 旧光标位置（用户实测“模拟触摸完全无效果”的直接根因）。
+
+    /** 官方 moveCursorToScreenPoint：光标绝对定位到 (px,py)（X 屏幕坐标） */
+    private fun sendAbsMove(px: Float, py: Float) {
+        postSend {
+            if (LorieView.connected())
+                view.sendMouseEvent(px, py, InputStub.BUTTON_UNDEFINED, false, false)
+        }
+    }
+
+    /** 官方 onTap 语义：先绝对定位，再在指针处完整单击 */
+    private fun sendAbsClick(px: Float, py: Float, button: Int) {
+        postSend {
+            if (LorieView.connected()) {
+                view.sendMouseEvent(px, py, InputStub.BUTTON_UNDEFINED, false, false)
+                view.sendMouseEvent(0f, 0f, button, true, false)
+                view.sendMouseEvent(0f, 0f, button, false, false)
+            }
+        }
+    }
+
+    /** 官方 onPressAndHold 语义：先绝对定位，再按下（拖拽跟随，抬手释放） */
+    private fun sendAbsPress(px: Float, py: Float, button: Int) {
+        postSend {
+            if (LorieView.connected()) {
+                view.sendMouseEvent(px, py, InputStub.BUTTON_UNDEFINED, false, false)
+                view.sendMouseEvent(0f, 0f, button, true, false)
+            }
+        }
+    }
+
     // ---- v2.33 点击可靠性自愈（用户实测 v2.32.2：左右键/点击全失灵）----
     // 病灶模型：X 侧 lorieMouse/lalieTouch 按钮状态一旦卡在"按下"
     //（直接触摸遗留活跃触摸的仿真按钮、任一层丢失的 UP、分流漏记账），
@@ -1359,14 +1483,9 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
 
     /** 新手势起点归位悬挂按压：卡键自愈 + 重复按下防抖（X 侧会被丢弃的按下不再发出） */
     private fun resyncStuckPress() {
-        if (pressedLeft) {
-            sendButton(InputStub.BUTTON_LEFT, false)
-            pressedLeft = false
-            diagResyncs++
-        }
-        if (padPressed) {
-            sendButton(InputStub.BUTTON_LEFT, false)
-            padPressed = false
+        if (heldButton != 0) {
+            sendButton(heldButton, false)
+            heldButton = 0
             diagResyncs++
         }
     }
@@ -1399,8 +1518,15 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
         append('\n')
         append("卡键归位="); append(diagResyncs)
         append("  自愈="); append(diagHeals)
-        append("  桥按压态: 左键="); append(if (pressedLeft) "按下" else "释放")
-        append(" 轻点拖拽="); append(if (padPressed) "按下" else "释放")
+        append("  桥按压态: 按键="); append(
+            when (heldButton) {
+                InputStub.BUTTON_LEFT -> "左键"
+                InputStub.BUTTON_MIDDLE -> "中键"
+                InputStub.BUTTON_RIGHT -> "右键"
+                else -> "无"
+            }
+        )
+        append(" 轻点拖拽待击="); append(if (tapPending) "是" else "否")
     }
 
     /** 双击吸附：若处于双击窗口内且落点接近上次轻点，返回上次落点。 */
@@ -1481,9 +1607,14 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 }
                 hmPressedButton = btn
                 diagDowns++
+                // v7.0 官方两消息协议：按键消息的坐标会被 X server 忽略，
+                // 必须先绝对定位（壳层触控板拖拽注入的落点从此精确到位，
+                // 不再依赖光标恰好已停在注入位置）
                 postSend {
-                    if (LorieView.connected())
-                        view.sendMouseEvent(px, py, btn, true, false)
+                    if (LorieView.connected()) {
+                        view.sendMouseEvent(px, py, InputStub.BUTTON_UNDEFINED, false, false)
+                        view.sendMouseEvent(0f, 0f, btn, true, false)
+                    }
                 }
             }
             MotionEvent.ACTION_MOVE -> postSend {
@@ -1496,7 +1627,7 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 diagUps++
                 postSend {
                     if (LorieView.connected())
-                        view.sendMouseEvent(px, py, btn, false, false)
+                        view.sendMouseEvent(0f, 0f, btn, false, false)
                 }
             }
         }
@@ -1504,23 +1635,23 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     }
 
     /**
-     * 模式 2 —— 模拟触摸屏（termux-x11 "Simulated touchscreen"，v6.8 按
-     * linbox-winemu（termux-x11 TouchInputHandler + SimulatedTouchInputStrategy）
-     * 完整对齐重写）：
+     * 模式 2 —— 模拟触摸屏（termux-x11 "Simulated touchscreen"，v7.0 按
+     * 官方 TouchInputHandler + SimulatedTouchInputStrategy 逐项对齐重写）：
      *
-     * - 按下：不按任何键（上游 SimulatedTouch.onMotionEvent 在 DOWN 不动作
-     *   —— 旧实现"按下即左键"与上游不符，且导致无法不点击地触碰屏幕）；
+     * - 按下：不按任何键（上游 SimulatedTouch.onMotionEvent 在 DOWN 不动作）；
      * - 滑动（未长按）：光标不跟随（上游 onScroll 仅 mIsDragging 时
-     *   moveCursorToScreenPoint —— 手指移动本身不动光标，不产生误点击）；
-     * - 轻点（抬起快且未滑动）：光标绝对定位到指尖 + 左键点击（上游
-     *   onTap → moveCursorToScreenPoint → sendMouseClick 单条消息语义）；
+     *   moveCursorToScreenPoint）；
+     * - 轻点（任一指未滑出 slop 且长按未到点，末指抬起判定）：光标绝对
+     *   定位到首指落点 + 点击（上游 onTap → moveCursorToScreenPoint →
+     *   sendMouseClick —— v7.0 起拆成两条消息：定位的坐标在按键消息里
+     *   会被 X server 丢弃，这正是旧版“模拟触摸完全无效果”的根因）；
      *   双击吸附保留（wine WM_LBUTTONDBLCLK 识别增强）；
-     * - 长按（超时未滑动）：光标定位到指尖 + 左键按下 → 拖拽（上游
-     *   onLongPress → onPressAndHold → mIsDragging 同款）；拖拽期间发
-     *   相对增量（v2.30 wine FPS XWarpPointer 兼容语义保留，桌面拖拽
-     *   手感与绝对跟随等价），抬起释放；
-     * - 双指轻点 = 右键（指尖处）；双指滑动 = 滚轮；三指轻点 = 中键
-     *   （上游 mouseButtonFromPointerCount：1=左 2=右 3=中）。
+     * - 长按（超时未滑动）：定位 + 按下进拖拽（官方 onPressAndHold），
+     *   到点即拖（基线重置，无 slop 死区）；拖拽期间发相对增量
+     *   （v2.30 wine FPS XWarpPointer 兼容语义保留），抬手释放；
+     * - 轻点/长按的鼠标键由最大手指数决定（官方 mouseButtonFromPointerCount：
+     *   1=左 2=右 3=中）——双指轻点=右键、三指轻点=中键、双指长按=右键
+     *   拖拽，均在末指抬起时收尾；双指滑动 = 滚轮。
      */
     private fun onTouchSimulated(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -1534,50 +1665,50 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 downEventTime = event.eventTime
                 moved = false
                 longPressFired = false
+                maxPointers = 1
+                pointerStarts.clear()
+                pointerStarts[event.getPointerId(0)] = floatArrayOf(event.x, event.y)
                 diagDowns++
-                // v6.8：长按检测挂起（到点未滑动 → 定位 + 左键按下进拖拽）
+                // 长按检测挂起（到点未滑动 → 定位 + 按下进拖拽；官方多指
+                // 长按不因落下第二指解除 —— 双指长按 = 右键按住）
                 armLongPress()
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
+                // v7.0 官方 TapGestureDetector：登记新指初始位置，不解除长按
+                val idx = event.actionIndex
+                pointerStarts[event.getPointerId(idx)] =
+                    floatArrayOf(event.getX(idx), event.getY(idx))
+                maxPointers = maxOf(maxPointers, event.pointerCount)
                 if (mode == Mode.ONE && event.pointerCount >= 2) {
                     mode = Mode.TWO
-                    // 多指手势接管：解除长按（上游长按是单指语义）
-                    disarmLongPress()
                     // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
-                    // v2.33.1：冲刷异步化（FIFO 先于后续事件）
                     postFlushMoves()
-                    twoStartAt = android.os.SystemClock.uptimeMillis()
-                    twoMoved = false
                     scrollAccum = 0f
                     lastTwoY = (event.getY(0) + event.getY(1)) / 2f
-                    if (pressedLeft) {
-                        sendButton(InputStub.BUTTON_LEFT, false)
-                        pressedLeft = false
-                    }
+                    // 官方：拖拽中落下第二指左键保持按住（onMotionEvent 只在
+                    // 最终 UP 释放）—— 滚轮与拖拽可并存（拖选 + 滚动浏览）
                 }
             }
 
             MotionEvent.ACTION_MOVE -> {
+                // v7.0：官方 trackMoveEvent —— 任一指滑出 slop 即取消
+                // 轻点/长按候选（取代旧 twoMoved 的 0.5px 抖动阈值）
+                if (!moved && anyPointerBeyondSlop(event)) {
+                    moved = true
+                    disarmLongPress()
+                }
                 when (mode) {
                     Mode.ONE -> {
                         val dx = event.x - downX
                         val dy = event.y - downY
-                        if (!moved) {
-                            moved = dx * dx + dy * dy > slopPx * slopPx
-                            if (moved) {
-                                // 滑出 slop：轻点/长按 candidacy 全部取消
-                                //（上游 TapGestureDetector 同款语义）
-                                disarmLongPress()
-                            }
-                        }
                         curX = event.x; curY = event.y
-                        // v6.8：长按拖拽期间发相对增量（v2.30 wine warp 兼容）；
-                        // 未拖拽（pressedLeft=false）时不发送任何移动 ——
+                        // 长按拖拽期间发相对增量（v2.30 wine warp 兼容）；
+                        // 未拖拽（heldButton==0）时不发送任何移动 ——
                         // 上游语义：手指移动本身不动光标，不产生误点击。
                         // 注：拖拽中 downX 每帧滚动为最新位置，moved 置位后
                         // 恒为 true，慢速拖拽增量不丢（slop 只在未拖拽时判定）。
-                        if (moved && pressedLeft) {
+                        if (moved && heldButton != 0) {
                             accumulateMove(dx * scaleX, dy * scaleY)
                             downX = event.x; downY = event.y
                         }
@@ -1587,7 +1718,6 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                             val avgY = (event.getY(0) + event.getY(1)) / 2f
                             val dy = (lastTwoY - avgY) * scaleY // 手指上滑 → 正值 → 内容下滚
                             lastTwoY = avgY
-                            if (kotlin.math.abs(dy) > 0.5f) twoMoved = true
                             scrollAccum += dy
                             if (kotlin.math.abs(scrollAccum) >= wheelStep) {
                                 val steps = (scrollAccum / wheelStep).toInt()
@@ -1606,36 +1736,13 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                if (mode == Mode.TWO) {
-                    val elapsed = android.os.SystemClock.uptimeMillis() - twoStartAt
-                    if (!twoMoved && elapsed < 320L) {
-                        if (event.pointerCount >= 3) {
-                            // v6.8：三指轻点 → 中键（上游 mouseButtonFromPointerCount(3)）
-                            val p = toXpx(curX, curY)
-                            val px = p[0]
-                            val py = p[1]
-                            postSend {
-                                if (LorieView.connected()) {
-                                    view.sendMouseEvent(px, py, InputStub.BUTTON_MIDDLE, true, false)
-                                    view.sendMouseEvent(px, py, InputStub.BUTTON_MIDDLE, false, false)
-                                }
-                            }
-                        } else {
-                            // 双指轻点（未滑动、时间短）→ 右键单击（指尖处）
-                            // v2.33.1：单条 absolute 按钮消息（与单指 tap 同语义）
-                            val p = toXpx(curX, curY)
-                            val px = p[0]
-                            val py = p[1]
-                            postSend {
-                                if (LorieView.connected()) {
-                                    view.sendMouseEvent(px, py, InputStub.BUTTON_RIGHT, true, false)
-                                    view.sendMouseEvent(px, py, InputStub.BUTTON_RIGHT, false, false)
-                                }
-                            }
-                        }
-                    }
-                    mode = Mode.TWO_DONE
-                }
+                // v7.0 官方 trackUpEvent + cancelLongTouchNotification：仅移除
+                // 抬起指的记账并解除长按定时；轻点判定统一在末指 UP
+                pointerStarts.remove(event.getPointerId(event.actionIndex))
+                disarmLongPress()
+                // 事件里 pointerCount 含抬起指：==2 即抬起后仅剩 1 指 →
+                // 停止滚轮（3→2 时继续滚）
+                if (event.pointerCount <= 2 && mode == Mode.TWO) mode = Mode.TWO_DONE
             }
 
             MotionEvent.ACTION_UP -> {
@@ -1643,52 +1750,46 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.33.1：冲刷异步化（FIFO 保证先于按钮释放写入 X）
                 diagUps++
                 disarmLongPress()
-                // v6.10（用户：“短按点击还是变成了长按”）：轻点/长按仲裁改用
-                // MotionEvent 事件时间轴（eventTime - DOWN 的 eventTime）——
-                // wine 打满 CPU 时主线程调度抖动可能令长按定时器先于排队的
-                // UP 触发（longPressFired 误置 + 左键已按下），墙钟判据不可靠。
-                // 真实按压时长 < 长按阈值 = 轻点：长按路径的“按下+释放”
-                // 本身就是一次完整单击（位置一致），无需也不得再补 tap 注入。
+                pointerStarts.clear()
+                // v6.10：轻点/长按仲裁用 MotionEvent 事件时间轴（wine 打满
+                // CPU 时主线程调度抖动可能令长按定时器先于排队的 UP 触发，
+                // 墙钟判据不可靠）。真实按压时长 < 长按阈值 = 轻点候选。
                 val tapDurMs = if (downEventTime > 0) event.eventTime - downEventTime else 0L
                 val tapLike = !moved && tapDurMs < longPressTimeoutMs
                 downEventTime = 0L
-                if (pressedLeft) {
+                // 官方顺序：先释放按住的键（strategy.onMotionEvent 在
+                // tap 检测器之前），再判定轻点 —— 长按路径的“按下+释放”
+                // 本身就是一次完整单击，不再补发 tap。
+                if (heldButton != 0) {
                     postFlushMoves()
-                    // 长按拖拽结束：当前指针位置抬键（relative 0,0，
-                    // 不回 warp —— 拖拽中游戏 warp 循环不受扰动）；
-                    // 若实为轻点（tapLike），“按下+释放”即完整单击
-                    sendButton(InputStub.BUTTON_LEFT, false)
-                    pressedLeft = false
-                } else if (mode == Mode.ONE) {
-                    val now = android.os.SystemClock.uptimeMillis()
-                    // v6.9（用户：“修复模拟触摸的方式无效果”）：轻点判定去掉 260ms
-                    // 时间窗 —— 未滑动且长按未到点 = 轻点（定位 + 点击）；长按到点 =
-                    // 按住拖拽。原 260~400ms 死区令慢速轻点完全无响应，是"模拟
-                    // 触摸无效果"的根因。v6.10：叠加事件时间轴仲裁（tapLike）。
-                    if (tapLike && !longPressFired) {
-                        // v6.8 轻点（上游 onTap 语义）：光标绝对定位到指尖 +
-                        // 左键点击 —— 单条消息先定位后按下/抬起（对齐上游
-                        // moveCursorToScreenPoint → sendMouseClick）；双击
-                        // 吸附对齐按下瞬间落点。
+                    sendButton(heldButton, false)
+                    heldButton = 0
+                } else if (tapLike && !longPressFired) {
+                    // v7.0 官方 onTap：按键由最大手指数决定；光标绝对定位到
+                    // 首指落点 + 点击（两条消息 —— 按键消息的坐标会被丢弃）
+                    val button = buttonForPointerCount(maxPointers)
+                    if (button != InputStub.BUTTON_UNDEFINED) {
                         diagTaps++
-                        val p = snapPoint(downX, downY)
-                        val px = p[0]
-                        val py = p[1]
-                        tapX = px; tapY = py
-                        // v3.0（AnWind 移植）：点击置前 —— 落点处最顶层可见
-                        // 根子窗提到最前（fire-and-forget，不阻塞触摸线程）
-                        X11WindowOps.raiseAt(px.toInt(), py.toInt())
-                        postSend {
-                            if (LorieView.connected()) {
-                                view.sendMouseEvent(px, py, InputStub.BUTTON_LEFT, true, false)
-                                view.sendMouseEvent(px, py, InputStub.BUTTON_LEFT, false, false)
-                            }
+                        if (button == InputStub.BUTTON_LEFT) {
+                            // 左键轻点：双击吸附对齐按下瞬间落点 + 点击置前
+                            val p = snapPoint(downX, downY)
+                            val px = p[0]
+                            val py = p[1]
+                            tapX = px; tapY = py
+                            X11WindowOps.raiseAt(px.toInt(), py.toInt())
+                            sendAbsClick(px, py, InputStub.BUTTON_LEFT)
+                            // 完整轻点 → 记录落点（X 坐标）供双击吸附
+                            lastTapX = tapX; lastTapY = tapY
+                            lastTapAt = android.os.SystemClock.uptimeMillis()
+                        } else {
+                            // 双指右键 / 三指中键轻点（官方 mouseButtonFromPointerCount）
+                            val p = toXpx(downX, downY)
+                            sendAbsClick(p[0], p[1], button)
+                            lastTapAt = 0L
                         }
-                        // 完整轻点 → 记录落点（X 坐标）供双击吸附
-                        lastTapX = tapX; lastTapY = tapY; lastTapAt = now
-                    } else {
-                        lastTapAt = 0L
                     }
+                } else {
+                    lastTapAt = 0L
                 }
                 mode = Mode.IDLE
             }
@@ -1697,11 +1798,13 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
                 dropPendingMoves()
                 disarmLongPress()
+                cancelTapPending()
                 downEventTime = 0L
-                if (pressedLeft) {
+                pointerStarts.clear()
+                if (heldButton != 0) {
                     // CANCEL：当前位置抬键（不 warp；tap 未发生不产生点击）
-                    sendButton(InputStub.BUTTON_LEFT, false)
-                    pressedLeft = false
+                    sendButton(heldButton, false)
+                    heldButton = 0
                 }
                 mode = Mode.IDLE
             }
@@ -1868,11 +1971,18 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
     }
 
     /**
-     * 模式 1 —— 触控板（termux-x11 "Trackpad"）：
-     * 手指滑动 = 虚拟光标相对移动（scaleTouchpad 开启时位移按视图→X
-     * 屏幕拉伸比例放大，与上游 TouchInputHandler 一致）；
-     * 轻点 = 左键单击；tapToMove（轻点拖拽）= 轻点按下左键、移动拖拽、
-     * 再轻点释放；双指轻点 = 右键单击；双指滑动 = 滚轮。
+     * 模式 1 —— 触控板（termux-x11 "Trackpad"，v7.0 按官方
+     * TouchInputHandler + TrackpadInputStrategy 逐项对齐重写）：
+     *
+     * - 单指滑动 = 光标相对移动（scaleTouchpad 开启时按视图→X 拉伸比例
+     *   放大；v2.30 wine warp 兼容相对增量保留）；
+     * - 轻点（任一指未滑出 slop 且长按未到点，末指抬起判定，按键由最大
+     *   手指数决定）：tapToMove 关闭 = 立即单击；开启 = 官方延迟单击
+     *   （doubleTapTimeout 内无第二击才补发，第二击按下则进入拖拽）；
+     * - 长按 = 按住拖拽（tapToMove 开启时官方不进入拖拽）；到点即拖，
+     *   增量即时跟随（无 slop 死区）；
+     * - 双指轻点 = 右键；三指轻点 = 中键；双指长按 = 右键按住拖拽；
+     * - 双指滑动 = 滚轮。
      */
     private fun onTouchTrackpad(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -1886,100 +1996,111 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 downEventTime = event.eventTime
                 moved = false
                 longPressFired = false
+                maxPointers = 1
+                pointerStarts.clear()
+                pointerStarts[event.getPointerId(0)] = floatArrayOf(event.x, event.y)
                 diagDowns++
-                // v6.8：长按检测挂起（tapToMove 关闭时长按 = 左键按住拖拽，
-                // 上游 TrackpadInputStrategy.onPressAndHold 同款）
-                armLongPress()
+                if (tapToMove && tapPending) {
+                    // v7.0 官方 tapToMove 双击拖拽（onDoubleTapEvent
+                    // ACTION_DOWN 同款）：撤销挂起单击，按下左键进入拖拽；
+                    // 本击期间滑动 = 拖拽，抬手释放 —— “轻点拖拽”从此是
+                    // “双击并按住拖动”，单点不再误变长按（用户实测）
+                    cancelTapPending()
+                    if (heldButton == 0) {
+                        sendButton(InputStub.BUTTON_LEFT, true)
+                        heldButton = InputStub.BUTTON_LEFT
+                    }
+                    // 拖拽即时生效：不吃 slop 死区（官方 mIsDragging=true）
+                    moved = true
+                } else {
+                    // 长按检测挂起（tapToMove 关闭时长按 = 左键按住拖拽）
+                    armLongPress()
+                }
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
-                if (mode == Mode.ONE && event.pointerCount >= 2) {
+                // v7.0 官方 TapGestureDetector：登记新指初始位置；
+                // 官方多指长按不因落下第二指解除（双指长按 = 右键按住）
+                val idx = event.actionIndex
+                pointerStarts[event.getPointerId(idx)] =
+                    floatArrayOf(event.getX(idx), event.getY(idx))
+                maxPointers = maxOf(maxPointers, event.pointerCount)
+                if (event.pointerCount == 2 && mode == Mode.ONE) {
                     mode = Mode.TWO
-                    // 多指手势接管：解除长按（单指语义）
-                    disarmLongPress()
                     // v2.30.1：拖拽被双指手势接管前，立即冲刷残余增量（不丢尾段）
-                    // v2.33.1：冲刷异步化（FIFO 先于后续事件）
                     postFlushMoves()
-                    twoStartAt = android.os.SystemClock.uptimeMillis()
-                    twoMoved = false
                     scrollAccum = 0f
                     lastTwoY = (event.getY(0) + event.getY(1)) / 2f
-                    // 拖拽中落下第二根手指 → 结束拖拽（真实触控板习惯）
-                    if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
+                    // 官方：拖拽中落下第二指左键保持按住（TrackpadInputStrategy
+                    // .onMotionEvent 只在最终 UP 释放）—— 与真触控板“按住
+                    // 拖动中双指滚动”一致
                 }
             }
 
             MotionEvent.ACTION_MOVE -> {
-                when (mode) {
-                    Mode.ONE -> {
-                        val dx = event.x - curX
-                        val dy = event.y - curY
-                        curX = event.x; curY = event.y
-                        if (!moved) {
-                            val ddx = curX - downX
-                            val ddy = curY - downY
-                            moved = ddx * ddx + ddy * ddy > slopPx * slopPx
-                            if (moved) disarmLongPress()
+                // v7.0：官方 trackMoveEvent —— 任一指滑出 slop 即取消
+                // 轻点/长按候选（取代旧 0.5px 抖动阈值；拖拽中已 moved 不受影响）
+                if (!moved && anyPointerBeyondSlop(event)) {
+                    moved = true
+                    disarmLongPress()
+                }
+                if (event.pointerCount >= 2 && mode == Mode.TWO) {
+                    // ---- 双指：滑动 = 滚轮（质心增量，首两指） ----
+                    val avgY = (event.getY(0) + event.getY(1)) / 2f
+                    val dy = (lastTwoY - avgY) * scaleY // 双指上滑 → 滚轮下滚
+                    lastTwoY = avgY
+                    scrollAccum += dy
+                    if (kotlin.math.abs(scrollAccum) >= wheelStep) {
+                        val steps = (scrollAccum / wheelStep).toInt()
+                        // v2.33.1：滚轮入队输入线程（主线程零 socket I/O）
+                        val delta = steps * wheelStep
+                        postSend {
+                            if (LorieView.connected())
+                                view.sendMouseWheelEvent(0f, delta)
                         }
-                        // v2.30 修复（wine 游戏视角乱飘/卡死）：发真实相对运动
-                        // （sendMouseEvent relative=true → libXlorie XI2 raw
-                        // relative motion，上游 TrackpadInputStrategy 同款）。
-                        // 旧实现维护虚拟光标 padX/padY 发绝对坐标：wine FPS 按住
-                        // 转视角时游戏每帧 XWarpPointer 回窗口中心，绝对事件把
-                        // 指针强拽到 padX/padY → 游戏读到巨大跳变（视角猛转），
-                        // 光标 clamp 在屏幕边缘后不再变化（视角卡死"固定视角"）。
-                        // 相对增量不受 warp 影响：桌面光标照常移动，游戏视角
-                        // 真实旋转。slop 内丢弃（防手抖）；轻点/右键落在当前
-                        // X 指针位置（相对模式无虚拟光标）。
-                        // scaleTouchpad：位移按视图→X 拉伸比例放大（对齐上游）。
-                        // v2.30.1：改为累加进合并器，16ms 节流冲刷 —— 消除
-                        // wine 游戏滑动掉帧；总量精确守恒，手感不变。
-                        if (moved) {
-                            val mulX = if (scaleTouchpad) scaleX else 1f
-                            val mulY = if (scaleTouchpad) scaleY else 1f
-                            accumulateMove(dx * mulX, dy * mulY)
-                        }
+                        scrollAccum -= steps * wheelStep
                     }
-                    Mode.TWO -> {
-                        if (event.pointerCount >= 2) {
-                            val avgY = (event.getY(0) + event.getY(1)) / 2f
-                            val dy = (lastTwoY - avgY) * scaleY // 双指上滑 → 滚轮下滚
-                            lastTwoY = avgY
-                            if (kotlin.math.abs(dy) > 0.5f) twoMoved = true
-                            scrollAccum += dy
-                            if (kotlin.math.abs(scrollAccum) >= wheelStep) {
-                                val steps = (scrollAccum / wheelStep).toInt()
-                                // v2.33.1：滚轮入队输入线程（主线程零 socket I/O）
-                                val delta = steps * wheelStep
-                                postSend {
-                                    if (LorieView.connected())
-                                        view.sendMouseWheelEvent(0f, delta)
-                                }
-                                scrollAccum -= steps * wheelStep
-                            }
-                        }
+                } else if (event.pointerCount == 1) {
+                    // ---- 单指：光标相对移动（v2.30 wine warp 兼容） ----
+                    // v2.30 修复（wine 游戏视角乱飘/卡死）：发真实相对运动
+                    // （sendMouseEvent relative=true → libXlorie XI2 raw
+                    // relative motion，上游 TrackpadInputStrategy 同款）。
+                    // 旧实现维护虚拟光标 padX/padY 发绝对坐标：wine FPS 按住
+                    // 转视角时游戏每帧 XWarpPointer 回窗口中心，绝对事件把
+                    // 指针强拽到 padX/padY → 游戏读到巨大跳变（视角猛转），
+                    // 光标 clamp 在屏幕边缘后不再变化（视角卡死"固定视角"）。
+                    // 相对增量不受 warp 影响：桌面光标照常移动，游戏视角
+                    // 真实旋转。轻点/右键落在当前 X 指针位置（相对模式无
+                    // 虚拟光标）。
+                    // scaleTouchpad：位移按视图→X 拉伸比例放大（对齐上游）。
+                    // v2.30.1：改为累加进合并器，16ms 节流冲刷 —— 消除
+                    // wine 游戏滑动掉帧；总量精确守恒，手感不变。
+                    // v7.0：长按/双击拖拽期间同样走此分支 —— 按住的左键 +
+                    // 相对移动 = 拖拽（官方 mIsDragging 时 onScroll 同款）。
+                    val dx = event.x - curX
+                    val dy = event.y - curY
+                    curX = event.x; curY = event.y
+                    if (moved) {
+                        val mulX = if (scaleTouchpad) scaleX else 1f
+                        val mulY = if (scaleTouchpad) scaleY else 1f
+                        accumulateMove(dx * mulX, dy * mulY)
                     }
-                    else -> {}
+                } else {
+                    // 多指但未成滚轮（TWO_DONE 后余指滑动）：官方 pointerCount != 1
+                    // 时不移动光标 —— 保持位置同步
+                    curX = event.x; curY = event.y
                 }
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
-                if (mode == Mode.TWO) {
-                    val elapsed = android.os.SystemClock.uptimeMillis() - twoStartAt
-                    if (!twoMoved && elapsed < 320L) {
-                        if (event.pointerCount >= 3) {
-                            // v6.8：三指轻点 → 中键（上游 mouseButtonFromPointerCount(3)，
-                            // 当前 X 指针位置 —— 相对模式无虚拟光标）
-                            sendButton(InputStub.BUTTON_MIDDLE, true)
-                            sendButton(InputStub.BUTTON_MIDDLE, false)
-                        } else {
-                            // 双指轻点（未滑动、时间短）→ 右键单击（当前 X 指针位置）
-                            sendButton(InputStub.BUTTON_RIGHT, true)
-                            sendButton(InputStub.BUTTON_RIGHT, false)
-                        }
-                    }
-                    mode = Mode.TWO_DONE
-                }
+                // v7.0 官方 trackUpEvent + cancelLongTouchNotification：仅移除
+                // 抬起指的记账并解除长按定时（任一指抬起即不再触发多指长按；
+                // 轻点判定统一在末指 UP）
+                pointerStarts.remove(event.getPointerId(event.actionIndex))
+                disarmLongPress()
+                // 事件里 pointerCount 含抬起指：==2 即抬起后仅剩 1 指 →
+                // 停止滚轮；官方余指单指滑动继续移动光标（回落单指分支）
+                if (event.pointerCount <= 2 && mode == Mode.TWO) mode = Mode.ONE
             }
 
             MotionEvent.ACTION_UP -> {
@@ -1987,41 +2108,36 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.33.1：冲刷异步化（FIFO 先于 tap 抬键写入 X）
                 diagUps++
                 disarmLongPress()
+                pointerStarts.clear()
                 if (moved) postFlushMoves()
-                // v6.10（用户：“触摸板短按点击还是变成了长按”）：轻点/长按仲裁
-                // 改用 MotionEvent 事件时间轴 —— 主线程被 wine 打满时调度抖动会令
-                // 长按定时器先于排队的 UP 触发（longPressFired 误置、左键已按下），
-                // 短按被误判为长按。真实按压时长 < 长按阈值 = 轻点；长按路径已注入
-                // 的“按下+释放”即完整单击，不重复注入 tap。
+                // v6.10：轻点/长按仲裁用 MotionEvent 事件时间轴 —— 主线程被
+                // wine 打满时调度抖动会令长按定时器先于排队的 UP 触发
+                //（longPressFired 误置、左键已按下），短按被误判为长按。
                 val tapDurMs = if (downEventTime > 0) event.eventTime - downEventTime else 0L
                 val tapLike = !moved && tapDurMs < longPressTimeoutMs
                 downEventTime = 0L
-                // v6.8：长按拖拽结束（长按到点已按下左键）→ 释放
-                if (pressedLeft) {
-                    sendButton(InputStub.BUTTON_LEFT, false)
-                    pressedLeft = false
+                // 官方顺序：先释放按住的键（strategy.onMotionEvent 在 tap
+                // 检测器之前），再判定轻点 —— 长按路径的“按下+释放”
+                // 本身就是一次完整单击，不重复注入 tap。
+                if (heldButton != 0) {
+                    sendButton(heldButton, false)
+                    heldButton = 0
                 }
-                if (mode == Mode.ONE) {
-                    // v6.9（用户："x11选择触控板时默认轻点打开…轻点就是点击一下，
-                    // 应该长按后才是长按拖动"）：轻点判定去掉 260ms 时间窗 ——
-                    // 未滑动且长按未到点 = 轻点左键单击（默认可用，无需任何设置）；
-                    // 长按到点后 = 左键按住 + 相对拖拽。原 260ms 窗与 400ms 长按
-                    // 之间的死区令稍慢的轻点落入"无响应/误长按"。
-                    // v6.10：叠加事件时间轴仲裁（tapLike，防调度抖动误判）。
-                    if (tapLike && !longPressFired) {
-                        if (tapToMove) {
-                            // 轻点拖拽：轻点=按下（随后移动即拖拽），再轻点=释放
-                            if (padPressed) {
-                                sendButton(InputStub.BUTTON_LEFT, false)
-                                padPressed = false
-                            } else {
-                                sendButton(InputStub.BUTTON_LEFT, true)
-                                padPressed = true
-                            }
+                if (tapLike && !longPressFired) {
+                    // v7.0 官方 onTap：按键由最大手指数决定（1=左 2=右 3=中）
+                    val button = buttonForPointerCount(maxPointers)
+                    if (button != InputStub.BUTTON_UNDEFINED) {
+                        diagTaps++
+                        if (button == InputStub.BUTTON_LEFT && tapToMove) {
+                            // v7.0 官方 tapToMove：左键轻点不立即点击，挂起
+                            // 延迟单击（doubleTapTimeout 内无第二击才补发）。
+                            // 旧实现“立即按下并保持”→ 点一下变成长按。
+                            armTapPending()
                         } else {
-                            // 轻点 = 左键单击
-                            sendButton(InputStub.BUTTON_LEFT, true)
-                            sendButton(InputStub.BUTTON_LEFT, false)
+                            // 左键（tapToMove 关）/双指右键/三指中键：立即单击
+                            //（官方 onTap → sendMouseClick(button, true)）
+                            sendButton(button, true)
+                            sendButton(button, false)
                         }
                     }
                 }
@@ -2032,9 +2148,13 @@ internal class SmartTouchBridge(private val context: Context, private val view: 
                 // v2.30.1：系统取消手势 → 丢弃未冲刷增量（不发出意外移动）
                 dropPendingMoves()
                 disarmLongPress()
+                cancelTapPending()
                 downEventTime = 0L
-                if (pressedLeft) { sendButton(InputStub.BUTTON_LEFT, false); pressedLeft = false }
-                if (padPressed) { sendButton(InputStub.BUTTON_LEFT, false); padPressed = false }
+                pointerStarts.clear()
+                if (heldButton != 0) {
+                    sendButton(heldButton, false)
+                    heldButton = 0
+                }
                 mode = Mode.IDLE
             }
         }

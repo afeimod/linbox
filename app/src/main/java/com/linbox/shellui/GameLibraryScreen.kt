@@ -203,6 +203,8 @@ object GameLaunchConfig {
         put("wined3d", d.wined3d)
         put("fexcore", d.fexcore)
         put("wrapper", d.wrapper)
+        put("vkd3d12", d.vkd3d12)
+        put("d7d8", d.d7d8)
         put("uargs", d.uargs)
     }.toString()
 
@@ -234,6 +236,8 @@ object GameLaunchConfig {
         if (d.wined3d != base.wined3d) o.put("wined3d", d.wined3d)
         if (d.fexcore != base.fexcore) o.put("fexcore", d.fexcore)
         if (d.wrapper != base.wrapper) o.put("wrapper", d.wrapper)
+        if (d.vkd3d12 != base.vkd3d12) o.put("vkd3d12", d.vkd3d12)
+        if (d.d7d8 != base.d7d8) o.put("d7d8", d.d7d8)
         if (d.uargs != base.uargs) o.put("uargs", d.uargs)
         return o.toString()
     }
@@ -278,6 +282,8 @@ object GameLaunchConfig {
             wined3d = o.optString("wined3d", base.wined3d),
             fexcore = o.optString("fexcore", base.fexcore),
             wrapper = o.optString("wrapper", base.wrapper),
+            vkd3d12 = o.optString("vkd3d12", base.vkd3d12),
+            d7d8 = o.optString("d7d8", base.d7d8),
             uargs = o.optString("uargs", base.uargs)
         )
     }
@@ -931,13 +937,16 @@ private fun GameShortcutEditorPage(
                         } else {
                             // wineguanli GraphicsDriverTab（Vulkan 驱动 / Zink /
                             // DXVK / WineD3D / FEXCore —— 全部 /opt 扫描选择）
+                            // v7.0：d7d8 ddraw 同级绘制以游戏自己的 exe 为目标
+                            //（st.draftExe；容器编辑页则用容器默认程序）
                             androidx.compose.runtime.CompositionLocalProvider(
                                 com.linbox.apps.containers.LocalGuanliScale provides 1f,
                                 com.linbox.apps.containers.LocalGuanliFontScale provides 1f
                             ) {
                                 com.linbox.apps.containers.GraphicsDriverTab(
                                     edit = working,
-                                    onChange = { setConfig(it) }
+                                    onChange = { setConfig(it) },
+                                    d7d8GameExe = st.draftExe
                                 )
                             }
                         }
